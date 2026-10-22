@@ -2632,3 +2632,22 @@ details[open] > .tree-summary > .tree-chevron {
 .bridge-install h2 { margin: 0 0 10px; font-size: 17px; }
 .bridge-install p { line-height: 1.8; color: #58677d; }
 .bridge-install a:not(.btn), .demo-notice a { color: #2866d4; text-decoration: underline; }
+
+@media (max-width: 700px) {
+  body { overflow: auto; }
+  .app-shell { display: block; height: auto; min-height: 100vh; }
+  .sidebar { padding: 16px; gap: 12px; max-height: 380px; border-right: 0; }
+  .sidebar-footer { display: none; }
+  .main { overflow: visible; padding: 24px 16px 40px; }
+  .connect-view { gap: 24px; }
+  .connect-aside, .course-grid, .settings-grid, .watch-grid { grid-template-columns: minmax(0, 1fr); }
+  .connect-hero h1 { font-size: 36px; }
+  .home-head { flex-direction: column; align-items: flex-start; gap: 16px; }
+  .head-actions { flex-wrap: wrap; }
+  .tabs { overflow-x: auto; }
+  .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tree-children { margin-left: 10px; }
+  .modal-foot { flex-wrap: wrap; gap: 10px; }
+  .task-table-wrap { overflow-x: auto; }
+  .watch-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
