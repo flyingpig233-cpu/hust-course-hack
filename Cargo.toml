@@ -1,0 +1,39 @@
+[workspace]
+members = ["src-tauri"]
+resolver = "3"
+
+[package]
+name = "hust-course-hack"
+version = "0.2.0"
+edition = "2024"
+
+[lib]
+name = "hust_course_hack"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hust-course-hack"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+futures = "0.3"
+log = "0.4"
+md5 = "0.7"
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = [
+    "brotli",
+    "charset",
+    "cookies",
+    "gzip",
+    "http2",
+    "rustls-tls",
+] }
+scraper = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+unicode-normalization = "0.1"
+url = "2"
