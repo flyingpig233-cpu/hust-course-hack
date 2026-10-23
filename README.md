@@ -15,6 +15,13 @@ Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hu
 
 ## 桌面 GUI（Tauri 2）
 
+### 下载安装
+
+从 [GitHub Releases](https://github.com/flyingpig233-cpu/hust-course-hack/releases/latest)
+下载 Windows x64 安装包：一般用户选择 `x64-setup.exe`，需要 MSI 的环境选择 `.msi`。
+两种安装包任选其一。安装后打开应用，使用内嵌的学校统一身份认证窗口登录。
+安装包未做代码签名；Windows 可能显示“未知发布者”。
+
 `src-tauri/` 是 Tauri 2 外壳，`ui/` 是原生 TypeScript + Vite 前端。网络与解析仍然全部在
 `SmartCourseClient` 里，command 层只负责会话状态、进度事件和文件读写。
 

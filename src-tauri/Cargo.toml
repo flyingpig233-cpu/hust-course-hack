@@ -1,6 +1,6 @@
 [package]
 name = "hust-course-hack-gui"
-version = "0.1.0"
+version = "0.2.0"
 description = "Desktop GUI for the HUST SmartCourse crawler"
 edition = "2024"
 
