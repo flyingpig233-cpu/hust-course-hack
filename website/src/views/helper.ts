@@ -27,8 +27,8 @@ export async function openHelperModal(): Promise<void> {
     <div class="modal-head">
       <div>
         <div class="eyebrow">浏览器兜底</div>
-        <h2>Tampermonkey 视频助手</h2>
-        <p class="modal-sub">在网页播放器里一键完成当前视频、当前知识点或整门课</p>
+        <h2>Tampermonkey 课程助手</h2>
+        <p class="modal-sub">在课程页一键完成视频任务点，并浏览/完成内联 PDF 文档</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>

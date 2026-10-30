@@ -45,7 +45,7 @@ npm run dev
 - `src/core/playback.ts`、`md5.ts`：复现已有协议的 MD5 签名和 4→3→4→2 心跳序列；只有服务端 `isPassed=true` 才标记完成。
 - `src/core/submit.ts`：提交前刷新题页、保留表单 action 的签名查询串和隐藏字段、完整性检查、验证码前置校验；已批改或缺答案作业不提交。
 - `src/core/backend.ts`：浏览器会话、单任务互斥、题库加载、取消与界面适配。
-- `src/bridge.user.ts`：学校窗口桥接；`public/` 包含编译脚本、视频助手和运行所需题库。
+- `src/bridge.user.ts`：学校窗口桥接；`public/` 包含编译脚本、课程助手（视频 / PDF 文档）和运行所需题库。
 - `tests/`：合成 HTML、模拟 transport 与原 Rust 签名向量；验证内置 541 题答案可编码。测试不会使用真实 Cookie、请求学校或提交真实作业。
 
 题库为已有仓库题库的运行时字段副本，不包含个人作答、得分、班级信息或登录令牌。更新题库时同时更新 `public/answer-bank.json`，保持 `question_index` 和 `stem_index` 一致。
