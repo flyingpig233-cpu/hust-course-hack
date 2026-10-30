@@ -60,7 +60,7 @@ enum Command {
         #[arg(long)]
         course: String,
     },
-    /// Write the Tampermonkey video helper script to a file or stdout.
+    /// Write the Tampermonkey video/document helper script to a file or stdout.
     Helper {
         /// Output path; defaults to stdout.
         #[arg(long)]

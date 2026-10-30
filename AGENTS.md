@@ -46,7 +46,10 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   `mArg.defaults`, `otherInfo`, `attDurationEnc` and `dtoken` on every run.
 - `userscripts/hust-course-video-helper.user.js` — browser-side one-click video
   completion for the current video, current knowledge point, or the whole
-  course. It is embedded as `hust_course_hack::VIDEO_HELPER_SCRIPT`.
+  course, plus PDF browsing and per-document completion through the platform
+  viewer's `finishJob()`. It is embedded as
+  `hust_course_hack::VIDEO_HELPER_SCRIPT`; the file name is kept for
+  compatibility.
 - `src-tauri/` — Tauri 2 shell: `tauri.conf.json`, `capabilities/default.json`,
   `src/commands.rs`, `src/state.rs`, `src/events.rs`, `src/login.rs`. Commands
   wrap the core client; progress is emitted as `job-progress` events. Only one
@@ -81,7 +84,7 @@ The crawling core and the Tauri 2 desktop shell are implemented.
 Run from the repo root in PowerShell 5.1:
 
 - `cargo run` / `cargo build`
-- `cargo run -- helper --out video-helper.user.js` (writes the browser helper script; no cookies needed)
+- `cargo run -- helper --out video-helper.user.js` (writes the browser helper script for videos and PDF documents; no cookies needed)
 - `cargo run -- --cookies cookies.txt watch --course <id> --dry-run` (prints report URLs without sending)
 - `cargo test --workspace`
 - `cargo fmt --all`
@@ -117,6 +120,13 @@ Run from the repo root in PowerShell 5.1:
   and the `/a/{cpi}/{dtoken}` path are verified against a real HAR. If the
   platform changes them, update `src/playback.rs` and its tests; do not hardcode
   a captured `dtoken`/`otherInfo`.
+- PDF completion must go through the platform viewer's own `finishJob()` in the
+  same-origin `iframe.insertdoc-online-pdf`; never call `ed_complete()` alone
+  (it only paints the UI) and never fabricate `/mooc-ans/job/document`. The
+  helper verifies `ans-job-finished`, which `finishJob` adds only after the
+  server accepts. PDF only; Office/WPS uses a different cross-origin viewer.
+  Live-verified on 2026-10-30: `finishJob()` produced `/mooc-ans/job/document`
+  200 and `ans-job-finished` on a real course page.
 - Keep Tauri commands thin: session/state bookkeeping, progress events, and
   file IO only. All HTTP and parsing stays in the `hust_course_hack` crate.
 - GUI authentication must go through the isolated login window

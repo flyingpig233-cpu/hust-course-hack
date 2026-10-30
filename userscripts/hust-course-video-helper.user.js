@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         华科课程平台视频助手
+// @name         华科课程平台课程助手
 // @namespace    hust-course-hack
-// @version      0.2.0
-// @description  一键完成当前视频、当前知识点或整门课的视频任务点
+// @version      0.3.0
+// @description  一键完成视频任务点，并浏览/完成课程内的内联 PDF 文档
 // @author       hust-course-hack
 // @match        *://smartcourse.hust.edu.cn/*
 // @grant        none
@@ -14,6 +14,8 @@
 // then call the platform's ed_complete callback. The same injection sequence
 // can be reused by a Tauri webview later; the course-wide traversal below is
 // what the crawler's chapter ids make possible without hardcoding a course.
+// Document task points use the platform's inline PDF viewer instead; see the
+// "Document completion" section for its finishJob() path.
 (function () {
   'use strict';
 
@@ -205,6 +207,211 @@
       }
     }
     return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Document completion (inline PDF viewer)
+  // -------------------------------------------------------------------------
+
+  // Documents are same-origin inline iframes:
+  //   <iframe class="insertdoc-online-pdf" data='{"objectid":...}'>
+  // Their viewer exposes finishJob() as a plain global. finishJob() sends
+  // /mooc-ans/job/document with the page's jtoken and calls ed_complete() only
+  // after the server accepts it. This is the platform's own completion path;
+  // no token is copied and no synthetic progress is fabricated.
+  function allDocFrames() {
+    const result = [];
+    const seen = new Set();
+    for (const win of allWindows()) {
+      let doc;
+      try {
+        doc = win.document;
+      } catch {
+        continue;
+      }
+      if (!doc) continue;
+      for (const frame of doc.querySelectorAll('iframe.insertdoc-online-pdf')) {
+        if (!frame.contentWindow) continue;
+        let data = {};
+        try {
+          data = JSON.parse(frame.getAttribute('data') || '{}');
+        } catch {
+          // Keep a usable label even if the platform changes the payload.
+        }
+        const objectid = data.objectid || frame.getAttribute('objectid') || '';
+        const jobid = data.jobid || frame.getAttribute('jobid') || '';
+        const key = objectid || jobid;
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        result.push({
+          frame,
+          name: data.name || frame.getAttribute('title') || 'PDF 文档',
+          objectid,
+          jobid,
+        });
+      }
+    }
+    return result;
+  }
+
+  function docContainer(frame) {
+    return frame.closest('.ans-attach-ct') || frame.parentElement;
+  }
+
+  function isDocDone(frame) {
+    let node = docContainer(frame);
+    for (let depth = 0; node && depth < 3; depth += 1, node = node.parentElement) {
+      if (node.classList && node.classList.contains('ans-job-finished')) return true;
+    }
+    return false;
+  }
+
+  function docIsVisible(frame) {
+    try {
+      return frame.offsetWidth > 0 && frame.offsetHeight > 0;
+    } catch {
+      return true;
+    }
+  }
+
+  async function finishDoc(frame) {
+    if (isDocDone(frame)) return { status: 'already' };
+
+    const win = frame.contentWindow;
+    try {
+      // finishJob needs the course page's AttachmentSetting as well as the
+      // viewer's own globals; wait for both before invoking it.
+      await waitFor(
+        () => typeof win.finishJob === 'function' && win.setting && win.setting.defaults,
+        30000,
+        300,
+      );
+    } catch {
+      return {
+        status: 'unsupported',
+        message: '找不到平台 viewer 的 finishJob（可能仍在加载或不是 PDF 路径）',
+      };
+    }
+
+    if (isDocDone(frame)) return { status: 'already' };
+
+    try {
+      win.finishJob();
+    } catch (error) {
+      return { status: 'error', message: error.message || String(error) };
+    }
+
+    const done = await waitFor(() => isDocDone(frame), 12000, 400)
+      .then(() => true)
+      .catch(() => false);
+    return done ? { status: 'done' } : { status: 'timeout' };
+  }
+
+  async function completeDocItem(item) {
+    if (isDocDone(item.frame)) {
+      log(`文档已完成，跳过：${item.name}`);
+      return false;
+    }
+
+    log(`调用平台完成：${item.name}`);
+    const result = await finishDoc(item.frame);
+    if (result.status === 'done') {
+      log(`文档已完成：${item.name}`);
+      return true;
+    }
+    if (result.status === 'already') {
+      log(`文档已经是完成状态：${item.name}`);
+      return false;
+    }
+    if (result.status === 'timeout') {
+      log(
+        `未确认完成（12s）：${item.name}；检查 Network 中的 /mooc-ans/job/document，或页面是否归档/无 jtoken`,
+      );
+      return false;
+    }
+    if (result.status === 'unsupported') {
+      log(`无法调用完成：${item.name}（${result.message}）`);
+      return false;
+    }
+    log(`完成失败：${item.name}（${result.message}）`);
+    return false;
+  }
+
+  async function completeCurrentDocument() {
+    const item = allDocFrames().find((doc) => docIsVisible(doc.frame) && !isDocDone(doc.frame));
+    if (!item) {
+      log('当前页面没有待完成的 PDF 文档');
+      return 0;
+    }
+    return (await completeDocItem(item)) ? 1 : 0;
+  }
+
+  async function completeDocumentsOnPage() {
+    const cards = await waitFor(findCardsFrame, 15000).catch(() => null);
+    const tabCount = cards ? getCardTabs(cards.doc).length : 0;
+
+    if (tabCount === 0) {
+      let completed = 0;
+      for (const item of allDocFrames().filter((doc) => docIsVisible(doc.frame))) {
+        if (stopRequested) break;
+        if (await completeDocItem(item)) completed += 1;
+      }
+      return completed;
+    }
+
+    let completed = 0;
+    const handled = new Set();
+    for (let index = 0; index < tabCount; index += 1) {
+      if (stopRequested) break;
+
+      // Switching cards can replace the card iframe; re-query every pass.
+      const current = await waitFor(findCardsFrame, 10000).catch(() => null);
+      if (!current) continue;
+      const tab = getCardTabs(current.doc)[index];
+      if (!tab) continue;
+
+      log(`切换卡片 ${index + 1}/${tabCount}: ${tab.title}`);
+      tab.el.click();
+
+      // Give the platform time to render this tab's document iframe.
+      const docs = await waitFor(() => {
+        const list = allDocFrames().filter((doc) => docIsVisible(doc.frame));
+        return list.length ? list : null;
+      }, 6000).catch(() => []);
+      if (!docs.length) {
+        log(`卡片 ${index + 1} 没有 PDF 文档，跳过`);
+        continue;
+      }
+
+      for (const item of docs) {
+        if (stopRequested) break;
+        const key = item.objectid || item.jobid || item.name;
+        if (key && handled.has(key)) continue;
+        if (key) handled.add(key);
+        if (await completeDocItem(item)) completed += 1;
+      }
+    }
+    return completed;
+  }
+
+  function browseCurrentDocument() {
+    const item = allDocFrames().find((doc) => docIsVisible(doc.frame));
+    if (!item) {
+      log('当前页面没有可见的 PDF 文档');
+      return;
+    }
+
+    try {
+      item.frame.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch {
+      item.frame.scrollIntoView();
+    }
+    const previous = item.frame.style.outline;
+    item.frame.style.outline = '3px solid #f59e0b';
+    setTimeout(() => {
+      item.frame.style.outline = previous;
+    }, 2500);
+    log(`已定位文档：${item.name}`);
   }
 
   // -------------------------------------------------------------------------
@@ -482,12 +689,15 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     `;
     panel.innerHTML = `
-      <div style="font-size:14px;font-weight:600;margin-bottom:4px;">华科课程视频助手</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px;">华科课程助手（视频 / 文档）</div>
       <div class="hvh-status" style="margin-bottom:8px;color:#e5e7eb;">就绪</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
         <button data-action="current">完成当前视频</button>
         <button data-action="page">完成本页视频</button>
         <button data-action="course">完成整门课</button>
+        <button data-action="doc-browse">浏览当前文档</button>
+        <button data-action="doc-current">完成当前文档</button>
+        <button data-action="doc-page">完成本页文档</button>
         <button data-action="stop">停止</button>
       </div>
       <pre class="hvh-log" style="
@@ -535,6 +745,18 @@
         setStatus(`本页完成：${count} 个视频`, '#4ade80');
       } else if (action === 'course') {
         await startCourse();
+      } else if (action === 'doc-browse') {
+        browseCurrentDocument();
+      } else if (action === 'doc-current') {
+        busy = true;
+        setStatus('处理当前文档…', '#fbbf24');
+        const count = await completeCurrentDocument();
+        setStatus(count ? '当前文档已完成' : '未确认完成', count ? '#4ade80' : '#f87171');
+      } else if (action === 'doc-page') {
+        busy = true;
+        setStatus('处理本页文档…', '#fbbf24');
+        const count = await completeDocumentsOnPage();
+        setStatus(`本页完成：${count} 个文档`, count ? '#4ade80' : '#fbbf24');
       }
     } catch (error) {
       log(`失败: ${error.message}`);

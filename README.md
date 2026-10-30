@@ -42,7 +42,7 @@ npm run tauri build    # 生产：构建安装包
 | 课程详情 | 目录树（章 / 节 / 知识点 / 卡片 / 任务点）、任务点表格与筛选、测验题目与答案、诊断信息 |
 | 测验任务 | 右上角“完成题目”或测验页“提交本题”：内置题库匹配答案，已批改作业跳过，题库缺答案的作业不提交；默认试运行，确认后才发送真实提交 |
 | 视频任务 | 整门课或单视频上报；试运行只生成签名 URL；可设置心跳间隔、延迟、数量上限并随时停止 |
-| 工具 | 导出课程 JSON、在浏览器打开课程页、查看并保存 Tampermonkey 助手脚本 |
+| 工具 | 导出课程 JSON、在浏览器打开课程页、查看并保存 Tampermonkey 课程助手脚本（视频 / 文档） |
 
 登录流程：点击“打开 HUST 登录窗口”后，应用打开
 `https://smartcourse.hust.edu.cn/passport`（跳转到 `pass.hust.edu.cn` 统一身份认证）。
@@ -177,28 +177,45 @@ cargo run -- --cookies "D:\cookies.txt" --no-questions --no-video-info tree --co
 新的/未知任务点不会丢失，原始 attachment JSON 保存在 `raw` 字段里。
 卡片还会带 `playback`（`mArg.defaults` 的摘要），视频任务点会带 `dtoken`。
 
-## 一键完成视频（浏览器脚本）
+## 浏览器助手脚本（视频 / 文档）
 
-优先使用下面的 `watch` 直连上报；本脚本保留作为浏览器兜底，也适合手动逐个知识点处理。
+视频优先使用下面的 `watch` 直连上报；本脚本保留作为浏览器兜底，也适合手动逐个知识点处理。
 脚本走的是已经在真实账号上验证过的播放器路径：覆盖 `reportProgress`、seek 到结尾、
 触发 `ended`，最后调用平台的 `ed_complete`。
+
+文档（PDF）走平台自己的内联 viewer：脚本找到课程页里的 `iframe.insertdoc-online-pdf`，
+调用 viewer 暴露的 `finishJob()`，由平台发 `/mooc-ans/job/document` 并在成功后加
+`ans-job-finished`。脚本不复制 `jtoken`，也不伪造阅读进度。
 
 ```powershell
 cargo run -- helper --out video-helper.user.js
 ```
 
 在 Tampermonkey 中新建脚本，粘贴生成的文件内容（`helper` 不需要 cookies）。进入课程
-学习页（`studentstudy`）后，右上角会出现面板：
+学习页（`studentstudy`）后，右上角会出现面板（文件名保留 `video-helper` 以兼容旧链接）：
 
 | 按钮 | 行为 |
 | --- | --- |
 | 完成当前视频 | 只处理当前播放器 |
 | 完成本页视频 | 遍历当前知识点的所有卡片标签 |
 | 完成整门课 | 按章节目录顺序遍历未完成的知识点，逐个处理视频；页面跳转后从 `sessionStorage` 继续 |
+| 浏览当前文档 | 滚动到当前 PDF 并高亮；继续使用平台 viewer 的全屏/翻页 |
+| 完成当前文档 | 调用当前 PDF viewer 的 `finishJob()`，以 `ans-job-finished` 出现为准 |
+| 完成本页文档 | 遍历当前知识点的卡片标签，逐个完成其中的 PDF |
 | 停止 | 中止当前任务 |
 
 脚本只在当前浏览器会话内运行，不读取也不保存 cookies。处理完成后建议重新抓一次课程树
-（`tree` 或 `dump`）确认对应任务点变成已完成；前端状态变化不等同于服务端已计入进度。
+（`tree` 或 `dump`）确认对应任务点变成已完成；前端状态变化不等同于服务端已计入进度
+（文档的 `ans-job-finished` 由 `finishJob` 的成功回调添加，是平台侧的完成信号）。
+
+文档限制：只支持平台内联的 PDF；Office/WPS 文档走另一套跨域 viewer；归档或没有 job 的
+文档平台可能不响应；一屏内即可放下的 PDF 在打开时平台自己就会完成。文档按钮先覆盖当前
+知识点，整门课文档遍历暂未包含。如果完成后再抓取课程树仍显示未知状态，可能是平台的
+`mArg` 不返回文档完成字段，不要据此判断完成失败。
+
+**验证状态**：2026-10-30 在真实课程学习页实测：`iframe.insertdoc-online-pdf` 的
+`finishJob()` 可调用；调用后 `/mooc-ans/job/document` 返回 200，任务点出现
+`ans-job-finished`。
 
 ## 直接上报完成视频（watch）
 
