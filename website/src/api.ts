@@ -1,7 +1,9 @@
 import { demoOn } from './bus';
 import { browserApi } from './core/backend';
+import { zhsBrowserApi } from './core/zhs/backend';
+import type { ZhsBackend, ZhsJobProgress, ZhsSessionInfo } from './core/zhs/types';
 import { isDemo } from './env';
-import { mockApi } from './mock';
+import { mockApi, zhsMockApi } from './mock';
 import type { AnswerBankInfo, CourseDetail, CourseSummary, CrawlOptions, JobProgress, QuizRequest, QuizSummary, SessionInfo, WatchRequest, WatchSummary } from './types';
 
 export interface Backend {
@@ -18,6 +20,10 @@ export interface Backend {
   saveTextFile(path: string, contents: string): Promise<void>;
 }
 export const api: Backend = isDemo ? mockApi : browserApi;
+/** Zhihuishu (知到) backend; the demo implementation never sends real reports. */
+export const zhsApi: ZhsBackend = isDemo ? zhsMockApi : zhsBrowserApi;
 export async function onJobProgress(handler: (progress: JobProgress) => void): Promise<() => void> { return demoOn('job-progress', handler); }
 export async function onSessionChanged(handler: (info: SessionInfo) => void): Promise<() => void> { return demoOn('session-changed', handler); }
 export async function onLoginClosed(handler: () => void): Promise<() => void> { return demoOn('login-closed', handler); }
+export async function onZhsProgress(handler: (progress: ZhsJobProgress) => void): Promise<() => void> { return demoOn('zhs-progress', handler); }
+export async function onZhsSessionChanged(handler: (info: ZhsSessionInfo) => void): Promise<() => void> { return demoOn('zhs-session-changed', handler); }

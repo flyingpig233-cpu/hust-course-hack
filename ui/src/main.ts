@@ -9,8 +9,24 @@ import { errorText, qs, toast } from "./dom";
 import { isTauri } from "./env";
 import { safeFileName } from "./format";
 import { openExternal, pickSavePath } from "./platform";
-import type { CourseDetail, CourseSummary, CrawlOptions, SessionInfo } from "./types";
-import { renderConnect, renderHome, type LoginStatus } from "./views/connect";
+import type {
+  CourseDetail,
+  CourseSummary,
+  CrawlOptions,
+  Platform,
+  SessionInfo,
+  ZhsCourse,
+  ZhsCourseDetail,
+  ZhsMeet,
+  ZhsMeetProgress,
+  ZhsMeetWatchSummary,
+  ZhsWatchSummary,
+} from "./types";
+import {
+  renderConnect,
+  renderHome,
+  type LoginStatus,
+} from "./views/connect";
 import {
   markJobCompleted,
   markWorkSubmitted,
@@ -21,8 +37,25 @@ import {
 } from "./views/course";
 import { openHelperModal } from "./views/helper";
 import { openQuizModal } from "./views/quiz";
-import { createSidebar } from "./views/sidebar";
+import { createSidebar, type SidebarItem } from "./views/sidebar";
 import { openWatchModal } from "./views/watch";
+import {
+  openZhsWatchModal,
+  renderZhsCourse,
+  renderZhsCourseError,
+  renderZhsHome,
+  renderZhsLoading,
+  updateZhsLoading,
+} from "./views/zhs-course";
+import {
+  openZhsMeetWatchModal,
+  renderZhsMeet,
+} from "./views/zhs-meet";
+import {
+  zhsCompletedVideos,
+  zhsCourseLabel,
+  zhsTotalVideos,
+} from "./zhs";
 
 const app = qs<HTMLElement>("#app");
 app.innerHTML = `
@@ -34,20 +67,34 @@ app.innerHTML = `
 
 const main = qs<HTMLElement>("#main");
 
+type ZhsView = "home" | "course" | "meet";
+
 const store = {
+  /** Platform selected on the connect screen (also the last active platform). */
+  platform: "hust" as Platform,
   session: null as SessionInfo | null,
-  courses: [] as CourseSummary[],
-  selectedId: null as string | null,
-  busy: false,
-  details: new Map<string, CourseDetail>(),
-  options: {
-    includeQuestions: true,
-    includeVideoInfo: true,
-    concurrency: 4,
-  } as CrawlOptions,
-  bankQuestions: null as number | null,
   loginStatus: "idle" as LoginStatus,
   loginError: null as string | null,
+  busy: false,
+  hust: {
+    courses: [] as CourseSummary[],
+    selectedId: null as string | null,
+    details: new Map<string, CourseDetail>(),
+    options: {
+      includeQuestions: true,
+      includeVideoInfo: true,
+      concurrency: 4,
+    } as CrawlOptions,
+    bankQuestions: null as number | null,
+  },
+  zhs: {
+    courses: [] as ZhsCourse[],
+    selectedId: null as string | null,
+    detail: null as ZhsCourseDetail | null,
+    meets: [] as ZhsMeet[],
+    meetProgress: new Map<number, ZhsMeetProgress>(),
+    view: "home" as ZhsView,
+  },
 };
 
 const sidebar = createSidebar(qs<HTMLElement>("#sidebar"), {
@@ -57,19 +104,37 @@ const sidebar = createSidebar(qs<HTMLElement>("#sidebar"), {
   onHelper: () => void openHelperModal(),
 });
 
-function updateSidebar(): void {
-  sidebar.update({
-    session: store.session,
-    courses: store.courses,
-    selectedId: store.selectedId,
-    disabled: store.busy,
-  });
+function activePlatform(): Platform {
+  return store.session?.platform ?? store.platform;
 }
 
-function currentSummary(): CourseSummary | null {
-  return (
-    store.courses.find((course) => course.course_id === store.selectedId) ?? null
-  );
+function updateSidebar(): void {
+  const session = store.session;
+  const platform = activePlatform();
+  let courses: SidebarItem[] = [];
+  let selectedId: string | null = null;
+  if (session && platform === "hust") {
+    courses = store.hust.courses.map((course) => ({
+      id: course.course_id,
+      name: course.name,
+      meta: course.course_id,
+    }));
+    selectedId = store.hust.selectedId;
+  } else if (session) {
+    courses = store.zhs.courses.map((course) => ({
+      id: String(course.courseId),
+      name: zhsCourseLabel(course),
+      meta: `recruit ${course.recruitId}`,
+    }));
+    selectedId = store.zhs.selectedId;
+  }
+  sidebar.update({
+    session,
+    platform,
+    courses,
+    selectedId,
+    disabled: store.busy,
+  });
 }
 
 function showHome(): void {
@@ -78,42 +143,79 @@ function showHome(): void {
     return;
   }
   updateSidebar();
-  main.onclick = null;
-  main.onchange = null;
-  renderHome(main, store.session, store.courses, {
+  if (store.session.platform === "hust") {
+    main.onclick = null;
+    main.onchange = null;
+    renderHome(main, store.session, store.hust.courses, {
+      onSelect: (courseId) => void selectCourse(courseId),
+      onRefreshCourses: () => void refreshCourses(),
+      onHelper: () => void openHelperModal(),
+    });
+    return;
+  }
+  renderZhsHome(main, store.session, store.zhs.courses, {
     onSelect: (courseId) => void selectCourse(courseId),
     onRefreshCourses: () => void refreshCourses(),
-    onHelper: () => void openHelperModal(),
+    onAddCourse: (reference) => void addZhsCourse(reference),
   });
 }
 
 function showConnect(): void {
-  store.selectedId = null;
+  store.hust.selectedId = null;
+  store.zhs.selectedId = null;
   updateSidebar();
   renderConnect(main, {
+    platform: store.platform,
     status: store.loginStatus,
     error: store.loginError,
+    onPlatformChange: (platform) => {
+      if (store.loginStatus === "opening" || store.loginStatus === "waiting") {
+        return;
+      }
+      store.platform = platform;
+      store.loginError = null;
+      store.loginStatus = "idle";
+      showConnect();
+    },
     onLogin: () => void startLogin(),
   });
 }
 
-/** The login window verified the platform session. */
-async function adoptSession(info: SessionInfo): Promise<void> {
+/** Adopt a session established by the login window (or restored on boot). */
+async function activateSession(info: SessionInfo, announce: boolean): Promise<void> {
   store.session = info;
+  store.platform = info.platform;
   store.loginStatus = "idle";
   store.loginError = null;
-  store.selectedId = null;
-  store.details.clear();
-  updateSidebar();
 
-  try {
-    store.courses = await api.listCourses();
-  } catch (error) {
-    toast(errorText(error), "error");
+  if (info.platform === "hust") {
+    store.hust.selectedId = null;
+    store.hust.details.clear();
+    updateSidebar();
+    try {
+      store.hust.courses = await api.listCourses();
+    } catch (error) {
+      toast(errorText(error), "error");
+    }
+    updateSidebar();
+    showHome();
+    if (announce) toast("已通过学校统一身份认证登录", "success");
+    return;
   }
+
+  store.zhs = {
+    courses: [],
+    selectedId: null,
+    detail: null,
+    meets: [],
+    meetProgress: new Map(),
+    view: "home",
+  };
+  updateSidebar();
+  await loadZhsCourseList();
   updateSidebar();
   showHome();
-  toast("已通过学校统一身份认证登录", "success");
+  if (announce) toast("已连接知到账号", "success");
 }
 
 async function startLogin(): Promise<void> {
@@ -124,7 +226,7 @@ async function startLogin(): Promise<void> {
   // detached mid-click.
   window.setTimeout(showConnect, 0);
   try {
-    await api.openLoginWindow();
+    await api.openLoginWindow(store.platform);
     if (store.session) return;
     store.loginStatus = "waiting";
     showConnect();
@@ -140,42 +242,58 @@ function handleLoginClosed(): void {
   if (store.loginStatus !== "opening" && store.loginStatus !== "waiting") return;
   store.loginStatus = "failed";
   store.loginError =
-    "登录窗口已关闭，未获取到学校会话。请重新打开登录窗口完成统一身份认证。";
+    store.platform === "zhihuishu"
+      ? "登录窗口已关闭，未获取到知到会话。请重新打开知到登录窗口并完成登录。"
+      : "登录窗口已关闭，未获取到学校会话。请重新打开登录窗口完成统一身份认证。";
   showConnect();
 }
 
 async function subscribeAuthEvents(): Promise<void> {
   try {
-    await onSessionChanged((info) => void adoptSession(info));
+    await onSessionChanged((info) => void activateSession(info, true));
     await onLoginClosed(() => handleLoginClosed());
   } catch (error) {
     toast(errorText(error), "error");
   }
 }
 
+// ---- HUST SmartCourse flows --------------------------------------------
+
+function currentHustSummary(): CourseSummary | null {
+  return (
+    store.hust.courses.find(
+      (course) => course.course_id === store.hust.selectedId,
+    ) ?? null
+  );
+}
+
 async function selectCourse(courseId: string): Promise<void> {
+  if (store.session?.platform === "zhihuishu") {
+    await selectZhsCourse(courseId);
+    return;
+  }
   if (store.busy) {
     toast("正在抓取课程，请先取消当前任务");
     return;
   }
-  const summary = store.courses.find(
+  const summary = store.hust.courses.find(
     (course) => course.course_id === courseId,
   );
   if (!summary) return;
 
-  const cached = store.details.get(courseId);
-  if (cached && store.selectedId === courseId) return;
+  const cached = store.hust.details.get(courseId);
+  if (cached && store.hust.selectedId === courseId) return;
 
-  store.selectedId = courseId;
+  store.hust.selectedId = courseId;
   updateSidebar();
   if (cached) {
-    showDetail(cached);
+    showHustDetail(cached);
     return;
   }
-  await loadCourse(summary);
+  await loadHustCourse(summary);
 }
 
-async function loadCourse(summary: CourseSummary): Promise<void> {
+async function loadHustCourse(summary: CourseSummary): Promise<void> {
   if (store.busy) return;
   store.busy = true;
   updateSidebar();
@@ -191,8 +309,8 @@ async function loadCourse(summary: CourseSummary): Promise<void> {
         updateCrawlProgress(main, progress.done, progress.total);
       }
     });
-    loaded = await api.fetchCourse(summary.course_id, store.options);
-    store.details.set(summary.course_id, loaded);
+    loaded = await api.fetchCourse(summary.course_id, store.hust.options);
+    store.hust.details.set(summary.course_id, loaded);
   } catch (error) {
     failure = errorText(error);
   } finally {
@@ -201,36 +319,36 @@ async function loadCourse(summary: CourseSummary): Promise<void> {
     updateSidebar();
   }
 
-  if (store.selectedId !== summary.course_id) return;
+  if (store.hust.selectedId !== summary.course_id) return;
 
   if (loaded) {
-    showDetail(loaded);
+    showHustDetail(loaded);
     return;
   }
   if (failure?.includes("已取消")) {
-    store.selectedId = null;
+    store.hust.selectedId = null;
     toast("已取消抓取", "info");
     showHome();
     return;
   }
   if (failure) {
-    renderCourseError(main, summary, failure, () => void loadCourse(summary));
+    renderCourseError(main, summary, failure, () => void loadHustCourse(summary));
   }
 }
 
-function refreshCourse(): void {
-  const summary = currentSummary();
+function refreshHustCourse(): void {
+  const summary = currentHustSummary();
   if (!summary || store.busy) return;
-  store.details.delete(summary.course_id);
-  void loadCourse(summary);
+  store.hust.details.delete(summary.course_id);
+  void loadHustCourse(summary);
 }
 
-function showDetail(detail: CourseDetail): void {
+function showHustDetail(detail: CourseDetail): void {
   renderCourse(main, detail, {
     busy: store.busy,
-    options: store.options,
-    bankQuestions: store.bankQuestions,
-    onRefresh: refreshCourse,
+    options: store.hust.options,
+    bankQuestions: store.hust.bankQuestions,
+    onRefresh: refreshHustCourse,
     onCancel: () => void cancelCurrentJob(),
     onWatch: (jobId) => openWatch(detail, jobId),
     onQuiz: (workId) => openQuiz(detail, workId),
@@ -239,7 +357,7 @@ function showDetail(detail: CourseDetail): void {
       void openExternal(url).catch((error) => toast(errorText(error), "error"));
     },
     onOptionsChange: (options) => {
-      store.options = options;
+      store.hust.options = options;
       toast("抓取设置已更新，点击刷新后生效");
     },
   });
@@ -256,7 +374,7 @@ function openWatch(detail: CourseDetail, jobId?: string | null): void {
       for (const id of jobIds) {
         changed = markJobCompleted(detail, id) || changed;
       }
-      if (changed) showDetail(detail);
+      if (changed) showHustDetail(detail);
     },
   });
 }
@@ -266,14 +384,14 @@ function openQuiz(detail: CourseDetail, workId?: string | null): void {
     courseId: detail.course_id,
     courseName: detail.title,
     workId,
-    bankQuestions: store.bankQuestions,
+    bankQuestions: store.hust.bankQuestions,
     onToast: (message, tone) => toast(message, tone),
     onSubmitted: (workIds) => {
       let changed = false;
       for (const id of workIds) {
         changed = markWorkSubmitted(detail, id) || changed;
       }
-      if (changed) showDetail(detail);
+      if (changed) showHustDetail(detail);
     },
   });
 }
@@ -297,17 +415,302 @@ async function exportDetail(detail: CourseDetail): Promise<void> {
   }
 }
 
+// ---- Zhihuishu flows ----------------------------------------------------
+
+function findZhsCourse(reference: string): ZhsCourse | null {
+  return (
+    store.zhs.courses.find(
+      (course) =>
+        String(course.courseId) === reference ||
+        String(course.recruitId) === reference ||
+        zhsCourseLabel(course) === reference,
+    ) ?? null
+  );
+}
+
+function upsertZhsCourse(course: ZhsCourse): void {
+  const index = store.zhs.courses.findIndex(
+    (item) => item.recruitId === course.recruitId,
+  );
+  if (index >= 0) {
+    store.zhs.courses[index] = course;
+  } else {
+    store.zhs.courses.push(course);
+  }
+}
+
+async function loadZhsCourseList(): Promise<void> {
+  try {
+    store.zhs.courses = await api.zhsListCourses();
+    if (store.zhs.courses.length === 0) {
+      toast(
+        "知到没有返回可用的共享课。可粘贴学习页链接（含 recruitAndCourseId）手动添加。",
+        "info",
+      );
+    }
+  } catch (error) {
+    store.zhs.courses = [];
+    toast(
+      `知到课程列表接口暂不可用：${errorText(error)}。可粘贴学习页链接手动添加课程。`,
+      "error",
+    );
+  }
+}
+
+async function refreshZhsCourses(): Promise<void> {
+  await loadZhsCourseList();
+  updateSidebar();
+  if (!store.zhs.selectedId) showHome();
+}
+
+async function addZhsCourse(reference: string): Promise<void> {
+  try {
+    const course = await api.zhsAddCourse(reference);
+    upsertZhsCourse(course);
+    updateSidebar();
+    toast(`已解析课程：${zhsCourseLabel(course)}`, "success");
+    store.zhs.selectedId = String(course.courseId);
+    store.zhs.view = "course";
+    store.zhs.detail = null;
+    await loadZhsDetail(course);
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+async function selectZhsCourse(courseId: string): Promise<void> {
+  if (store.busy) {
+    toast("正在抓取课程，请先取消当前任务");
+    return;
+  }
+  const course = findZhsCourse(courseId);
+  if (!course) return;
+  if (store.zhs.selectedId === courseId && store.zhs.detail) {
+    store.zhs.view = "course";
+    showZhsCourseView();
+    return;
+  }
+  store.zhs.selectedId = courseId;
+  store.zhs.view = "course";
+  store.zhs.detail = null;
+  store.zhs.meets = [];
+  store.zhs.meetProgress.clear();
+  updateSidebar();
+  await loadZhsDetail(course);
+}
+
+async function loadZhsDetail(
+  course: ZhsCourse,
+  silent = false,
+): Promise<void> {
+  if (store.busy) return;
+  store.busy = true;
+  updateSidebar();
+  if (!silent) renderZhsLoading(main, course, () => void cancelCurrentJob());
+
+  let unlisten: (() => void) | null = null;
+  let detail: ZhsCourseDetail | null = null;
+  let failure: string | null = null;
+
+  try {
+    unlisten = await onJobProgress((progress) => {
+      if (progress.kind === "zhsStage" && progress.job === "zhs-load") {
+        updateZhsLoading(main, progress.done, progress.total, progress.message);
+      }
+    });
+    detail = await api.zhsCourseDetail(String(course.courseId));
+    store.zhs.detail = detail;
+    upsertZhsCourse(detail.course);
+  } catch (error) {
+    failure = errorText(error);
+  } finally {
+    unlisten?.();
+    store.busy = false;
+    updateSidebar();
+  }
+
+  if (store.zhs.selectedId !== String(course.courseId)) return;
+
+  if (detail) {
+    store.zhs.view = "course";
+    showZhsCourseView();
+    return;
+  }
+  if (failure?.includes("已取消")) {
+    store.zhs.selectedId = null;
+    store.zhs.view = "home";
+    toast("已取消抓取", "info");
+    showHome();
+    return;
+  }
+  if (failure) {
+    renderZhsCourseError(main, course, failure, () => void loadZhsDetail(course));
+  }
+}
+
+function showZhsCourseView(): void {
+  const detail = store.zhs.detail;
+  if (!detail) {
+    showHome();
+    return;
+  }
+  const course = detail.course;
+  renderZhsCourse(main, detail, {
+    busy: store.busy,
+    onBack: () => {
+      store.zhs.selectedId = null;
+      store.zhs.view = "home";
+      store.zhs.detail = null;
+      store.zhs.meets = [];
+      store.zhs.meetProgress.clear();
+      updateSidebar();
+      showHome();
+    },
+    onRefresh: () => void loadZhsDetail(course),
+    onMeet: () => void loadZhsMeets(course),
+    onWatch: () =>
+      openZhsWatchModal({
+        courseId: String(course.courseId),
+        courseName: zhsCourseLabel(course),
+        videoTotal: zhsTotalVideos(detail),
+        videoCompleted: zhsCompletedVideos(detail),
+        onToast: (message, tone) => toast(message, tone),
+        onFinished: (summary: ZhsWatchSummary) => {
+          if (!summary.dryRun && summary.ok > 0) {
+            void loadZhsDetail(course, true);
+          }
+        },
+      }),
+    onCheck: () => void checkZhsStatus(String(course.courseId)),
+  });
+}
+
+async function loadZhsMeets(course: ZhsCourse): Promise<void> {
+  if (store.busy) return;
+  store.busy = true;
+  updateSidebar();
+  if (store.zhs.detail) showZhsCourseView();
+
+  try {
+    const meets = await api.zhsMeetList(String(course.courseId));
+    store.zhs.meets = meets;
+    store.zhs.meetProgress.clear();
+    store.zhs.view = "meet";
+    const replayable = meets
+      .filter((meet) => meet.liveId !== 0 && (meet.replayUrl ?? "").trim() !== "")
+      .slice(0, 6);
+    await Promise.allSettled(
+      replayable.map(async (meet) => {
+        try {
+          const progress = await api.zhsMeetProgress(
+            String(course.courseId),
+            meet.meetCourseId,
+          );
+          store.zhs.meetProgress.set(meet.meetCourseId, progress);
+        } catch {
+          // A single progress query failing must not hide the meet list.
+        }
+      }),
+    );
+    store.busy = false;
+    updateSidebar();
+    showZhsMeetView();
+  } catch (error) {
+    store.busy = false;
+    updateSidebar();
+    toast(errorText(error), "error");
+    showZhsCourseView();
+  }
+}
+
+function showZhsMeetView(): void {
+  const course = store.zhs.detail?.course;
+  if (!course) {
+    showHome();
+    return;
+  }
+  const meets = store.zhs.meets;
+  const replayable = meets.filter(
+    (meet) => meet.liveId !== 0 && (meet.replayUrl ?? "").trim() !== "",
+  );
+  renderZhsMeet(main, course, meets, store.zhs.meetProgress, {
+    busy: store.busy,
+    onBack: () => showZhsCourseView(),
+    onRefresh: () => void loadZhsMeets(course),
+    onLoadProgress: (meet) => void loadZhsMeetProgress(course, meet),
+    onWatch: (meet) => {
+      const selected = meet ? [meet] : replayable;
+      const totalMinutes = selected.reduce(
+        (total, item) =>
+          total + Math.ceil((item.durationSecs ?? 0) / 60),
+        0,
+      );
+      openZhsMeetWatchModal({
+        courseId: String(course.courseId),
+        courseName: zhsCourseLabel(course),
+        meet,
+        meetCount: selected.length,
+        totalMinutes,
+        onToast: (message, tone) => toast(message, tone),
+        onFinished: (summary: ZhsMeetWatchSummary) => {
+          if (!summary.dryRun && summary.submitted > 0) {
+            void loadZhsMeets(course);
+          }
+        },
+      });
+    },
+    onCheck: () => void checkZhsStatus(String(course.courseId)),
+  });
+}
+
+async function loadZhsMeetProgress(
+  course: ZhsCourse,
+  meet: ZhsMeet,
+): Promise<void> {
+  try {
+    const progress = await api.zhsMeetProgress(
+      String(course.courseId),
+      meet.meetCourseId,
+    );
+    store.zhs.meetProgress.set(meet.meetCourseId, progress);
+    showZhsMeetView();
+    toast(
+      `${meet.name}：已看 ${progress.watchedCount} / ${progress.totalMinutes} 分钟（${progress.percent}%）`,
+      "info",
+    );
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+async function checkZhsStatus(courseId: string): Promise<void> {
+  try {
+    const status = await api.zhsExceptionStatus(courseId);
+    const bad = status.lock || status.abnormal;
+    toast(status.message, bad ? "error" : "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+// ---- Shared flows -------------------------------------------------------
+
 async function refreshCourses(): Promise<void> {
+  if (store.session?.platform === "zhihuishu") {
+    await refreshZhsCourses();
+    return;
+  }
   try {
     const courses = await api.listCourses();
-    store.courses = courses;
+    store.hust.courses = courses;
     const stillExists =
-      !store.selectedId || courses.some((course) => course.course_id === store.selectedId);
+      !store.hust.selectedId ||
+      courses.some((course) => course.course_id === store.hust.selectedId);
     if (!stillExists) {
-      store.selectedId = null;
-      store.details.clear();
+      store.hust.selectedId = null;
+      store.hust.details.clear();
       showHome();
-    } else if (!store.selectedId) {
+    } else if (!store.hust.selectedId) {
       showHome();
     }
     updateSidebar();
@@ -330,15 +733,23 @@ async function disconnect(): Promise<void> {
   if (store.busy) {
     await api.cancelJob().catch(() => undefined);
   }
+  const platform = activePlatform();
   try {
     await api.disconnect();
   } catch (error) {
     toast(errorText(error), "error");
   }
   store.session = null;
-  store.courses = [];
-  store.selectedId = null;
-  store.details.clear();
+  store.platform = platform;
+  store.hust.courses = [];
+  store.hust.selectedId = null;
+  store.hust.details.clear();
+  store.zhs.courses = [];
+  store.zhs.selectedId = null;
+  store.zhs.detail = null;
+  store.zhs.meets = [];
+  store.zhs.meetProgress.clear();
+  store.zhs.view = "home";
   store.busy = false;
   store.loginStatus = "idle";
   store.loginError = null;
@@ -347,11 +758,6 @@ async function disconnect(): Promise<void> {
 
 async function boot(): Promise<void> {
   updateSidebar();
-  try {
-    store.bankQuestions = (await api.answerBankInfo()).questions;
-  } catch {
-    store.bankQuestions = null;
-  }
   await subscribeAuthEvents();
   try {
     store.session = await api.sessionInfo();
@@ -370,13 +776,9 @@ async function boot(): Promise<void> {
     return;
   }
 
-  try {
-    store.courses = await api.listCourses();
-  } catch (error) {
-    toast(errorText(error), "error");
-  }
-  updateSidebar();
-  showHome();
+  // A restored session only exists inside Tauri; the demo backend is stateless
+  // between page reloads.
+  await activateSession(store.session, false);
 }
 
 void boot();

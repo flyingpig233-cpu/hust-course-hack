@@ -1,0 +1,145 @@
+//! Zhihuishu (智慧树 / 知到) support: shared-course video and meet-course replay completion.
+//!
+//! The module mirrors the layout of the SmartCourse client: HTTP and parsing live
+//! here, the CLI and the Tauri shell only orchestrate. See
+//! `docs/zhihuishu-miaoshua-plan.md` for the verified request protocol, the
+//! encryption constants and the completion semantics.
+//!
+//! The wire protocol has three pieces of shared state:
+//!
+//! * `secretStr` — AES-128-CBC (fixed IV, PKCS#7) over a JSON body, keyed by the
+//!   module key (`cKey`). The video module key is stable and known, the meet
+//!   module key is fetched at runtime through the RSA handshake in [`crypto`].
+//! * `sdsew` / `paramSecret` — XOR-encoded field lists (`zzpttjd` for the video
+//!   report, `zhihuishu` for the meet replay report). See [`crypto::xor_encode`].
+//! * `ewssw` — the synthetic watch-point sequence. See [`crypto::watch_points`].
+//!
+//! Nothing in this module logs cookies, full `secretStr` values or signed URLs.
+
+pub mod api;
+pub mod crypto;
+pub mod meet;
+pub mod models;
+pub mod watch;
+
+pub use api::{ZhsClient, ZhsEndpoints, ZhsError, parse_course_reference};
+pub use crypto::{
+    ModuleKey, ModuleKeyCache, crypto_self_check, decrypt_module_key_blob, decrypt_secret,
+    encrypt_secret, fetch_module_key, hms, parse_hms, watch_points, xor_decode, xor_encode,
+};
+pub use meet::{ZhsMeetWatchOptions, plan_meet_minutes, run_meet_watch};
+pub use models::{
+    ZhsChapter, ZhsCourse, ZhsCourseDetail, ZhsExceptionStatus, ZhsLesson, ZhsMeet, ZhsMeetOutcome,
+    ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote, ZhsProgress, ZhsProgressStage, ZhsUser,
+    ZhsVideo, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
+};
+pub use watch::{plan_videos, run_video_watch};
+
+/// Alias kept for the short name used in the design document.
+pub type ZhsStage = ZhsProgressStage;
+
+/// RSA public key (SPKI, base64) used by the `c/has` module-key handshake.
+///
+/// Recovered from the live site and verified against a captured `rt.sl` blob:
+/// `public_op_unpad(blob)` yields `{"cKey": ..., "module": 11, ...}`.
+pub const PUBLIC_KEY_B64: &str = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCgfZmpLpPEpEFRKBe+\
+ZjWJUjPe+7qg7pGqcfN3j2egJ8H2mrKwaEqZEnPnpi2O3hN8HRyaFozDOp8gwZiYfiIZjWy0Jr/FNAiiKYh5bq\
+0GsEn+ieMmRyJg/+i1rqizhvCXvFdrdGhFTw5EBwTpsGdwe1utdlrvIJUAFWj9Yh4qbQIDAQAB";
+
+/// Fixed AES-CBC IV used by every `secretStr` request.
+pub const AES_IV: &str = "1g3qqdh4jvbskb9x";
+
+/// Current video-module (`module = 11`) AES key.
+///
+/// The key is normally derived from the live `c/has` blob at runtime; this
+/// constant is only the offline fallback when that bootstrap request fails.
+/// [`crypto::crypto_self_check`] proves the fallback still matches the current
+/// protocol, and [`api::ZhsClient`] warns when the live blob disagrees with it.
+pub const VIDEO_MODULE_KEY_FALLBACK: &str = "azp53h0kft7qi78q";
+
+/// Video-course module id.
+pub const MODULE_VIDEO: u32 = 11;
+
+/// Meet-course (live replay) module id.
+pub const MODULE_MEET: u32 = 9;
+
+/// XOR key for the video `sdsew` report.
+pub const XOR_KEY_VIDEO: &str = "zzpttjd";
+
+/// XOR key for the `recruitAndCourseId` course secret and meet `paramSecret`.
+pub const XOR_KEY_COURSE: &str = "zhihuishu";
+
+/// XOR key for the meet replay `paramSecret`.
+pub const XOR_KEY_MEET: &str = "zhihuishu";
+
+/// Persisted module key lifetime; the site keeps keys for roughly 30 minutes.
+pub const MODULE_KEY_TTL_SECS: u64 = 30 * 60;
+
+/// Study API host (`studyservice-api`).
+pub const STUDY_BASE: &str = "https://studyservice-api.zhihuishu.com";
+
+/// Study page origin used as `Referer`/`Origin`.
+pub const STUDY_REFERER: &str = "https://studyvideoh5.zhihuishu.com/";
+
+/// Live/replay API host (`appcomm-live-api`).
+pub const LIVE_BASE: &str = "https://appcomm-live-api.zhihuishu.com";
+
+/// Replay page origin used as `Referer`/`Origin`.
+pub const LIVE_REFERER: &str = "https://lc.zhihuishu.com/";
+
+/// Module-key handshake host (`appcomm-user`).
+pub const APPCOMM_USER_BASE: &str = "https://appcomm-user.zhihuishu.com";
+
+/// Online service host (`onlineservice-api`); used by the course list.
+pub const ONLINE_SERVICE_BASE: &str = "https://onlineservice-api.zhihuishu.com";
+
+/// Student portal host (`online`) used by the meet list.
+pub const ONLINE_BASE: &str = "https://online.zhihuishu.com";
+
+/// Legacy student portal host (`stuonline`), kept as a meet-list fallback.
+pub const STUONLINE_BASE: &str = "https://stuonline.zhihuishu.com";
+
+/// Referer/origin of the student portal.
+pub const ONLINE_REFERER: &str = "https://online.zhihuishu.com/";
+
+/// Replay page host (`lc`).
+pub const LC_BASE: &str = "https://lc.zhihuishu.com";
+
+/// Live IM host; used as the replay-duration fallback.
+pub const IM_BASE: &str = "https://im.zhihuishu.com";
+
+/// Browser user agent used for all requests.
+pub const ZHS_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+                                  (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+
+/// Login/session validation.
+pub const LOGIN_USER_INFO_PATH: &str = "/gateway/t/v1/login/getLoginUserInfo";
+/// Shared-course chapter/video tree.
+pub const VIDEO_LIST_PATH: &str = "/gateway/t/v1/learning/videolist";
+/// Per-video study note; returns the `noteId` (`studiedLessonDto.id`).
+pub const PRELEARNING_NOTE_PATH: &str = "/gateway/t/v1/learning/prelearningNote";
+/// Per-video study state (`watchState`, `studyTotalTime`).
+pub const QUERY_STUY_INFO_PATH: &str = "/gateway/t/v1/learning/queryStuyInfo";
+/// Video completion report.
+pub const SAVE_INTERVAL_PATH: &str = "/gateway/t/v1/learning/saveDatabaseIntervalTimeV2";
+/// Video anti-cheat status.
+pub const VIDEO_EXCEPTION_PATH: &str = "/gateway/t/v1/cheat/exceptionActionDetail";
+/// Meet anti-cheat status.
+pub const MEET_EXCEPTION_PATH: &str = "/app-commserv-live/gateway/t/v1/chect/exceptionActionDetail";
+/// Meet replay watched-minute list.
+pub const MEET_HISTORY_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/getWatchHistory";
+/// Meet replay minute report.
+pub const MEET_SUBMIT_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/setWatchHistorySecret";
+/// Meet course list (plain form POST, no `secretStr`).
+///
+/// Verified by the userscript on a live account: the student portal serves it
+/// under `onlineSchool`, while the legacy `stuonline` path is kept as fallback.
+pub const MEET_LIST_PATH: &str = "/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss";
+/// Legacy meet-list path, tried when the primary endpoint is unreachable.
+pub const MEET_LIST_FALLBACK_PATH: &str = "/stuonline/teachMeeting/listTeachMeetingStu?examV2=ss";
+/// Shared-course list (best effort; the endpoint is not captured yet).
+pub const COURSE_LIST_PATH: &str = "/gateway/t/v1/student/course/share/queryShareCourseInfo";
+/// Shared-course metadata (best effort; used for `isApply`/`classId`).
+pub const QUERY_COURSE_PATH: &str = "/gateway/t/v1/learning/queryCourse";
+/// Replay duration fallback (JSONP, live page endpoint).
+pub const IM_LIVE_VIDEOS_PATH: &str = "/livehome/getVideosByLiveId";

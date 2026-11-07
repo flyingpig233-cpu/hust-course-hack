@@ -103,11 +103,14 @@ pub struct AnswerBankInfoDto {
 }
 
 #[tauri::command]
-pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
+pub async fn open_login_window(
+    app: AppHandle,
+    platform: Option<crate::state::Platform>,
+) -> Result<(), String> {
     // Must be async: creating a WebView2 window blocks until the main event
     // loop creates the webview. A synchronous command runs on the main thread
     // and would deadlock there, leaving the login window blank and unresponsive.
-    crate::login::open_login_window(&app)
+    crate::login::open_login_window(&app, platform.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -605,7 +608,7 @@ fn job_error(error: anyhow::Error) -> String {
 }
 
 fn not_connected() -> String {
-    "尚未连接账号，请先导入 Cookie".to_string()
+    "尚未连接账号，请先在连接页登录对应平台".to_string()
 }
 
 fn course_not_found() -> String {

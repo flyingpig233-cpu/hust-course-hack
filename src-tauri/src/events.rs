@@ -49,4 +49,43 @@ pub enum JobProgress {
         status: String,
         message: Option<String>,
     },
+    /// A Zhihuishu job planned its targets.
+    ///
+    /// `job` is `zhs-watch` or `zhs-meet-watch`; `stage` is `videos` or `meet`.
+    ZhsPlan {
+        job: String,
+        stage: String,
+        total: usize,
+        dry_run: bool,
+        skipped: usize,
+    },
+    /// One Zhihuishu progress transition (video target, replay minute, …).
+    ///
+    /// Never carries cookies, `secretStr` values or signed URLs.
+    ZhsStage {
+        job: String,
+        /// `loading`, `videos`, `meet_list`, `meet_minutes`, `verify`, or
+        /// `circuit_check`.
+        stage: String,
+        done: usize,
+        total: usize,
+        label: String,
+        message: String,
+    },
+    /// Terminal state of one Zhihuishu target (a video or a meet replay).
+    ZhsTarget {
+        job: String,
+        /// 1-based position in the queue.
+        index: usize,
+        total: usize,
+        label: String,
+        /// `running`, `ok`, `skip`, `dry_run`, `failed`, `cancelled`, or
+        /// `circuit_broken`.
+        status: String,
+        message: Option<String>,
+        /// Replay goal in minutes (meet jobs only).
+        target_minutes: Option<u32>,
+        /// Watched minutes before the run (meet jobs only).
+        watched_before: Option<usize>,
+    },
 }

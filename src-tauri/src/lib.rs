@@ -4,6 +4,7 @@ mod commands;
 mod events;
 mod login;
 mod state;
+mod zhihuishu;
 
 use state::AppState;
 
@@ -31,6 +32,15 @@ pub fn run() {
             commands::cancel_job,
             commands::helper_script,
             commands::save_text_file,
+            zhihuishu::zhs_list_courses,
+            zhihuishu::zhs_add_course,
+            zhihuishu::zhs_course_detail,
+            zhihuishu::zhs_watch_videos,
+            zhihuishu::zhs_meet_list,
+            zhihuishu::zhs_meet_progress,
+            zhihuishu::zhs_meet_watch,
+            zhihuishu::zhs_exception_status,
+            zhihuishu::zhs_cancel_job,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HUST Course Hack");

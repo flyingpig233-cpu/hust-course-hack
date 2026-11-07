@@ -39,8 +39,20 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   graded. Fill/multiple-choice encodings are page-verified but not yet
   individually submitted; test one such work before bulk submission.
 - `src/models.rs` — serializable data model shared by the CLI and the GUI.
-- `src/main.rs` — `list`, `dump`, `tree`, `helper`, `watch` commands; `README.md`
-  has usage and the verified endpoint table.
+- `src/main.rs` — `list`, `dump`, `tree`, `helper`, `watch` commands plus the
+  `zhs` subcommands (`list`, `tree`, `watch`, `check`, `meet list/status/watch`)
+  for Zhihuishu; `README.md` has usage and the verified endpoint table.
+- `src/zhihuishu/` — Zhihuishu (智慧树 / 知到) support verified live on
+  2026-11-07. `crypto.rs` implements the `secretStr` AES-128-CBC wrapper, the
+  runtime module-key handshake (`RSAES-PKCS1-v1_5 {"module":n}` -> `c/has?uid=` ->
+  public operation + PKCS#1 unpad -> `cKey`), the XOR field encoders and the
+  watch-point sequence; `api.rs` is `ZhsClient` (session, shared-course list with
+  study-URL/secret fallback, video tree, `prelearningNote`/`queryStuyInfo`/
+  `saveDatabaseIntervalTimeV2`, meet list/replay progress/minute reports,
+  anti-cheat status, and `ZhsEndpoints` injection for tests); `watch.rs` is the
+  video completion planner/executor; `meet.rs` is the replay attendance executor
+  with random 90–100% coverage, 2–6 s pacing and a circuit breaker. Protocol
+  notes live in `docs/zhihuishu-miaoshua-plan.md`.
 - `src/playback.rs` — verified video progress reporting: `enc` signature,
   `dtoken` report URL, and the `isdrag` heartbeat sequence. `watch` re-fetches
   `mArg.defaults`, `otherInfo`, `attDurationEnc` and `dtoken` on every run.
@@ -50,6 +62,11 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   viewer's `finishJob()`. It is embedded as
   `hust_course_hack::VIDEO_HELPER_SCRIPT`; the file name is kept for
   compatibility.
+- `userscripts/zhihuishu-miaoshua.user.js` — browser-side one-click video
+  completion and meet-replay attendance for Zhihuishu. It reuses the page's
+  `labc`/`yxyz` crypto helpers when present and falls back to WebCrypto +
+  BigInt; meet coverage is randomized (90–100%), reports are paced (2–6 s) and
+  the anti-cheat endpoint is polled as a circuit breaker.
 - `src-tauri/` — Tauri 2 shell: `tauri.conf.json`, `capabilities/default.json`,
   `src/commands.rs`, `src/state.rs`, `src/events.rs`, `src/login.rs`. Commands
   wrap the core client; progress is emitted as `job-progress` events. Only one
@@ -63,7 +80,15 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   to smartcourse, it reads cookies (including HttpOnly) with
   `cookies_for_url`, verifies them through `list_courses_with_url`, adopts the
   session, and closes the window. The login webview uses a temporary WebView2
-  data directory that is deleted on close.
+  data directory that is deleted on close. `open_login_window` also accepts an
+  optional platform; for Zhihuishu it opens
+  `https://onlineweb.zhihuishu.com/onlinestuh5`, reads the cookies and validates
+  them with `getLoginUserInfo` before adopting the session.
+- `src-tauri/src/zhihuishu.rs` — thin Zhihuishu Tauri commands
+  (`zhs_list_courses`, `zhs_course_detail`, `zhs_watch_videos`,
+  `zhs_meet_list/progress/watch`, `zhs_exception_status`, `zhs_add_course`) and
+  the `zhs-watch` / `zhs-meet-watch` job events; `SessionInfo` carries a
+  `platform` field.
 - `ui/` — Vite + vanilla TypeScript frontend (no framework). The connect screen
   only offers the official login window; it has no cookies.txt or pasted-header
   import. `ui/src/mock.ts` serves demo data when the page runs outside Tauri, so
@@ -71,13 +96,24 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   `ui/src/views/quiz.ts` is the one-click quiz modal (defaults to dry-run,
   requires the confirmation checkbox before real submission); `views/course.ts`
   adds the header button, quiz-tab banner and per-work “提交本题”. The demo
-  backend never claims a real quiz submission.
+  backend never claims a real quiz submission. The connect screen also offers
+  the Zhihuishu platform; `views/zhs-course.ts` and `views/zhs-meet.ts` mirror
+  the CLI semantics (dry-run default, risk confirmation, progress/cancel).
+- `website/` — standalone Vite + TypeScript static app that mirrors the core
+  for SmartCourse and, since the Zhihuishu branch, also for Zhihuishu through
+  the `zhihuishu-bridge.user.js` userscript (`src/core/zhs/`,
+  `src/views/zhs-*.ts`, `src/zhs-bridge.user.ts`). Cross-origin requests are
+  relayed by the bridge inside a Zhihuishu page, so the static site never sees
+  cookies.
 - Tests live in `src/parse.rs`, `src/cookie.rs`, `src/playback.rs`,
-  `src/answers.rs`, `src/submit.rs`, and `tests/submit_http.rs`. The submission
-  tests use `test-data/answer-bank.json` and `test-data/courses.json` to verify
-  all 541 questions across the 117 quiz works encode successfully; the
-  integration test runs the submit path against a local mock answering page.
-  Default branch is `main`.
+  `src/answers.rs`, `src/submit.rs`, `src/zhihuishu/**`, plus
+  `tests/submit_http.rs`, `tests/zhs_core.rs` and `tests/zhs_mock.rs`. The
+  submission tests use `test-data/answer-bank.json` and
+  `test-data/courses.json` to verify all 541 questions across the 117 quiz works
+  encode successfully; the integration test runs the submit path against a local
+  mock answering page. `tests/zhs_mock.rs` runs the Zhihuishu video/meet flows
+  against a local mock HTTP server that decrypts `secretStr` and asserts the
+  `sdsew`/`paramSecret` fields. Default branch is `main`.
 
 ## Commands
 
@@ -86,6 +122,9 @@ Run from the repo root in PowerShell 5.1:
 - `cargo run` / `cargo build`
 - `cargo run -- helper --out video-helper.user.js` (writes the browser helper script for videos and PDF documents; no cookies needed)
 - `cargo run -- --cookies cookies.txt watch --course <id> --dry-run` (prints report URLs without sending)
+- `cargo run -- --cookies zhs-cookies.txt zhs list` (Zhihuishu shared courses; also
+  `zhs tree`, `zhs watch`, `zhs check`, `zhs meet list/status/watch` — see README)
+- `cd website; npm test; npm run build` (website tests and static build)
 - `cargo test --workspace`
 - `cargo fmt --all`
 - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -158,3 +197,18 @@ Run from the repo root in PowerShell 5.1:
 - New Tauri plugins need both a Rust `.plugin(...)` registration and the
   matching permission in `src-tauri/capabilities/default.json`.
 - Tauri 2 is the agreed major version. Confirm before bumping majors.
+- Zhihuishu protocol constants (module ids, fixed IV, XOR keys, API bases and
+  paths) live in `src/zhihuishu/mod.rs`. Fetch the meet module key at runtime
+  through the `c/has` handshake instead of hardcoding it, and keep the protocol
+  notes in `docs/zhihuishu-miaoshua-plan.md` in sync when the platform changes.
+- Zhihuishu jobs are high-risk: keep dry-run the default, randomize meet
+  coverage (90–100%), pace minute reports (2–6 s), poll
+  `cheat/exceptionActionDetail` as a circuit breaker, and never log cookies,
+  `secretStr`, `sdsew` or `paramSecret` values.
+- Keep Zhihuishu network code behind `ZhsClient`; tests must use
+  `ZhsEndpoints`/`with_cookie_jar_and_endpoints` with the local mock server
+  (`tests/zhs_mock.rs`) and never a live session.
+- The Zhihuishu website path relies on the `zhihuishu-bridge.user.js`
+  userscript; keep the postMessage origin/nonce/endpoint-allowlist checks on
+  both sides, and remember the `lc.zhihuishu.com` page replaces the global
+  `Map` with a Java-style polyfill.

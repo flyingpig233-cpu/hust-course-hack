@@ -2,6 +2,23 @@
 // It never touches the network and exists so the interface can be developed
 // and reviewed without a real student session.
 import { demoEmit } from "./bus";
+import { xorEncode, XOR_KEY_COURSE } from "./core/zhs/crypto";
+import { decodeCourseRef } from "./core/zhs/client";
+import { defaultMeetWatchOptions, defaultWatchOptions } from "./core/zhs/types";
+import type {
+  ZhsBackend,
+  ZhsCourse,
+  ZhsCourseDetail,
+  ZhsMeet,
+  ZhsMeetProgress,
+  ZhsMeetWatchRequest,
+  ZhsMeetWatchSummary,
+  ZhsSessionInfo,
+  ZhsWatchRequest,
+  ZhsWatchSummary,
+} from "./core/zhs/types";
+import { planMeetMinutes } from "./core/zhs/meet";
+import { planVideoTargets } from "./core/zhs/watch";
 import type {
   AnswerBankInfo,
   Card,
@@ -757,3 +774,415 @@ export const mockApi = {
     URL.revokeObjectURL(url);
   },
 };
+
+// ---------------------------------------------------------------------------
+// Zhihuishu (知到) demo backend. It never touches the network and never claims a
+// real completion: every write flow is dry-run only, exactly like the
+// SmartCourse demo above.
+// ---------------------------------------------------------------------------
+
+const zhsCourses: ZhsCourse[] = [
+  {
+    recruit_id: 463667,
+    course_id: 1000011214,
+    class_id: 3001,
+    school_id: 360,
+    name: "军事理论-综合版",
+    teacher: "张教授",
+    secret: xorEncode([463667, 1000011214], XOR_KEY_COURSE),
+    is_apply: 1,
+    course_type: "share",
+    progress: 41,
+    studied_lesson_count: 3,
+    total_lesson_count: 7,
+    status: 1,
+  },
+  {
+    recruit_id: 500001,
+    course_id: 1000022233,
+    class_id: 3002,
+    school_id: 360,
+    name: "大学生心理健康",
+    teacher: "刘老师",
+    secret: xorEncode([500001, 1000022233], XOR_KEY_COURSE),
+    is_apply: 0,
+    course_type: "share",
+    progress: 0,
+    studied_lesson_count: 0,
+    total_lesson_count: 4,
+    status: 1,
+  },
+];
+
+function zhsVideo(videoId: number, lessonVideoId: number, seconds: number, studied: boolean, name: string) {
+  return { video_id: videoId, lesson_video_id: lessonVideoId, video_sec: seconds, is_studied: studied ? 1 : 0, name };
+}
+
+function zhsDetailFor(course: ZhsCourse): ZhsCourseDetail {
+  if (course.recruit_id === 500001) {
+    return {
+      course,
+      chapters: [
+        {
+          chapter_id: 2001,
+          name: "第一章 绪论",
+          learning_lesson_status: 0,
+          is_pass: 0,
+          limit_checked: null,
+          lessons: [
+            {
+              lesson_id: 20010,
+              name: "1.1 心理健康概述",
+              is_studied: 0,
+              video_id: null,
+              video_sec: null,
+              videos: [
+                zhsVideo(780001, 200101, 612, false, "1.1.1 心理健康的标准"),
+                zhsVideo(780002, 200102, 534, false, "1.1.2 常见的心理困扰"),
+              ],
+            },
+          ],
+        },
+      ],
+    };
+  }
+  return {
+    course,
+    chapters: [
+      {
+        chapter_id: 1000116293,
+        name: "第一章 中国国防",
+        learning_lesson_status: 0,
+        is_pass: 0,
+        limit_checked: null,
+        lessons: [
+          {
+            lesson_id: 1000337351,
+            name: "1.1 国防概述",
+            is_studied: 1,
+            video_id: null,
+            video_sec: null,
+            videos: [
+              zhsVideo(70622143, 1000244446, 468, true, "1.1.1 国防的含义"),
+              zhsVideo(70796671, 1000244447, 491, true, "1.1.2 现代国防的特征"),
+            ],
+          },
+          {
+            lesson_id: 1000337356,
+            name: "1.2 国防历史",
+            is_studied: 0,
+            video_id: null,
+            video_sec: null,
+            videos: [
+              zhsVideo(71192505, 1000244477, 826, false, "1.2.1 中国古代国防"),
+              zhsVideo(74150643, 1000244476, 497, false, "1.2.2 近代国防的屈辱"),
+            ],
+          },
+        ],
+      },
+      {
+        chapter_id: 1000116294,
+        name: "第二章 国家安全",
+        learning_lesson_status: 0,
+        is_pass: 0,
+        limit_checked: false,
+        lessons: [
+          {
+            lesson_id: 1000337360,
+            name: "2.1 国家安全形势",
+            is_studied: 0,
+            video_id: null,
+            video_sec: null,
+            videos: [
+              zhsVideo(75000111, 1000245001, 703, false, "2.1.1 当前我国国家安全形势分析"),
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+const zhsMeets: ZhsMeet[] = [
+  {
+    meet_course_id: 9001,
+    live_id: 66001,
+    video_id: 770001,
+    recruit_id: 463667,
+    course_id: 1000011214,
+    name: "见面课 1 · 国家安全形势分析",
+    teacher: "李教授",
+    start_time: "2026-10-12 19:00:00",
+    end_time: "2026-10-12 20:30:00",
+    replay_url: "https://lc.zhihuishu.com/live/vod_room.html?liveId=66001",
+    exam_url: null,
+    duration_secs: 3600,
+    status: 1,
+  },
+  {
+    meet_course_id: 9002,
+    live_id: 66002,
+    video_id: 770002,
+    recruit_id: 463667,
+    course_id: 1000011214,
+    name: "见面课 2 · 军事思想",
+    teacher: "王教授",
+    start_time: "2026-10-26 19:00:00",
+    end_time: "2026-10-26 20:30:00",
+    replay_url: "https://lc.zhihuishu.com/live/vod_room.html?liveId=66002",
+    exam_url: null,
+    duration_secs: 1800,
+    status: 1,
+  },
+  {
+    meet_course_id: 9003,
+    live_id: 66003,
+    video_id: null,
+    recruit_id: 463667,
+    course_id: 1000011214,
+    name: "见面课 3 · 现场研讨（仅直播）",
+    teacher: "李教授",
+    start_time: "2026-11-09 19:00:00",
+    end_time: null,
+    replay_url: null,
+    exam_url: null,
+    duration_secs: null,
+    status: 0,
+  },
+];
+
+const zhsWatched = new Map<number, number[]>([
+  [66001, Array.from({ length: 38 }, (_, index) => index + 1)],
+  [66002, []],
+]);
+
+let zhsSession: ZhsSessionInfo | null = null;
+
+function requireZhsSession(): void {
+  if (!zhsSession) throw new Error("请先进入知到演示模式");
+}
+
+function zhsCourse(ref: string): ZhsCourse {
+  const match = zhsCourses.find(
+    (course) => String(course.course_id) === ref || String(course.recruit_id) === ref || course.name === ref,
+  );
+  if (match) return match;
+  const parts = ref.split(/[;,/]/).map((part) => Number(part));
+  const decoded = zhsCourses.find((course) => course.recruit_id === parts[0] || course.course_id === parts[1]);
+  if (decoded) return decoded;
+  throw new Error("演示数据中没有该课程；请从演示课程卡片进入。");
+}
+
+export const zhsMockApi: ZhsBackend = {
+  async connect(): Promise<ZhsSessionInfo> {
+    await sleep(420);
+    zhsSession = {
+      user_id: 6000001,
+      uuid: "DemoZhs1",
+      real_name: "演示同学",
+      source: "知到桥接（演示，不访问网络）",
+    };
+    demoEmit("zhs-session-changed", zhsSession);
+    return zhsSession;
+  },
+
+  async sessionInfo(): Promise<ZhsSessionInfo | null> {
+    await sleep(80);
+    return zhsSession;
+  },
+
+  async disconnect(): Promise<void> {
+    cancelled = false;
+    zhsSession = null;
+  },
+
+  async listCourses(): Promise<ZhsCourse[]> {
+    requireZhsSession();
+    await sleep(220);
+    return clone(zhsCourses);
+  },
+
+  async resolveCourse(ref: string): Promise<ZhsCourse> {
+    requireZhsSession();
+    await sleep(260);
+    const value = ref.trim();
+    const decoded = decodeCourseRef(value, zhsCourses);
+    const matched = zhsCourses.find(
+      (course) =>
+        (decoded.recruit_id !== null && course.recruit_id === decoded.recruit_id)
+        || (decoded.course_id !== null && course.course_id === decoded.course_id),
+    );
+    if (matched) return clone(matched);
+    return clone(zhsCourse(value));
+  },
+
+  async courseDetail(courseRef: string): Promise<ZhsCourseDetail> {
+    requireZhsSession();
+    const course = zhsCourse(courseRef);
+    const detail = zhsDetailFor(course);
+    const total = detail.chapters.reduce((sum, chapter) => sum + chapter.lessons.length, 0);
+    demoEmit("zhs-progress", { kind: "zhs-crawl", done: 0, total, label: course.name });
+    for (let done = 1; done <= total; done += 1) {
+      await sleep(160);
+      demoEmit("zhs-progress", { kind: "zhs-crawl", done, total, label: course.name });
+    }
+    return clone(detail);
+  },
+
+  async watchVideos(request: ZhsWatchRequest): Promise<ZhsWatchSummary> {
+    requireZhsSession();
+    if (request.dryRun === false) throw new Error("演示模式仅支持试运行；请连接真实知到账号后执行。");
+    cancelled = false;
+    const course = zhsCourse(request.course);
+    const detail = zhsDetailFor(course);
+    const options = defaultWatchOptions({
+      dry_run: true,
+      include_completed: request.includeCompleted === true,
+      max_videos: request.maxVideos ?? null,
+      verify: request.verify !== false,
+    });
+    const targets = planVideoTargets(detail, options);
+    demoEmit("zhs-progress", {
+      kind: "zhs-plan",
+      stage: "videos",
+      total: targets.length,
+      dryRun: true,
+      skipped: targets.filter((target) => target.completed && !options.include_completed).length,
+    });
+    const outcomes: ZhsWatchSummary["outcomes"] = [];
+    for (const [index, target] of targets.entries()) {
+      if (cancelled) break;
+      const skip = target.completed && !options.include_completed;
+      const outcome = skip
+        ? { label: target.label, state: "skip" as const, watch_state: null, message: "平台已标记完成，跳过" }
+        : { label: target.label, state: "dry_run" as const, watch_state: null, message: "演示模式：已生成上报字段，未发送" };
+      outcomes.push(outcome);
+      demoEmit("zhs-progress", {
+        kind: "zhs-video",
+        index: index + 1,
+        total: targets.length,
+        label: target.label,
+        status: skip ? "skip" : "dry_run",
+        message: outcome.message,
+      });
+      await sleep(240);
+    }
+    if (cancelled) outcomes.push({ label: course.name, state: "cancelled", watch_state: null, message: "已取消" });
+    const skipped = outcomes.filter((outcome) => outcome.state === "skip" || outcome.state === "dry_run").length;
+    return {
+      total: targets.length,
+      ok: 0,
+      skipped,
+      failed: 0,
+      cancelled,
+      dryRun: true,
+      outcomes,
+      errors: [],
+    };
+  },
+
+  async meetList(courseRef: string): Promise<ZhsMeet[]> {
+    requireZhsSession();
+    await sleep(200);
+    const course = zhsCourse(courseRef);
+    return clone(course.recruit_id === 463667 ? zhsMeets : []);
+  },
+
+  async meetProgress(courseRef: string, meetId: number): Promise<ZhsMeetProgress> {
+    requireZhsSession();
+    await sleep(160);
+    const course = zhsCourse(courseRef);
+    const meet = zhsMeets.find((item) => item.recruit_id === course.recruit_id && item.meet_course_id === meetId);
+    if (!meet) throw new Error("演示数据中没有该见面课");
+    const total = Math.max(1, Math.ceil((meet.duration_secs ?? 0) / 60));
+    const watched = zhsWatched.get(meet.live_id) ?? [];
+    return {
+      total_minutes: total,
+      watched_minutes: [...watched],
+      watched_count: watched.length,
+      percent: Math.min(100, Math.round((watched.length / total) * 100)),
+    };
+  },
+
+  async meetWatch(request: ZhsMeetWatchRequest): Promise<ZhsMeetWatchSummary> {
+    requireZhsSession();
+    if (request.dryRun === false) throw new Error("演示模式仅支持试运行；请连接真实知到账号后执行。");
+    cancelled = false;
+    const course = zhsCourse(request.course);
+    if (course.recruit_id !== 463667) throw new Error("演示数据中只有军事理论-综合版包含见面课");
+    const options = defaultMeetWatchOptions({
+      dry_run: true,
+      coverage_min: (request.coverageMin ?? 90) > 1 ? (request.coverageMin ?? 90) / 100 : request.coverageMin ?? 0.9,
+      coverage_max: (request.coverageMax ?? 100) > 1 ? (request.coverageMax ?? 100) / 100 : request.coverageMax ?? 1,
+      delay_min_ms: Math.max(0, request.delayMinMs ?? 2000),
+      delay_max_ms: Math.max(0, request.delayMaxMs ?? 6000),
+      circuit_breaker: request.circuitBreaker !== false,
+      check_every: Math.max(1, request.checkEvery ?? 10),
+    });
+    const selected = zhsMeets
+      .filter((meet) => meet.live_id !== 0)
+      .filter((meet) => !request.meet || meet.meet_course_id === request.meet);
+    demoEmit("zhs-progress", { kind: "zhs-plan", stage: "meet", total: selected.length, dryRun: true, skipped: 0 });
+    const outcomes: ZhsMeetWatchSummary["outcomes"] = [];
+    for (const [index, meet] of selected.entries()) {
+      const total = Math.max(1, Math.ceil((meet.duration_secs ?? 0) / 60));
+      const watched = zhsWatched.get(meet.live_id) ?? [];
+      const progress: ZhsMeetProgress = {
+        total_minutes: total,
+        watched_minutes: watched,
+        watched_count: watched.length,
+        percent: Math.min(100, Math.round((watched.length / total) * 100)),
+      };
+      const plan = planMeetMinutes(progress, options);
+      demoEmit("zhs-progress", {
+        kind: "zhs-meet",
+        index: index + 1,
+        total: selected.length,
+        label: meet.name,
+        targetMinutes: plan.target,
+        watchedBefore: plan.watchedBefore,
+        status: "running",
+        message: "计算覆盖目标",
+      });
+      await sleep(320);
+      outcomes.push({
+        label: meet.name,
+        target_minutes: plan.target,
+        watched_before: plan.watchedBefore,
+        submitted: 0,
+        skipped: plan.minutes.length,
+        failed: 0,
+        watched_after: null,
+        state: plan.minutes.length === 0 ? "skip" : "dry_run",
+        message: plan.minutes.length === 0
+          ? "已看分钟数达到目标，跳过"
+          : `演示模式：目标 ${plan.target}/${total} 分钟（${Math.round((plan.target / total) * 100)}%），未上报`,
+      });
+      demoEmit("zhs-progress", {
+        kind: "zhs-meet",
+        index: index + 1,
+        total: selected.length,
+        label: meet.name,
+        targetMinutes: plan.target,
+        watchedBefore: plan.watchedBefore,
+        status: plan.minutes.length === 0 ? "skip" : "dry_run",
+        message: plan.minutes.length === 0 ? "跳过" : "演示模式：只生成计划，未上报",
+      });
+    }
+    return {
+      meets: selected.length,
+      submitted: 0,
+      skipped: outcomes.length,
+      failed: 0,
+      cancelled,
+      dryRun: true,
+      outcomes,
+      errors: [],
+    };
+  },
+
+  async cancelJob(): Promise<void> {
+    cancelled = true;
+  },
+};
+

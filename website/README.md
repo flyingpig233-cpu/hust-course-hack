@@ -14,6 +14,23 @@
 
 `?demo=1` 是独立演示模式，只有合成示例数据，不会执行真实提交或视频上报。生产默认使用真实 TS core，不会静默切换到演示数据。
 
+## 知到（智慧树）秒刷
+
+网页版包含独立的知到入口：在连接页选择“知到（智慧树）”。
+
+1. 安装 `zhihuishu-bridge.user.js`（与学校桥接脚本相互独立；`npm run build` 会同时更新两份脚本）。
+2. 点击“连接知到页面”，在打开的知到学生端窗口完成登录并允许连接。使用期间保持该知到窗口打开。
+3. 共享课页查看章节 / 节 / 小节视频树与完成状态。“秒刷本课视频”默认 dry-run，只在本地生成 `sdsew` / `ewssw` / `zwsds` 字段；勾选风险确认后才会真正上报并通过 `queryStuyInfo` 复核。
+4. 见面课页列出有回放的场次与已看分钟，按随机 90–100% 覆盖率逐分钟上报，带随机间隔限速、每 N 条风控检查与熔断；同样默认 dry-run。
+
+实现要点：
+
+- `src/core/zhs/`：`crypto.ts`（WebCrypto AES-CBC、BigInt RSA 公钥运算与模块密钥获取、XOR、watchPoints）、`client.ts`（接口与解析、限速器）、`watch.ts`（视频计划 / 执行 / 复核）、`meet.ts`（随机覆盖 / 限速 / 熔断）、`transport.ts`（桥接协议与接口白名单）。
+- 模块密钥：视频课（module 11）优先运行时获取，失败才回退已验证常量；见面课（module 9）绝不硬编码。所有 live（`appcomm-live-api`）加密接口都是 GET + `secretStr` = AES(module 9)，密文不注入 `dateFormate`、只额外带 `_=<ts>`：`getWatchHistory`（`{courseId,userId}`）、`setWatchHistorySecret`（`{paramSecret,jsonpCallBack}`）、`chect/exceptionActionDetail`（`{uuid,recruitId}`）。见面课列表首选 `online.zhihuishu.com/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss`，失败回退 `stuonline.zhihuishu.com/stuonline/teachMeeting/listTeachMeetingStu?examV2=ss`，两者都用 form `recruitId` + `page.pageNo=0` + `page.pageSize=50`。
+- 桥接脚本只放行白名单内的知到 API（`studyservice-api`、`appcomm-live-api`、`appcomm-user`、`onlineservice-api`、`online`、`stuonline`、`im`），来源、`nonce`、窗口对象与请求 id 在两端校验；Cookie 只留在知到窗口。`lc.zhihuishu.com` 会把全局 `Map` 替换成 Java 风格 polyfill，因此桥接脚本用普通对象保存进行中的请求。
+- 限制：必须保持知到窗口打开；跨子域请求是否放行取决于平台 CORS 配置，被浏览器拦截时会显示明确错误。秒刷属于最高风险形态，请自行评估账号与成绩风险。
+- `?demo=1&platform=zhs` 为知到演示模式，只用合成数据，所有写操作强制 dry-run。
+
 ## 为什么需要桥接脚本
 
 GitHub Pages 与学校平台属于不同来源。普通静态页面不能读取学校的 HttpOnly Cookie，也不能绕过学校的跨域策略。桥接脚本只在 `smartcourse.hust.edu.cn` 顶层页面运行，由该页面发起同源请求，通过 `postMessage` 将接口正文返回助手。来源、窗口对象、随机连接 nonce 和课程接口白名单会在两侧校验，连接需在学校页面明确允许。Cookie/密码不会被读取或传给静态站；不使用公共代理、不上传课程数据。
@@ -45,7 +62,8 @@ npm run dev
 - `src/core/playback.ts`、`md5.ts`：复现已有协议的 MD5 签名和 4→3→4→2 心跳序列；只有服务端 `isPassed=true` 才标记完成。
 - `src/core/submit.ts`：提交前刷新题页、保留表单 action 的签名查询串和隐藏字段、完整性检查、验证码前置校验；已批改或缺答案作业不提交。
 - `src/core/backend.ts`：浏览器会话、单任务互斥、题库加载、取消与界面适配。
-- `src/bridge.user.ts`：学校窗口桥接；`public/` 包含编译脚本、课程助手（视频 / PDF 文档）和运行所需题库。
+- `src/bridge.user.ts`、`src/zhs-bridge.user.ts`：学校窗口 / 知到窗口桥接；`public/` 包含两份编译脚本、课程助手（视频 / PDF 文档）和运行所需题库。
+- `src/core/zhs/**`、`src/views/zhs-*.ts`：知到共享课视频树、见面课回放进度、默认 dry-run 的秒刷弹窗与风险确认。
 - `tests/`：合成 HTML、模拟 transport 与原 Rust 签名向量；验证内置 541 题答案可编码。测试不会使用真实 Cookie、请求学校或提交真实作业。
 
 题库为已有仓库题库的运行时字段副本，不包含个人作答、得分、班级信息或登录令牌。更新题库时同时更新 `public/answer-bank.json`，保持 `question_index` 和 `stem_index` 一致。

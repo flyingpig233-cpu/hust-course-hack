@@ -2627,3 +2627,257 @@ details[open] > .tree-summary > .tree-chevron {
     flex-direction: column;
   }
 }
+
+/* Zhihuishu (知到) ------------------------------------------------------- */
+
+.platform-switch {
+  display: inline-flex;
+  gap: 8px;
+  padding: 5px;
+  margin-bottom: 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+
+.platform-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 8px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.platform-option:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.platform-option.is-active {
+  background: var(--ink);
+  color: #fff;
+}
+
+.platform-option:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.platform-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.platform-option.is-active .platform-mark {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.zhs-add-course {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.zhs-add-copy {
+  flex: 1 1 260px;
+}
+
+.zhs-add-copy strong {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.zhs-add-copy p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.zhs-add-row {
+  display: flex;
+  flex: 1 1 420px;
+  gap: 8px;
+}
+
+.zhs-add-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.zhs-add-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.zhs-lesson {
+  padding: 4px 18px 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.zhs-lesson:first-child {
+  border-top: 0;
+}
+
+.zhs-lesson-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 6px;
+  font-weight: 600;
+}
+
+.meet-list {
+  display: grid;
+  gap: 14px;
+}
+
+.meet-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 16px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.meet-main {
+  flex: 1 1 480px;
+  min-width: 0;
+}
+
+.meet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.meet-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.meet-meta {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.meet-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.meet-progress-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.meet-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  min-width: 150px;
+}
+
+.risk-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  margin: 4px 0 14px;
+  background: var(--warn-soft);
+  border: 1px solid #f3d9b5;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--warn);
+}
+
+.risk-summary .icon {
+  margin-top: 2px;
+}
+
+.risk-summary strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.check.switch-row.risk-confirm {
+  padding: 10px 12px;
+  background: var(--bad-soft);
+  border: 1px solid #f3c9c9;
+  border-radius: 10px;
+  align-items: flex-start;
+}
+
+.check.switch-row.risk-confirm input {
+  margin-top: 2px;
+}
+
+.watch-log-line {
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--ink-2);
+  border-bottom: 1px dashed var(--line);
+}
+
+.watch-log-line.is-ok {
+  color: var(--good);
+}
+
+.watch-log-line.is-warn {
+  color: var(--warn);
+}
+
+.watch-log-line.is-error {
+  color: var(--bad);
+}
+
+@media (max-width: 900px) {
+  .zhs-add-row {
+    flex: 1 1 100%;
+  }
+
+  .meet-actions {
+    flex-direction: row;
+    min-width: 0;
+  }
+}

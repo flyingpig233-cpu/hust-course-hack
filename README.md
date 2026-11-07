@@ -1,6 +1,6 @@
 # HUST SmartCourse 课程助手
 
-Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hust.edu.cn` 上当前账号的课程数据：
+Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hust.edu.cn`（学在华科大）与知到（智慧树）上当前账号的课程数据：
 
 - 课程列表和课程基本信息（课程 id、班级 id、cpi、封面、详情页）
 - 章节目录树（章 / 节 / 知识点，含完成状态）
@@ -325,6 +325,60 @@ for outcome in outcomes {
 
 题库的 `low` / `medium` 置信度题目（尤其是填空题）建议提交前人工复核，具体题号见
 `test-data/README.md` 的 `review` 部分。
+
+## 知到（智慧树）视频与见面课秒刷
+
+除学在华科大之外，本仓库也支持知到（智慧树）共享课：
+
+- 课程/章节/视频树：只读抓取，含视频时长与完成状态；
+- **视频课秒刷**：把未完成视频直接标记为已完成（`watchState=1`）；
+- **见面课回放考勤秒刷**：按"随机 90%–100% 覆盖率 + 每次 2–6 秒随机间隔 + 每 10 条检查异常接口"逐分钟上报，达到页面要求的观看比例；
+- 不支持：随堂测验、考试、直播实时参与、翻转课/融合课/智能课（polymas）。
+
+### CLI
+
+```powershell
+$zhs = "D:\zhs-cookies.txt"
+
+# 课程列表（接口未确认时可用学习页 URL / recruitAndCourseId 兜底）
+cargo run -- --cookies $zhs zhs list
+cargo run -- --cookies $zhs zhs tree --course "<学习页 URL 或 recruitAndCourseId>"
+
+# 视频课：先 dry-run 看计划，再真实上报
+cargo run -- --cookies $zhs zhs watch --course "..." --dry-run
+cargo run -- --cookies $zhs zhs watch --course "..."
+
+# 见面课
+cargo run -- --cookies $zhs zhs meet list --course "..."
+cargo run -- --cookies $zhs zhs meet status --course "..." --meeting <meetCourseId>
+cargo run -- --cookies $zhs zhs meet watch --course "..." --meeting <meetCourseId> --dry-run
+cargo run -- --cookies $zhs zhs meet watch --course "..." --all --coverage 0.90-1.00 --delay-ms 2000-6000
+
+# 视频课/见面课异常状态
+cargo run -- --cookies $zhs zhs check --course "..."
+```
+
+常用参数：`--dry-run` 只打印计划；`--yes` 跳过交互确认；`--max-videos`；`--include-completed`；见面课另有 `--coverage`、`--delay-ms`、`--check-every`、`--no-circuit-breaker`。
+
+### 桌面 GUI
+
+连接页选择"知到"平台，内嵌登录窗口打开 `https://onlineweb.zhihuishu.com/onlinestuh5`，登录成功后读取 Cookie（含 HttpOnly）并校验会话。课程页可"秒刷本课视频"，见面课页可查看回放进度并"秒刷回放考勤"；默认 dry-run，真实执行需勾选风险确认，进度通过 `job-progress` 事件推送、可取消。
+
+### 浏览器助手脚本
+
+`userscripts/zhihuishu-miaoshua.user.js` 安装到 Tampermonkey 后，在知到学习页/回放页右下角出现面板，可一键秒刷本课视频或当前回放考勤，并可调整覆盖率与间隔。脚本优先复用页面自带的加密函数，缺失时使用内置 WebCrypto 实现。
+
+### 网站版
+
+`website/` 增加知到平台（课程/视频树/见面课/秒刷）。跨域请求由 `zhihuishu-bridge.user.js` 桥接脚本在知到页面内完成：安装桥接脚本、保持知到页面打开，即可在静态站操作。
+
+### 实现与风险
+
+- 请求体使用 `secretStr`（AES-128-CBC，固定 IV）；见面课 AES key 每次运行时通过 RSA 公钥握手获取，不硬编码；视频课 key 优先运行时获取，失败回退已验证常量；
+- 视频完成上报字段：`sdsew`（XOR 编码字段表）、`ewssw`（监测点序列）、`zwsds`（noteId 的 base64）；
+- 见面课考勤：`getWatchHistory` 查已看分钟，`setWatchHistorySecret` 逐分钟上报；
+- 平台有独立行为分析（`cheat/exceptionActionDetail`）：秒刷属高风险形态，本工具默认 dry-run、限速、随机覆盖率与熔断；请自行评估账号风险；
+- 课程列表接口（`queryShareCourseInfo`）尚未用真实抓包确认，失败时请用学习页 URL/`recruitAndCourseId` 兜底；见面课列表响应字段也可能随平台调整。
 
 ## 已验证的平台接口
 

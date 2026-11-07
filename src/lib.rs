@@ -11,6 +11,7 @@ pub mod models;
 pub mod parse;
 pub mod playback;
 pub mod submit;
+pub mod zhihuishu;
 
 /// Version marker printed by watch/dry-run so a stale binary is obvious.
 pub const REPORT_VERSION: &str = env!("CARGO_PKG_VERSION");

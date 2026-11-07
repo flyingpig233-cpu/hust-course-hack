@@ -2651,3 +2651,134 @@ details[open] > .tree-summary > .tree-chevron {
   .task-table-wrap { overflow-x: auto; }
   .watch-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---------------------------------------------------------------- */
+/* Zhihuishu (知到): platform switch, course extras and meet cards    */
+/* ---------------------------------------------------------------- */
+.platform-switch {
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.platform-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.platform-option:hover:not(:disabled) { color: var(--ink); }
+.platform-option.is-active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+.platform-option:disabled { opacity: 0.6; cursor: progress; }
+
+.platform-mark {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+}
+.platform-option[data-platform="zhs"] .platform-mark { background: var(--violet-soft); color: var(--violet); }
+
+.zhs-add-course {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  margin: 18px 0;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.zhs-add-copy strong { display: block; font-size: 13px; }
+.zhs-add-copy p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.zhs-add-row { display: flex; flex: 1 1 420px; gap: 8px; }
+.zhs-add-row input {
+  flex: 1;
+  min-width: 200px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.zhs-add-row input:focus { border-color: var(--accent); outline: 2px solid var(--accent-soft); }
+
+.zhs-lesson {
+  margin: 6px 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.zhs-lesson-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.zhs-lesson .task-rows { padding: 0 10px; }
+.zhs-lesson .task-row:first-child { border-top: 0; }
+
+.meet-list { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; }
+.meet-card {
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.meet-main { flex: 1; min-width: 0; }
+.meet-head { display: flex; align-items: center; gap: 8px; }
+.meet-card h3 { margin: 8px 0 4px; font-size: 16px; }
+.meet-meta { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.meet-progress-row { display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.meet-progress-value { color: var(--ink-2); font-weight: 600; }
+.meet-actions { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+
+.risk-confirm { padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: 9px; }
+.risk-confirm input { accent-color: var(--bad); }
+
+.watch-log-line {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcff;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.watch-log-line.is-ok { border-color: #c5ebd7; background: #f7fdfa; color: var(--good); }
+.watch-log-line.is-warn { border-color: #f3dcb6; background: var(--warn-soft); color: var(--warn); }
+.watch-log-line.is-error { border-color: #f3c7c7; background: var(--bad-soft); color: var(--bad); }
+
+@media (max-width: 640px) {
+  .meet-card { flex-direction: column; }
+  .zhs-add-row { flex-direction: column; }
+}
