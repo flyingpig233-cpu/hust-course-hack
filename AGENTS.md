@@ -39,9 +39,16 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   graded. Fill/multiple-choice encodings are page-verified but not yet
   individually submitted; test one such work before bulk submission.
 - `src/models.rs` — serializable data model shared by the CLI and the GUI.
-- `src/main.rs` — `list`, `dump`, `tree`, `helper`, `watch` commands plus the
-  `zhs` subcommands (`list`, `tree`, `watch`, `check`, `meet list/status/watch`)
+- `src/main.rs` — `list`, `dump`, `tree`, `helper`, `watch`, `doc` commands plus
+  the `zhs` subcommands (`list`, `tree`, `watch`, `check`, `meet list/status/watch`)
   for Zhihuishu; `README.md` has usage and the verified endpoint table.
+- `src/documents.rs` — direct document (PDF) completion: collects document task
+  points from a crawled course, resolves each card's `jtoken` from the
+  `/mooc-ans/phone/wxcard` `window.AttachmentSetting`, and reports
+  `/mooc-ans/job/document` (`status: true` only). The contract is the one the
+  platform PDF viewer's `finishJob()` sends, ported from Chaoxing's official
+  client (`flutter_chaoxing` 0.4.2). Live-verified on 2026-11-07: all 49
+  document task points of 大学英语词汇解析(一) returned `status: true`.
 - `src/zhihuishu/` — Zhihuishu (智慧树 / 知到) support verified live on
   2026-11-07. `crypto.rs` implements the `secretStr` AES-128-CBC wrapper, the
   runtime module-key handshake (`RSAES-PKCS1-v1_5 {"module":n}` -> `c/has?uid=` ->
@@ -61,7 +68,8 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   course, plus PDF browsing and per-document completion through the platform
   viewer's `finishJob()`. It is embedded as
   `hust_course_hack::VIDEO_HELPER_SCRIPT`; the file name is kept for
-  compatibility.
+  compatibility. CLI/GUI/website complete documents through
+  `src/documents.rs` instead; the userscript stays as the browser fallback.
 - `userscripts/zhihuishu-miaoshua.user.js` — browser-side one-click video
   completion and meet-replay attendance for Zhihuishu. It reuses the page's
   `labc`/`yxyz` crypto helpers when present and falls back to WebCrypto +
@@ -72,8 +80,9 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   wrap the core client; progress is emitted as `job-progress` events. Only one
   crawl/report job may run at a time (`AppState::begin_job`), and `cancel_job`
   stops it. `complete_quizzes` refreshes the course, plans against the embedded
-  bank, and submits per-work with `quiz` progress events; `answer_bank_info`
-  exposes the bank size to the UI.
+  bank, and submits per-work with `quiz` progress events; `complete_documents`
+  refreshes the course and reports each document with `document` progress
+  events; `answer_bank_info` exposes the bank size to the UI.
 - `src-tauri/src/login.rs` — the GUI opens its own webview at
   `https://smartcourse.hust.edu.cn/passport`, which redirects to the HUST
   unified authentication (`pass.hust.edu.cn/cas/login`). After the redirect back
@@ -106,14 +115,14 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   relayed by the bridge inside a Zhihuishu page, so the static site never sees
   cookies.
 - Tests live in `src/parse.rs`, `src/cookie.rs`, `src/playback.rs`,
-  `src/answers.rs`, `src/submit.rs`, `src/zhihuishu/**`, plus
-  `tests/submit_http.rs`, `tests/zhs_core.rs` and `tests/zhs_mock.rs`. The
-  submission tests use `test-data/answer-bank.json` and
+  `src/answers.rs`, `src/submit.rs`, `src/documents.rs`, `src/zhihuishu/**`, plus
+  `tests/submit_http.rs`, `tests/documents_http.rs`, `tests/zhs_core.rs` and
+  `tests/zhs_mock.rs`. The submission tests use `test-data/answer-bank.json` and
   `test-data/courses.json` to verify all 541 questions across the 117 quiz works
-  encode successfully; the integration test runs the submit path against a local
-  mock answering page. `tests/zhs_mock.rs` runs the Zhihuishu video/meet flows
-  against a local mock HTTP server that decrypts `secretStr` and asserts the
-  `sdsew`/`paramSecret` fields. Default branch is `main`.
+  encode successfully; the integration tests run the submit and document paths
+  against local mock pages, and `tests/zhs_mock.rs` runs the Zhihuishu
+  video/meet flows against a local mock HTTP server that decrypts `secretStr`
+  and asserts the `sdsew`/`paramSecret` fields. Default branch is `main`.
 
 ## Commands
 
@@ -122,6 +131,7 @@ Run from the repo root in PowerShell 5.1:
 - `cargo run` / `cargo build`
 - `cargo run -- helper --out video-helper.user.js` (writes the browser helper script for videos and PDF documents; no cookies needed)
 - `cargo run -- --cookies cookies.txt watch --course <id> --dry-run` (prints report URLs without sending)
+- `cargo run -- --cookies cookies.txt doc --course <id> --dry-run` (prints document targets without reporting)
 - `cargo run -- --cookies zhs-cookies.txt zhs list` (Zhihuishu shared courses; also
   `zhs tree`, `zhs watch`, `zhs check`, `zhs meet list/status/watch` — see README)
 - `cd website; npm test; npm run build` (website tests and static build)
@@ -159,13 +169,19 @@ Run from the repo root in PowerShell 5.1:
   and the `/a/{cpi}/{dtoken}` path are verified against a real HAR. If the
   platform changes them, update `src/playback.rs` and its tests; do not hardcode
   a captured `dtoken`/`otherInfo`.
-- PDF completion must go through the platform viewer's own `finishJob()` in the
-  same-origin `iframe.insertdoc-online-pdf`; never call `ed_complete()` alone
-  (it only paints the UI) and never fabricate `/mooc-ans/job/document`. The
-  helper verifies `ans-job-finished`, which `finishJob` adds only after the
-  server accepts. PDF only; Office/WPS uses a different cross-origin viewer.
-  Live-verified on 2026-10-30: `finishJob()` produced `/mooc-ans/job/document`
-  200 and `ans-job-finished` on a real course page.
+- Document (PDF) completion uses the platform's own document job protocol:
+  fetch `GET /mooc-ans/phone/wxcard` for the card, read the attachment's
+  `jtoken` from `window.AttachmentSetting`, then call
+  `GET /mooc-ans/job/document` with `jobid`, `knowledgeid`, `courseid`,
+  `clazzid`, `jtoken`, `checkMicroTopic`, `microTopicId` and
+  `courseEngineInfo`. Only `status: true` counts as completed; never paint a
+  completion locally. This is the request the H5 PDF viewer's `finishJob()`
+  sends, ported from Chaoxing's official client (`flutter_chaoxing` 0.4.2).
+  Live-verified on 2026-11-07: `phone/wxcard` returned the attachment
+  `jtoken` and all 49 documents of the English course reported
+  `status: true`. If the platform changes the shape, fall back to the viewer
+  path in `userscripts/hust-course-video-helper.user.js` and update
+  `src/documents.rs`. Office/WPS files may use a different viewer and job.
 - Keep Tauri commands thin: session/state bookkeeping, progress events, and
   file IO only. All HTTP and parsing stays in the `hust_course_hack` crate.
 - GUI authentication must go through the isolated login window

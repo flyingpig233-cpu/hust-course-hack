@@ -29,6 +29,7 @@ export interface CourseHandlers {
   onCancel(): void;
   onWatch(jobId?: string | null): void;
   onQuiz(workId?: string | null): void;
+  onDocument(jobId?: string | null): void;
   onExport(): void;
   onOpenUrl(url: string): void;
   onOptionsChange(options: CrawlOptions): void;
@@ -213,6 +214,26 @@ export function markWorkSubmitted(detail: CourseDetail, workId: string): boolean
   return changed;
 }
 
+/**
+ * Mark an accepted document as completed locally. Only call this with job ids
+ * the server confirmed with `status: true`; the platform owns the real state.
+ */
+export function markDocumentCompleted(detail: CourseDetail, jobId: string): boolean {
+  if (!jobId) return false;
+  let changed = false;
+  for (const { point } of walkPoints(detail.chapters)) {
+    if (
+      point.kind === "document" &&
+      point.job_id === jobId &&
+      point.completed !== true
+    ) {
+      point.completed = true;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 type TabId = "outline" | "tasks" | "quiz" | "diagnostics";
 
 let lastTab: TabId = "outline";
@@ -275,6 +296,7 @@ export function renderCourse(
             </div>
           </details>
           <button class="btn btn-primary" data-action="quiz">${icon("work", 15)} 完成题目</button>
+          <button class="btn btn-ghost" data-action="document">${icon("document", 15)} 完成文档</button>
           <button class="btn btn-ghost" data-action="watch">${icon("play", 15)} 完成视频</button>
         </div>
       </header>
@@ -362,9 +384,11 @@ export function renderCourse(
         const action =
           point.kind === "video" && point.job_id
             ? `<button class="btn btn-sm" data-watch-job="${esc(point.job_id)}">${icon("play", 13)} ${done ? "重报" : "完成"}</button>`
-            : point.kind === "work" && point.questions.length
-              ? `<button class="btn btn-sm" data-work-id="${esc(point.work_id ?? "")}">${icon("work", 13)} 题目</button>`
-              : "";
+            : point.kind === "document" && point.job_id
+              ? `<button class="btn btn-sm" data-document-job="${esc(point.job_id)}">${icon("document", 13)} ${done ? "重做" : "完成"}</button>`
+              : point.kind === "work" && point.questions.length
+                ? `<button class="btn btn-sm" data-work-id="${esc(point.work_id ?? "")}">${icon("work", 13)} 题目</button>`
+                : "";
         return `
           <tr>
             <td>${status}</td>
@@ -420,6 +444,10 @@ export function renderCourse(
       handlers.onQuiz();
       return;
     }
+    if (target.closest("[data-action='document']")) {
+      handlers.onDocument();
+      return;
+    }
     if (target.closest("[data-action='watch']")) {
       handlers.onWatch();
       return;
@@ -443,6 +471,11 @@ export function renderCourse(
     const watchButton = target.closest<HTMLElement>("[data-watch-job]");
     if (watchButton) {
       handlers.onWatch(watchButton.dataset.watchJob ?? null);
+      return;
+    }
+    const documentButton = target.closest<HTMLElement>("[data-document-job]");
+    if (documentButton) {
+      handlers.onDocument(documentButton.dataset.documentJob ?? null);
       return;
     }
     const workButton = target.closest<HTMLElement>("[data-work-id]");
@@ -652,6 +685,10 @@ function renderTaskRow(point: TaskPoint): string {
     action = done
       ? `<span class="badge badge-good">${icon("check", 12)} 已完成</span>`
       : `<button class="btn btn-sm" data-watch-job="${esc(point.job_id)}">${icon("play", 13)} 完成</button>`;
+  } else if (point.kind === "document" && point.job_id) {
+    action = done
+      ? `<span class="badge badge-good">${icon("check", 12)} 已完成</span>`
+      : `<button class="btn btn-sm" data-document-job="${esc(point.job_id)}">${icon("document", 13)} 完成</button>`;
   } else if (point.kind === "work" && point.questions.length) {
     action = `<button class="btn btn-sm" data-work-id="${esc(point.work_id ?? "")}">${icon("work", 13)} 查看题目</button>`;
   }

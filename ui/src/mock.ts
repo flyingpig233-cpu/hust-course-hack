@@ -10,6 +10,8 @@ import type {
   CourseStats,
   CourseSummary,
   CrawlOptions,
+  DocumentRequest,
+  DocumentSummary,
   Platform,
   Question,
   QuizRequest,
@@ -868,6 +870,135 @@ export const mockApi = {
     }
 
     return summarize(targets.length, passed, failed, errors, cancelled);
+  },
+
+  async completeDocuments(request: DocumentRequest): Promise<DocumentSummary> {
+    requireSession();
+    cancelled = false;
+    const summary = summaries.find(
+      (course) =>
+        course.course_id === request.course ||
+        course.class_id === request.course ||
+        course.name === request.course,
+    );
+    if (!summary) throw new Error("找不到该课程");
+    const detail = detailFor(summary);
+    const totalLeaves = countLeaves(detail.chapters);
+    const dryRun = request.dryRun === true;
+
+    demoEmit("job-progress", { kind: "crawl", done: 0, total: totalLeaves });
+    for (let done = 1; done <= totalLeaves; done += 1) {
+      await sleep(150);
+      if (cancelled) {
+        return {
+          total: 0,
+          completed: 0,
+          failed: 0,
+          cancelled: true,
+          dryRun,
+          errors: [],
+          documents: [],
+        };
+      }
+      demoEmit("job-progress", { kind: "crawl", done, total: totalLeaves });
+    }
+
+    let targets = allTaskPoints(detail.chapters)
+      .map(({ chapter, point }) => ({ chapter, point }))
+      .filter(({ point }) => point.kind === "document")
+      .filter(({ point }) => request.includeCompleted || point.completed !== true)
+      .filter(({ point }) => !request.job || point.job_id === request.job);
+    if (request.job && targets.length === 0) {
+      throw new Error("没有找到该文档任务点");
+    }
+    if (request.maxDocuments) {
+      targets = targets.slice(0, Math.max(1, request.maxDocuments));
+    }
+
+    const total = targets.length;
+    demoEmit("job-progress", { kind: "documentPlan", total, dryRun });
+
+    const documents: DocumentSummary["documents"] = [];
+    let completed = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    let wasCancelled = false;
+
+    for (const [offset, { chapter, point }] of targets.entries()) {
+      if (cancelled) {
+        wasCancelled = true;
+        break;
+      }
+      const index = offset + 1;
+      const jobId = point.job_id ?? "";
+      demoEmit("job-progress", {
+        kind: "document",
+        index,
+        total,
+        chapter: chapter.title,
+        name: point.name,
+        jobId,
+        status: "running",
+        message: null,
+      });
+      await sleep(420);
+
+      if (dryRun) {
+        // The demo is intentionally honest: a dry run never touches the network.
+        const message = "演示模式：试运行不会向平台发送任何请求";
+        documents.push({
+          jobId,
+          name: point.name,
+          chapter: chapter.title,
+          status: "dry_run",
+          message,
+        });
+        demoEmit("job-progress", {
+          kind: "document",
+          index,
+          total,
+          chapter: chapter.title,
+          name: point.name,
+          jobId,
+          status: "dry_run",
+          message,
+        });
+        continue;
+      }
+
+      // Simulated only; the real backend reports /mooc-ans/job/document and
+      // requires the server's `status: true`.
+      const message = "演示模式：已模拟完成，未向平台发送请求";
+      completed += 1;
+      point.completed = true;
+      documents.push({
+        jobId,
+        name: point.name,
+        chapter: chapter.title,
+        status: "completed",
+        message,
+      });
+      demoEmit("job-progress", {
+        kind: "document",
+        index,
+        total,
+        chapter: chapter.title,
+        name: point.name,
+        jobId,
+        status: "completed",
+        message,
+      });
+    }
+
+    return {
+      total,
+      completed,
+      failed,
+      cancelled: wasCancelled,
+      dryRun,
+      errors,
+      documents,
+    };
   },
 
   async completeQuizzes(request: QuizRequest): Promise<QuizSummary> {

@@ -2,7 +2,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use hust_course_hack::{
     Chapter, CourseDetail, CourseSummary, FetchOptions, REPORT_VERSION, SmartCourseClient,
-    TaskKind, TaskPoint, VIDEO_HELPER_SCRIPT, WatchOptions, collect_targets, watch_target,
+    TaskKind, TaskPoint, VIDEO_HELPER_SCRIPT, WatchOptions, collect_document_targets,
+    collect_targets, watch_target,
     zhihuishu::{
         ZhsClient, ZhsCourseDetail, ZhsExceptionStatus, ZhsMeet, ZhsMeetWatchOptions, ZhsProgress,
         ZhsVideoTarget, ZhsWatchOptions, ZhsWatchState, hms, watch::build_video_payload,
@@ -70,6 +71,24 @@ enum Command {
         /// Output path; defaults to stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Complete document (PDF) task points through `/mooc-ans/job/document`.
+    Doc {
+        /// Course id, class id, or course name.
+        #[arg(long)]
+        course: String,
+        /// Only complete this job id.
+        #[arg(long)]
+        job: Option<String>,
+        /// Include documents the platform already marks as completed.
+        #[arg(long)]
+        include_completed: bool,
+        /// Print the targets without sending any request.
+        #[arg(long)]
+        dry_run: bool,
+        /// Maximum number of documents to process.
+        #[arg(long)]
+        max_documents: Option<usize>,
     },
     /// Complete video task points by replaying the player's progress reports.
     Watch {
@@ -303,6 +322,25 @@ async fn main() -> Result<()> {
             let client = SmartCourseClient::from_cookie_file(&cli.cookies)?;
             tree(&client, &options, course).await
         }
+        Command::Doc {
+            course,
+            job,
+            include_completed,
+            dry_run,
+            max_documents,
+        } => {
+            let client = SmartCourseClient::from_cookie_file(&cli.cookies)?;
+            doc(
+                &client,
+                &options,
+                course,
+                job,
+                include_completed,
+                dry_run,
+                max_documents,
+            )
+            .await
+        }
         Command::Watch {
             course,
             job,
@@ -423,6 +461,81 @@ async fn tree(client: &SmartCourseClient, options: &FetchOptions, wanted: String
         print_chapter(chapter, 0);
     }
     print_stats(&detail);
+    Ok(())
+}
+
+async fn doc(
+    client: &SmartCourseClient,
+    options: &FetchOptions,
+    wanted: String,
+    job: Option<String>,
+    include_completed: bool,
+    dry_run: bool,
+    max_documents: Option<usize>,
+) -> Result<()> {
+    println!("hust-course-hack v{REPORT_VERSION} (doc)");
+    let courses = client.list_courses().await?;
+    let selected = select_courses(courses, &[wanted])?;
+    let Some(course) = selected.first() else {
+        bail!("course not found");
+    };
+
+    // Document completion only needs the chapter/card structure; questions and
+    // video signatures would only slow the crawl down.
+    let fetch_options = FetchOptions {
+        include_questions: false,
+        include_video_info: false,
+        concurrency: options.concurrency.max(1),
+    };
+    let detail = client.fetch_course(course, &fetch_options).await?;
+    let mut targets = collect_document_targets(&detail, include_completed);
+    if let Some(job) = &job {
+        targets.retain(|target| &target.job_id == job);
+    }
+    if let Some(max) = max_documents {
+        targets.truncate(max);
+    }
+
+    println!("{} ({})", detail.title, detail.course.course_id);
+    if targets.is_empty() {
+        println!("no document task points to complete");
+        return Ok(());
+    }
+    println!("{} document(s) to complete", targets.len());
+    if dry_run {
+        for (index, target) in targets.iter().enumerate() {
+            println!(
+                "[{}/{}] {} (job {} card {})",
+                index + 1,
+                targets.len(),
+                target.label(),
+                target.job_id,
+                target.card_id
+            );
+        }
+        println!("\ndry run: no requests sent");
+        return Ok(());
+    }
+
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    for (index, target) in targets.iter().enumerate() {
+        println!("[{}/{}] {}", index + 1, targets.len(), target.label());
+        match client.complete_document(target).await {
+            Ok(report) => {
+                completed += 1;
+                println!("  status=true (job {})", report.job_id);
+            }
+            Err(error) => {
+                failed += 1;
+                eprintln!("  error: {error:#}");
+            }
+        }
+    }
+    println!("\ncompleted={completed} failed={failed}");
+    if failed > 0 {
+        bail!("{failed} document(s) could not be completed");
+    }
     Ok(())
 }
 

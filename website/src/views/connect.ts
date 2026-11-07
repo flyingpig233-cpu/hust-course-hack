@@ -4,7 +4,7 @@ import { basename } from "../format";
 import { icon } from "../icons";
 import type { CourseSummary, SessionInfo } from "../types";
 
-export type Platform = "hust" | "zhs";
+export type Platform = "hust" | "zhs" | "ul";
 export type LoginStatus = "idle" | "opening" | "waiting" | "failed";
 
 export interface ConnectHandlers {
@@ -15,66 +15,164 @@ export interface ConnectHandlers {
   onLogin(): void;
 }
 
-const PLATFORM_LABEL: Record<Platform, string> = {
-  hust: "学在华科大",
-  zhs: "知到（智慧树）",
+interface PlatformConfig {
+  label: string;
+  mark: string;
+  eyebrow: string;
+  title: string;
+  lead: string;
+  installTitle: string;
+  installText: string;
+  script: string;
+  connectTitle: string;
+  connectHint: string;
+  loginLabel: string;
+  waitHint: string;
+  steps: [string, string][];
+  features: Array<{ icon: "video" | "live" | "shield" | "folder" | "work"; tone: string; title: string; text: string }>;
+  securityTitle: string;
+  security: string[];
+}
+
+const PLATFORMS: Record<Platform, PlatformConfig> = {
+  hust: {
+    label: "学在华科大",
+    mark: "H",
+    eyebrow: "静态网页版本",
+    title: "课程助手<br />在浏览器中运行",
+    lead: "安装一次桥接脚本，然后连接学校课程页面。在学校窗口登录并允许连接后，即可查看课程、视频和练习。使用期间请保持学校窗口打开。",
+    installTitle: "安装学校桥接脚本",
+    installText: "在浏览器中安装 Tampermonkey，点击下方脚本链接安装。若脚本未运行，请按扩展提示开启用户脚本权限。",
+    script: "hust-course-bridge.user.js",
+    connectTitle: "连接学校页面",
+    connectHint: "账号密码只在学校页面输入，Cookie 留在学校域名",
+    loginLabel: "连接学校课程页面",
+    waitHint: "请在新窗口登录并允许连接。若没有提示，请确认桥接脚本已启用。",
+    steps: [
+      ["2", "在学校窗口完成登录，并允许本站连接"],
+      ["3", "返回这里查看课程，保持学校窗口打开"],
+    ],
+    features: [
+      { icon: "folder", tone: "tone-blue", title: "课程结构一目了然", text: "章 / 节 / 知识点三级树，视频、文档、测验任务点与完成状态集中在同一页。" },
+      { icon: "work", tone: "tone-violet", title: "测验答案与得分", text: "已批改作业展示正确答案、我的答案与得分；未批改作业只显示题目。" },
+      { icon: "video", tone: "tone-green", title: "视频进度上报", text: "复现播放器心跳，支持整门课或单个视频；每次运行重新获取签名，不保存 dtoken。" },
+    ],
+    securityTitle: "安全说明",
+    security: [
+      "学校窗口使用当前浏览器的登录态，断开连接不会退出学校账号。",
+      "课程数据只保存在内存中，刷新页面后需重新连接。",
+      "Cookie 和账号密码不会传给静态站或 GitHub。",
+      "完成结果以服务端 isPassed 为准。",
+    ],
+  },
+  zhs: {
+    label: "知到（智慧树）",
+    mark: "知",
+    eyebrow: "静态网页版本",
+    title: "知到<br />共享课与见面课",
+    lead: "安装一次知到桥接脚本，然后连接知到学生端。在知到窗口登录并允许连接后，即可查看共享课视频树、见面课回放进度并执行秒刷。使用期间请保持知到窗口打开。",
+    installTitle: "安装知到桥接脚本",
+    installText: "在浏览器中安装 Tampermonkey 后安装知到桥接脚本。脚本只会在知到窗口内做接口请求，Cookie 不会传给本站。",
+    script: "zhihuishu-bridge.user.js",
+    connectTitle: "连接知到页面",
+    connectHint: "账号密码只在知到窗口输入，Cookie 留在知到域名",
+    loginLabel: "连接知到页面",
+    waitHint: "请在新窗口登录知到并允许连接。若没有提示，请确认知到桥接脚本已启用。",
+    steps: [
+      ["2", "在知到窗口完成登录，并允许本站连接"],
+      ["3", "返回这里查看课程与见面课，保持知到窗口打开"],
+    ],
+    features: [
+      { icon: "video", tone: "tone-blue", title: "共享课视频秒刷", text: "章节 / 节 / 小节三级视频树，标明完成状态；默认 dry-run，确认风险后才会真正上报。" },
+      { icon: "live", tone: "tone-violet", title: "见面课回放考勤", text: "列出有回放的场次与已看分钟，按随机 90–100% 覆盖率逐分钟上报，带限速与风控熔断。" },
+      { icon: "shield", tone: "tone-green", title: "Cookie 不离开知到", text: "桥接脚本在知到页面内发请求，静态站只收到响应正文；接口路径白名单在两侧同时校验。" },
+    ],
+    securityTitle: "风险提示",
+    security: [
+      "秒刷属于最高风险形态，可能导致账号被风控或成绩判定异常。",
+      "视频课与见面课默认试运行，真实执行需勾选风险确认。",
+      "导出、日志与页面均不展示 Cookie、签名或 secretStr。",
+      "完成结果以服务端 watchState / 观看历史为准。",
+    ],
+  },
+  ul: {
+    label: "优学院",
+    mark: "优",
+    eyebrow: "静态网页版本 · U学",
+    title: "优学院<br />课件秒刷与进度",
+    lead: "安装一次优学院桥接脚本，然后连接优学院课程页。桥接脚本在优学院页面内读取登录 token 并注入请求头，静态站不会拿到 token。连接后可按章/节/页查看课程并秒刷纯视频节。",
+    installTitle: "安装优学院桥接脚本",
+    installText: "在浏览器中安装 Tampermonkey 后安装优学院桥接脚本。脚本只在 courseweb / ua 页面内发请求，登录 token 不会发送给本站。",
+    script: "ulearning-bridge.user.js",
+    connectTitle: "连接优学院页面",
+    connectHint: "登录 token 只在优学院窗口内使用，Cookie 不传给本站",
+    loginLabel: "连接优学院页面",
+    waitHint: "请在新窗口登录优学院并允许连接。若没有提示，请确认优学院桥接脚本已启用。",
+    steps: [
+      ["2", "在优学院窗口完成登录，并允许本站连接"],
+      ["3", "返回这里添加课程（播放器链接或 textbookId/classId），保持窗口打开"],
+    ],
+    features: [
+      { icon: "folder", tone: "tone-blue", title: "章 / 节 / 页 课程树", text: "一次读取整门课 directory，展示视频、图文、练习页类型与每节完成状态。" },
+      { icon: "video", tone: "tone-green", title: "视频节秒刷", text: "按实测 payload 上报 complete=1 与视频 status=1；默认只处理纯视频/图文节，含章节练习的节默认跳过。" },
+      { icon: "shield", tone: "tone-violet", title: "DES 加密与失败即停", text: "sync 请求体使用平台硬编码密钥的 DES-ECB 加密；服务端返回 2 判定刷分时立即整批停止。" },
+    ],
+    securityTitle: "风险提示",
+    security: [
+      "秒刷课件属于高风险操作，服务端可能返回 2 判定刷分并终止学习。",
+      "默认 dry-run，真实执行需勾选风险确认；默认只刷视频，练习默认跳过。",
+      "AUTHORIZATION / UA-AUTHORIZATION 只在优学院页面内注入，不进入静态站。",
+      "完成结果以服务端 completion_status=1 复核为准。",
+    ],
+  },
 };
 
 export function renderConnect(main: HTMLElement, handlers: ConnectHandlers): void {
   main.onclick = null;
   main.onchange = null;
-  const zhs = handlers.platform === "zhs";
+  const config = PLATFORMS[handlers.platform];
   const busy = handlers.status === "opening" || handlers.status === "waiting";
   const buttonLabel =
     handlers.status === "opening"
-      ? zhs ? "正在打开知到窗口…" : "正在打开登录窗口…"
+      ? "正在打开登录窗口…"
       : handlers.status === "waiting"
         ? "等待登录完成…"
         : handlers.status === "failed"
-          ? zhs ? "重新连接知到" : "重新打开登录窗口"
-          : isDemo ? "进入演示模式" : zhs ? "连接知到页面" : "连接学校课程页面";
-  const title = zhs ? "知到<br />共享课与见面课" : "课程助手<br />在浏览器中运行";
-  const lead = zhs
-    ? "安装一次知到桥接脚本，然后连接知到学生端。在知到窗口登录并允许连接后，即可查看共享课视频树、见面课回放进度并执行秒刷。使用期间请保持知到窗口打开。"
-    : "安装一次桥接脚本，然后连接学校课程页面。在学校窗口登录并允许连接后，即可查看课程、视频和练习。使用期间请保持学校窗口打开。";
-  const scriptName = zhs ? "zhihuishu-bridge.user.js" : "hust-course-bridge.user.js";
+          ? "重新连接"
+          : isDemo ? "进入演示模式" : config.loginLabel;
 
   main.innerHTML = `
     <section class="connect-view">
       <div class="connect-hero">
-        <div class="eyebrow">静态网页版本</div>
+        <div class="eyebrow">${config.eyebrow}</div>
         <div class="platform-switch" role="group" aria-label="选择平台">
-          ${(["hust", "zhs"] as Platform[])
+          ${(Object.keys(PLATFORMS) as Platform[])
             .map(
               (platform) => `
               <button class="platform-option${handlers.platform === platform ? " is-active" : ""}" data-platform="${platform}"${
                 busy ? " disabled" : ""
               }>
-                <span class="platform-mark">${platform === "zhs" ? "知" : "H"}</span>
-                <span>${PLATFORM_LABEL[platform]}</span>
+                <span class="platform-mark">${PLATFORMS[platform].mark}</span>
+                <span>${PLATFORMS[platform].label}</span>
               </button>`,
             )
             .join("")}
         </div>
-        <h1>${title}</h1>
-        <p class="connect-lead">${lead}</p>
+        <h1>${config.title}</h1>
+        <p class="connect-lead">${config.lead}</p>
 
         ${
           isDemo
             ? `<div class="demo-notice">${icon("spark", 15)} 演示模式：只使用合成示例数据，不执行真实任务。<a href="${import.meta.env.BASE_URL}">返回正式版</a></div>`
-            : `<div class="bridge-install"><h2>首次使用：安装${zhs ? "知到" : "学校"}桥接脚本</h2><p>${
-              zhs
-                ? "在浏览器中安装 Tampermonkey 后安装知到桥接脚本。脚本只会在知到窗口内做接口请求，Cookie 不会传给本站。"
-                : "在浏览器中安装 Tampermonkey，点击下方脚本链接安装。若脚本未运行，请按扩展提示开启用户脚本权限。"
-            }</p><a class="btn" href="${import.meta.env.BASE_URL}${scriptName}" target="_blank" rel="noopener">安装桥接脚本 .user.js</a><p><a href="?demo=1${zhs ? "&platform=zhs" : ""}">先体验演示模式</a> · <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">获取 Tampermonkey</a></p></div>`
+            : `<div class="bridge-install"><h2>首次使用：${config.installTitle}</h2><p>${config.installText}</p><a class="btn" href="${import.meta.env.BASE_URL}${config.script}" target="_blank" rel="noopener">安装桥接脚本 .user.js</a><p><a href="?demo=1&platform=${handlers.platform}">先体验演示模式</a> · <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">获取 Tampermonkey</a></p></div>`
         }
 
         <div class="connect-card">
           <div class="connect-card-head">
             <span class="connect-step">1</span>
             <div>
-              <h2>${zhs ? "连接知到页面" : "连接学校页面"}</h2>
-              <p>${zhs ? "账号密码只在知到窗口输入，Cookie 留在知到域名" : "账号密码只在学校页面输入，Cookie 留在学校域名"}</p>
+              <h2>${config.connectTitle}</h2>
+              <p>${config.connectHint}</p>
             </div>
           </div>
           <button class="btn btn-primary btn-lg" id="login-button" ${busy ? "disabled" : ""}>
@@ -83,11 +181,7 @@ export function renderConnect(main: HTMLElement, handlers: ConnectHandlers): voi
           </button>
           ${
             busy
-              ? `<div class="login-wait"><span class="pulse-dot"></span> ${
-                  zhs
-                    ? "请在新窗口登录知到并允许连接。若没有提示，请确认知到桥接脚本已启用。"
-                    : "请在新窗口登录并允许连接。若没有提示，请确认桥接脚本已启用。"
-                }</div>`
+              ? `<div class="login-wait"><span class="pulse-dot"></span> ${config.waitHint}</div>`
               : ""
           }
           ${
@@ -98,63 +192,25 @@ export function renderConnect(main: HTMLElement, handlers: ConnectHandlers): voi
         </div>
 
         <ol class="connect-steps">
-          <li><span>2</span> 在${zhs ? "知到" : "学校"}窗口完成登录，并允许本站连接</li>
-          <li><span>3</span> 返回这里查看${zhs ? "课程与见面课" : "课程"}，保持${zhs ? "知到" : "学校"}窗口打开</li>
+          ${config.steps.map(([index, text]) => `<li><span>${index}</span> ${text}</li>`).join("")}
         </ol>
       </div>
 
       <aside class="connect-aside">
-        ${
-          zhs
-            ? `<div class="feature-card">
-                <div class="feature-icon tone-blue">${icon("video", 20)}</div>
-                <h3>共享课视频秒刷</h3>
-                <p>章节 / 节 / 小节三级视频树，标明完成状态；默认 dry-run，确认风险后才会真正上报。</p>
-              </div>
-              <div class="feature-card">
-                <div class="feature-icon tone-violet">${icon("live", 20)}</div>
-                <h3>见面课回放考勤</h3>
-                <p>列出有回放的场次与已看分钟，按随机 90–100% 覆盖率逐分钟上报，带限速与风控熔断。</p>
-              </div>
-              <div class="feature-card">
-                <div class="feature-icon tone-green">${icon("shield", 20)}</div>
-                <h3>Cookie 不离开知到</h3>
-                <p>桥接脚本在知到页面内发请求，静态站只收到响应正文；接口路径白名单在两侧同时校验。</p>
-              </div>
-              <div class="security-card">
-                <div class="security-head">${icon("shield", 16)} 风险提示</div>
-                <ul>
-                  <li>秒刷属于最高风险形态，可能导致账号被风控或成绩判定异常。</li>
-                  <li>视频课与见面课默认试运行，真实执行需勾选风险确认。</li>
-                  <li>导出、日志与页面均不展示 Cookie、签名或 secretStr。</li>
-                  <li>完成结果以服务端 <code>watchState</code> / 观看历史为准。</li>
-                </ul>
-              </div>`
-            : `<div class="feature-card">
-                <div class="feature-icon tone-blue">${icon("folder", 20)}</div>
-                <h3>课程结构一目了然</h3>
-                <p>章 / 节 / 知识点三级树，视频、文档、测验任务点与完成状态集中在同一页。</p>
-              </div>
-              <div class="feature-card">
-                <div class="feature-icon tone-violet">${icon("work", 20)}</div>
-                <h3>测验答案与得分</h3>
-                <p>已批改作业展示正确答案、我的答案与得分；未批改作业只显示题目。</p>
-              </div>
-              <div class="feature-card">
-                <div class="feature-icon tone-green">${icon("video", 20)}</div>
-                <h3>视频进度上报</h3>
-                <p>复现播放器心跳，支持整门课或单个视频；每次运行重新获取签名，不保存 dtoken。</p>
-              </div>
-              <div class="security-card">
-                <div class="security-head">${icon("shield", 16)} 安全说明</div>
-                <ul>
-                  <li>学校窗口使用当前浏览器的登录态，断开连接不会退出学校账号。</li>
-                  <li>课程数据只保存在内存中，刷新页面后需重新连接。</li>
-                  <li>Cookie 和账号密码不会传给静态站或 GitHub。</li>
-                  <li>完成结果以服务端 <code>isPassed</code> 为准。</li>
-                </ul>
-              </div>`
-        }
+        ${config.features
+          .map(
+            (feature) => `
+            <div class="feature-card">
+              <div class="feature-icon ${feature.tone}">${icon(feature.icon, 20)}</div>
+              <h3>${feature.title}</h3>
+              <p>${feature.text}</p>
+            </div>`,
+          )
+          .join("")}
+        <div class="security-card">
+          <div class="security-head">${icon("shield", 16)} ${config.securityTitle}</div>
+          <ul>${config.security.map((item) => `<li>${item}</li>`).join("")}</ul>
+        </div>
       </aside>
     </section>
   `;

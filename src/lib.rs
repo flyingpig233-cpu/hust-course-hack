@@ -7,10 +7,12 @@
 pub mod answers;
 pub mod client;
 pub mod cookie;
+pub mod documents;
 pub mod models;
 pub mod parse;
 pub mod playback;
 pub mod submit;
+pub mod ulearning;
 pub mod zhihuishu;
 
 /// Version marker printed by watch/dry-run so a stale binary is obvious.
@@ -18,6 +20,10 @@ pub const REPORT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use answers::{AnswerBank, BankAnswer, DEFAULT_ANSWER_BANK_JSON, normalize_stem};
 pub use client::{CrawlProgress, DEFAULT_BASE_URL, SmartCourseClient, fetch_courses};
+pub use documents::{
+    DocumentReport, DocumentTarget, attachment_jtoken, collect_document_targets,
+    parse_attachment_setting, parse_document_report,
+};
 pub use models::{
     Card, Chapter, CourseDetail, CourseStats, CourseSummary, FetchOptions, PlaybackEnv, Question,
     QuestionOption, TaskKind, TaskPoint, VideoInfo,

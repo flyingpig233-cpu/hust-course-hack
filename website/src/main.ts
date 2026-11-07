@@ -4,7 +4,9 @@ import {
   onJobProgress,
   onLoginClosed,
   onSessionChanged,
+  onUlSessionChanged,
   onZhsSessionChanged,
+  ulApi,
   zhsApi,
 } from "./api";
 import { errorText, qs, toast } from "./dom";
@@ -12,9 +14,12 @@ import { isDemo } from "./env";
 import { safeFileName } from "./format";
 import { openExternal, pickSavePath } from "./platform";
 import type { CourseDetail, CourseSummary, CrawlOptions, SessionInfo } from "./types";
+import type { UlCourse, UlCourseDetail, UlSessionInfo } from "./core/ul/types";
+import { ulPlayerUrl } from "./core/ul/types";
 import type { ZhsCourse, ZhsCourseDetail, ZhsMeet, ZhsMeetProgress, ZhsSessionInfo } from "./core/zhs/types";
 import { renderConnect, renderHome, type LoginStatus, type Platform } from "./views/connect";
 import {
+  markDocumentCompleted,
   markJobCompleted,
   markWorkSubmitted,
   renderCourse,
@@ -22,12 +27,14 @@ import {
   renderCourseLoading,
   updateCrawlProgress,
 } from "./views/course";
+import { openDocumentModal } from "./views/document";
 import { openHelperModal } from "./views/helper";
 import { openQuizModal } from "./views/quiz";
 import { createSidebar } from "./views/sidebar";
 import { openWatchModal } from "./views/watch";
 import { openZhsWatchModal, renderZhsCourse, renderZhsHome } from "./views/zhs-course";
 import { openZhsMeetWatchModal, renderZhsMeet } from "./views/zhs-meet";
+import { openUlWatchModal, renderUlCourse, renderUlHome } from "./views/ul-course";
 
 const app = qs<HTMLElement>("#app");
 app.innerHTML = `
@@ -40,6 +47,14 @@ app.innerHTML = `
 const main = qs<HTMLElement>("#main");
 const requestedPlatform = new URLSearchParams(location.search).get("platform");
 
+interface UlStore {
+  session: UlSessionInfo | null;
+  courses: UlCourse[];
+  selected: string | null;
+  detail: UlCourseDetail | null;
+  loading: boolean;
+}
+
 interface ZhsStore {
   session: ZhsSessionInfo | null;
   courses: ZhsCourse[];
@@ -51,7 +66,7 @@ interface ZhsStore {
 }
 
 const store = {
-  platform: (requestedPlatform === "zhs" ? "zhs" : "hust") as Platform,
+  platform: (requestedPlatform === "zhs" ? "zhs" : requestedPlatform === "ul" ? "ul" : "hust") as Platform,
   session: null as SessionInfo | null,
   courses: [] as CourseSummary[],
   selectedId: null as string | null,
@@ -65,6 +80,13 @@ const store = {
   bankQuestions: null as number | null,
   loginStatus: "idle" as LoginStatus,
   loginError: null as string | null,
+  ul: {
+    session: null,
+    courses: [],
+    selected: null,
+    detail: null,
+    loading: false,
+  } as UlStore,
   zhs: {
     session: null,
     courses: [],
@@ -77,8 +99,16 @@ const store = {
 };
 
 const sidebar = createSidebar(qs<HTMLElement>("#sidebar"), {
-  onSelect: (courseId) => (store.platform === "zhs" ? void selectZhsCourse(courseId) : void selectCourse(courseId)),
-  onRefreshCourses: () => (store.platform === "zhs" ? void refreshZhsCourses() : void refreshCourses()),
+  onSelect: (courseId) => (store.platform === "zhs"
+    ? void selectZhsCourse(courseId)
+    : store.platform === "ul"
+      ? void selectUlCourse(courseId)
+      : void selectCourse(courseId)),
+  onRefreshCourses: () => (store.platform === "zhs"
+    ? void refreshZhsCourses()
+    : store.platform === "ul"
+      ? void refreshUlCourses()
+      : void refreshCourses()),
   onDisconnect: () => void disconnect(),
   onHelper: () => void openHelperModal(),
 });
@@ -98,9 +128,28 @@ function toSidebarCourse(course: ZhsCourse): CourseSummary {
   };
 }
 
+function toSidebarUlCourse(course: UlCourse): CourseSummary {
+  return {
+    course_id: String(course.textbook_id),
+    class_id: String(course.class_id),
+    cpi: "",
+    name: course.name || `课程 ${course.textbook_id}`,
+    cover_url: null,
+    source: null,
+    kc_enc: null,
+    ck_enc: null,
+    clazz_enc: null,
+    detail_url: "",
+  };
+}
+
 function sidebarSession(): SessionInfo | null {
   if (store.platform === "zhs") {
     const session = store.zhs.session;
+    return session ? { cookieSource: session.source, cookieCount: 0 } : null;
+  }
+  if (store.platform === "ul") {
+    const session = store.ul.session;
     return session ? { cookieSource: session.source, cookieCount: 0 } : null;
   }
   return store.session;
@@ -109,9 +158,13 @@ function sidebarSession(): SessionInfo | null {
 function updateSidebar(): void {
   sidebar.update({
     session: sidebarSession(),
-    courses: store.platform === "zhs" ? store.zhs.courses.map(toSidebarCourse) : store.courses,
-    selectedId: store.platform === "zhs" ? store.zhs.selected : store.selectedId,
-    disabled: store.platform === "zhs" ? store.zhs.loading : store.busy,
+    courses: store.platform === "zhs"
+      ? store.zhs.courses.map(toSidebarCourse)
+      : store.platform === "ul"
+        ? store.ul.courses.map(toSidebarUlCourse)
+        : store.courses,
+    selectedId: store.platform === "zhs" ? store.zhs.selected : store.platform === "ul" ? store.ul.selected : store.selectedId,
+    disabled: store.platform === "zhs" ? store.zhs.loading : store.platform === "ul" ? store.ul.loading : store.busy,
     platform: store.platform,
   });
 }
@@ -123,6 +176,21 @@ function currentSummary(): CourseSummary | null {
 }
 
 function showHome(): void {
+  if (store.platform === "ul") {
+    if (!store.ul.session) {
+      showConnect();
+      return;
+    }
+    updateSidebar();
+    main.onclick = null;
+    main.onchange = null;
+    renderUlHome(main, store.ul.session, store.ul.courses, {
+      onSelect: (courseId) => void selectUlCourse(courseId),
+      onRefreshCourses: () => void refreshUlCourses(),
+      onAddCourse: (ref) => void addUlCourse(ref),
+    });
+    return;
+  }
   if (store.platform === "zhs") {
     if (!store.zhs.session) {
       showConnect();
@@ -155,22 +223,30 @@ function showHome(): void {
 function showConnect(): void {
   store.selectedId = null;
   store.zhs.selected = null;
+  store.ul.selected = null;
   updateSidebar();
   renderConnect(main, {
     platform: store.platform,
     status: store.loginStatus,
     error: store.loginError,
-    onPlatformChange: (platform) => {
-      if (platform === store.platform) return;
-      if (platform === "zhs" && store.session) void disconnect();
-      if (platform === "hust" && store.zhs.session) void disconnect();
-      store.platform = platform;
-      store.loginStatus = "idle";
-      store.loginError = null;
-      showConnect();
-    },
+    onPlatformChange: (platform) => void changePlatform(platform),
     onLogin: () => void startLogin(),
   });
+}
+
+/** Switch platforms, disconnecting the previous one when a session exists. */
+async function changePlatform(platform: Platform): Promise<void> {
+  if (platform === store.platform) return;
+  const connected = store.platform === "zhs"
+    ? store.zhs.session !== null
+    : store.platform === "ul"
+      ? store.ul.session !== null
+      : store.session !== null;
+  if (connected) await disconnect();
+  store.platform = platform;
+  store.loginStatus = "idle";
+  store.loginError = null;
+  showConnect();
 }
 
 /** The login window verified the platform session. */
@@ -214,6 +290,26 @@ async function adoptZhsSession(info: ZhsSessionInfo): Promise<void> {
   toast(isDemo ? "已进入知到演示模式" : "已连接知到页面", "success");
 }
 
+/** The Ulearning popup handshake succeeded; the course list is user-added. */
+async function adoptUlSession(info: UlSessionInfo): Promise<void> {
+  if (store.ul.session) return;
+  store.ul.session = info;
+  store.loginStatus = "idle";
+  store.loginError = null;
+  store.ul.selected = null;
+  store.ul.detail = null;
+  updateSidebar();
+  try {
+    store.ul.courses = await ulApi.listCourses();
+  } catch (error) {
+    store.ul.courses = [];
+    toast(errorText(error), "error");
+  }
+  updateSidebar();
+  showHome();
+  toast(isDemo ? "已进入优学院演示模式" : "已连接优学院页面", "success");
+}
+
 async function startLogin(): Promise<void> {
   if (store.loginStatus === "opening" || store.loginStatus === "waiting") return;
   store.loginStatus = "opening";
@@ -222,6 +318,11 @@ async function startLogin(): Promise<void> {
   // detached mid-click.
   window.setTimeout(showConnect, 0);
   try {
+    if (store.platform === "ul") {
+      const info = await ulApi.connect();
+      if (!store.ul.session) await adoptUlSession(info);
+      return;
+    }
     if (store.platform === "zhs") {
       const info = await zhsApi.connect();
       if (!store.zhs.session) await adoptZhsSession(info);
@@ -253,6 +354,9 @@ async function subscribeAuthEvents(): Promise<void> {
     await onLoginClosed(() => handleLoginClosed());
     await onZhsSessionChanged((info) => {
       if (store.platform === "zhs" && !store.zhs.session) void adoptZhsSession(info);
+    });
+    await onUlSessionChanged((info) => {
+      if (store.platform === "ul" && !store.ul.session) void adoptUlSession(info);
     });
   } catch (error) {
     toast(errorText(error), "error");
@@ -340,6 +444,7 @@ function showDetail(detail: CourseDetail): void {
     onCancel: () => void cancelCurrentJob(),
     onWatch: (jobId) => openWatch(detail, jobId),
     onQuiz: (workId) => openQuiz(detail, workId),
+    onDocument: (jobId) => openDocument(detail, jobId),
     onExport: () => void exportDetail(detail),
     onOpenUrl: (url) => {
       void openExternal(url).catch((error) => toast(errorText(error), "error"));
@@ -419,21 +524,24 @@ async function loadZhsCourse(courseId: string): Promise<void> {
       </div>
     </div>
   `;
+  let loaded: ZhsCourseDetail | null = null;
+  let failed = false;
   try {
-    const detail = await zhsApi.courseDetail(courseId);
-    store.zhs.detail = detail;
+    loaded = await zhsApi.courseDetail(courseId);
+    store.zhs.detail = loaded;
     store.zhs.courses = store.zhs.courses.map((course) =>
-      course.course_id === detail.course.course_id ? detail.course : course,
+      course.course_id === loaded!.course.course_id ? loaded!.course : course,
     );
-    showZhsCourse(detail);
   } catch (error) {
     toast(errorText(error), "error");
     store.zhs.selected = null;
-    showHome();
+    failed = true;
   } finally {
     store.zhs.loading = false;
     updateSidebar();
   }
+  if (loaded) showZhsCourse(loaded);
+  else if (failed) showHome();
 }
 
 function iconRefresh(): string {
@@ -491,6 +599,22 @@ function openZhsWatch(detail: ZhsCourseDetail): void {
     onToast: (message, tone) => toast(message, tone),
     onFinished: (summary) => {
       if (!summary.cancelled) void refreshZhsCourse();
+    },
+  });
+}
+
+function openDocument(detail: CourseDetail, jobId?: string | null): void {
+  openDocumentModal({
+    courseId: detail.course_id,
+    courseName: detail.title,
+    jobId,
+    onToast: (message, tone) => toast(message, tone),
+    onCompleted: (jobIds) => {
+      let changed = false;
+      for (const id of jobIds) {
+        changed = markDocumentCompleted(detail, id) || changed;
+      }
+      if (changed) showDetail(detail);
     },
   });
 }
@@ -564,6 +688,119 @@ async function reloadZhsMeetProgress(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ulearning flows
+// ---------------------------------------------------------------------------
+
+async function selectUlCourse(courseId: string): Promise<void> {
+  if (store.ul.loading) {
+    toast("正在抓取优学院课程，请稍候");
+    return;
+  }
+  const summary = store.ul.courses.find(
+    (course) => String(course.textbook_id) === courseId || String(course.class_id) === courseId,
+  );
+  if (!summary) return;
+  store.ul.selected = String(summary.textbook_id);
+  if (store.ul.detail && String(store.ul.detail.course.textbook_id) === store.ul.selected) {
+    showUlCourse(store.ul.detail);
+    return;
+  }
+  await loadUlCourse(store.ul.selected);
+}
+
+async function loadUlCourse(courseId: string): Promise<void> {
+  if (store.ul.loading) return;
+  store.ul.loading = true;
+  updateSidebar();
+  main.innerHTML = `
+    <div class="course-view">
+      <div class="crawl-card">
+        <div class="crawl-orb"><span class="spinner"></span></div>
+        <h2>正在抓取优学院课程树</h2>
+        <p>读取 basicinformation / directory / 每节 studyrecord，页面较多时需要一点时间。</p>
+        <div class="progress progress-lg"><div class="progress-fill" style="width:0%"></div></div>
+      </div>
+    </div>
+  `;
+  let loaded: UlCourseDetail | null = null;
+  let failed = false;
+  try {
+    loaded = await ulApi.courseDetail(courseId);
+    store.ul.detail = loaded;
+    store.ul.courses = store.ul.courses.map((course) =>
+      course.textbook_id === loaded!.course.textbook_id ? loaded!.course : course,
+    );
+  } catch (error) {
+    toast(errorText(error), "error");
+    store.ul.selected = null;
+    failed = true;
+  } finally {
+    store.ul.loading = false;
+    updateSidebar();
+  }
+  if (loaded) showUlCourse(loaded);
+  else if (failed) showHome();
+}
+
+function showUlCourse(detail: UlCourseDetail): void {
+  updateSidebar();
+  renderUlCourse(main, detail, {
+    busy: store.ul.loading,
+    onBack: () => {
+      store.ul.selected = null;
+      store.ul.detail = null;
+      showHome();
+    },
+    onRefresh: () => void refreshUlCourse(),
+    onWatch: () => openUlWatch(detail),
+    onOpenPlayer: () => {
+      void openExternal(ulPlayerUrl(detail.course, detail.chapters[0]?.chapter_id ?? 0))
+        .catch((error) => toast(errorText(error), "error"));
+    },
+  });
+}
+
+async function refreshUlCourse(): Promise<void> {
+  const detail = store.ul.detail;
+  if (!detail || store.ul.loading) return;
+  await loadUlCourse(String(detail.course.textbook_id));
+}
+
+async function refreshUlCourses(): Promise<void> {
+  try {
+    store.ul.courses = await ulApi.listCourses();
+    updateSidebar();
+    showHome();
+    toast(`优学院课程列表已刷新，共 ${store.ul.courses.length} 门`, "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+async function addUlCourse(ref: string): Promise<void> {
+  try {
+    const course = await ulApi.resolveCourse(ref);
+    store.ul.courses = [...store.ul.courses.filter((item) => item.textbook_id !== course.textbook_id), course];
+    updateSidebar();
+    toast(`已添加课程：${course.name || course.textbook_id}`, "success");
+    showHome();
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+function openUlWatch(detail: UlCourseDetail): void {
+  openUlWatchModal({
+    courseRef: String(detail.course.textbook_id),
+    courseName: detail.course.name || `课程 ${detail.course.textbook_id}`,
+    onToast: (message, tone) => toast(message, tone),
+    onFinished: (summary) => {
+      if (!summary.cancelled) void refreshUlCourse();
+    },
+  });
+}
+
 async function exportDetail(detail: CourseDetail): Promise<void> {
   try {
     const path = await pickSavePath(
@@ -613,6 +850,17 @@ async function cancelCurrentJob(): Promise<void> {
 }
 
 async function disconnect(): Promise<void> {
+  if (store.platform === "ul") {
+    await ulApi.disconnect().catch((error) => toast(errorText(error), "error"));
+    store.ul.session = null;
+    store.ul.courses = [];
+    store.ul.selected = null;
+    store.ul.detail = null;
+    store.loginStatus = "idle";
+    store.loginError = null;
+    showConnect();
+    return;
+  }
   if (store.platform === "zhs") {
     await zhsApi.disconnect().catch((error) => toast(errorText(error), "error"));
     store.zhs.session = null;
@@ -646,6 +894,31 @@ async function disconnect(): Promise<void> {
 
 async function boot(): Promise<void> {
   updateSidebar();
+  if (store.platform === "ul") {
+    try {
+      store.ul.session = await ulApi.sessionInfo();
+    } catch {
+      store.ul.session = null;
+    }
+    await subscribeAuthEvents();
+    if (!store.ul.session) {
+      showConnect();
+      if (isDemo) {
+        window.setTimeout(
+          () => toast("优学院演示模式：使用内置示例课程，不会访问真实平台", "info"),
+          500,
+        );
+      }
+      return;
+    }
+    try {
+      store.ul.courses = await ulApi.listCourses();
+    } catch (error) {
+      toast(errorText(error), "error");
+    }
+    showHome();
+    return;
+  }
   if (store.platform === "zhs") {
     try {
       store.zhs.session = await zhsApi.sessionInfo();

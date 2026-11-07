@@ -12,7 +12,7 @@ const bridges = [
     banner: `// ==UserScript==
 // @name         HUST Course 静态站桥接
 // @namespace    hust-course-hack
-// @version      1.0.0
+// @version      1.1.0
 // @description  在学校页面使用现有登录态，为你明确连接的课程助手静态站转发请求
 // @match        https://smartcourse.hust.edu.cn/*
 // @grant        none
@@ -34,6 +34,22 @@ const bridges = [
 // @match        https://studyvideoh5.zhihuishu.com/*
 // @match        https://stuonline.zhihuishu.com/*
 // @match        https://lc.zhihuishu.com/*
+// @grant        none
+// @run-at       document-start
+// @noframes
+// ==/UserScript==`,
+  },
+  {
+    entry: 'src/ul-bridge.user.ts',
+    name: 'UlBridge',
+    fileName: 'ulearning-bridge.user.js',
+    banner: `// ==UserScript==
+// @name         优学院静态站桥接
+// @namespace    hust-course-hack
+// @version      1.0.0
+// @description  在优学院页面使用现有登录态，为你明确连接的课程助手静态站转发优学院接口请求
+// @match        https://courseweb.ulearning.cn/*
+// @match        https://ua.ulearning.cn/*
 // @grant        none
 // @run-at       document-start
 // @noframes

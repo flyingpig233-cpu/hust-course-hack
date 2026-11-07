@@ -5,7 +5,7 @@ import { icon } from "../icons";
 import type { CourseSummary, SessionInfo } from "../types";
 
 export interface SidebarState {
-  platform: "hust" | "zhs";
+  platform: "hust" | "zhs" | "ul";
   session: SessionInfo | null;
   courses: CourseSummary[];
   selectedId: string | null;
@@ -51,7 +51,9 @@ export function createSidebar(
       <div class="brand-mark">${icon("book", 20)}</div>
       <div class="brand-copy">
         <div class="brand-name">HUST Course Hack</div>
-        <div class="brand-sub">${state.platform === "zhs" ? "知到 秒刷助手" : "SmartCourse 网页助手"}</div>
+        <div class="brand-sub">${
+          state.platform === "zhs" ? "知到 秒刷助手" : state.platform === "ul" ? "优学院 秒刷助手" : "SmartCourse 网页助手"
+        }</div>
       </div>
     </div>
     ${!isDemo ? "" : `<div class="demo-badge">${icon("spark", 12)} 演示模式</div>`}
@@ -80,14 +82,15 @@ export function createSidebar(
 
   const renderSession = () => {
     const session = state.session;
-    const zhs = state.platform === "zhs";
+    const platformName = state.platform === "zhs" ? "知到" : state.platform === "ul" ? "优学院" : "SmartCourse";
+    const platformLogin = state.platform === "zhs" ? "登录知到账号开始" : state.platform === "ul" ? "登录优学院账号开始" : "登录学校账号开始";
     if (!session) {
       sessionSlot.innerHTML = `
         <div class="session-card is-idle">
           <span class="status-dot status-dot-idle"></span>
           <div class="session-copy">
             <div class="session-title">未连接</div>
-            <div class="session-source">${zhs ? "登录知到账号开始" : "登录学校账号开始"}</div>
+            <div class="session-source">${platformLogin}</div>
           </div>
         </div>
       `;
@@ -97,7 +100,7 @@ export function createSidebar(
       <div class="session-card">
         <span class="status-dot"></span>
         <div class="session-copy">
-          <div class="session-title">已连接 ${zhs ? "知到" : "SmartCourse"}</div>
+          <div class="session-title">已连接 ${platformName}</div>
           <div class="session-source" title="${esc(session.cookieSource)}">${esc(
             basename(session.cookieSource),
           )}</div>

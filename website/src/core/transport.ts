@@ -26,6 +26,9 @@ export function allowedRequest(input: HttpRequest): boolean {
       '/mooc-ans/knowledge/cards',
       '/mooc-ans/api/work',
       '/mooc-ans/work/validate',
+      // Document task points: the wxcard attachment list and the read report.
+      '/mooc-ans/phone/wxcard',
+      '/mooc-ans/job/document',
     ].includes(url.pathname) || /^\/ananas\/status\/[\w-]+$/.test(url.pathname)
       || /^\/mooc-ans\/multimedia\/log\/a\/[\w-]+\/[\w.-]+$/.test(url.pathname);
   } catch { return false; }

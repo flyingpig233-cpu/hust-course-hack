@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HUST Course 静态站桥接
 // @namespace    hust-course-hack
-// @version      1.0.0
+// @version      1.1.0
 // @description  在学校页面使用现有登录态，为你明确连接的课程助手静态站转发请求
 // @match        https://smartcourse.hust.edu.cn/*
 // @grant        none
@@ -27,7 +27,9 @@
 				"/mooc-ans/mycourse/studentstudyAjax",
 				"/mooc-ans/knowledge/cards",
 				"/mooc-ans/api/work",
-				"/mooc-ans/work/validate"
+				"/mooc-ans/work/validate",
+				"/mooc-ans/phone/wxcard",
+				"/mooc-ans/job/document"
 			].includes(url.pathname) || /^\/ananas\/status\/[\w-]+$/.test(url.pathname) || /^\/mooc-ans\/multimedia\/log\/a\/[\w-]+\/[\w.-]+$/.test(url.pathname);
 		} catch {
 			return false;

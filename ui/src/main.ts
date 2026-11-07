@@ -28,6 +28,7 @@ import {
   type LoginStatus,
 } from "./views/connect";
 import {
+  markDocumentCompleted,
   markJobCompleted,
   markWorkSubmitted,
   renderCourse,
@@ -35,6 +36,7 @@ import {
   renderCourseLoading,
   updateCrawlProgress,
 } from "./views/course";
+import { openDocumentModal } from "./views/document";
 import { openHelperModal } from "./views/helper";
 import { openQuizModal } from "./views/quiz";
 import { createSidebar, type SidebarItem } from "./views/sidebar";
@@ -351,6 +353,7 @@ function showHustDetail(detail: CourseDetail): void {
     onRefresh: refreshHustCourse,
     onCancel: () => void cancelCurrentJob(),
     onWatch: (jobId) => openWatch(detail, jobId),
+    onDocuments: (jobId) => openDocuments(detail, jobId),
     onQuiz: (workId) => openQuiz(detail, workId),
     onExport: () => void exportDetail(detail),
     onOpenUrl: (url) => {
@@ -379,8 +382,23 @@ function openWatch(detail: CourseDetail, jobId?: string | null): void {
   });
 }
 
-function openQuiz(detail: CourseDetail, workId?: string | null): void {
-  openQuizModal({
+function openDocuments(detail: CourseDetail, jobId?: string | null): void {
+  openDocumentModal({
+    courseId: detail.course_id,
+    courseName: detail.title,
+    jobId,
+    onToast: (message, tone) => toast(message, tone),
+    onCompleted: (jobIds) => {
+      let changed = false;
+      for (const id of jobIds) {
+        changed = markDocumentCompleted(detail, id) || changed;
+      }
+      if (changed) showHustDetail(detail);
+    },
+  });
+}
+
+function openQuiz(detail: CourseDetail, workId?: string | null): void {  openQuizModal({
     courseId: detail.course_id,
     courseName: detail.title,
     workId,

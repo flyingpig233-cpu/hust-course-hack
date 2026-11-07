@@ -19,6 +19,16 @@ import type {
 } from "./core/zhs/types";
 import { planMeetMinutes } from "./core/zhs/meet";
 import { planVideoTargets } from "./core/zhs/watch";
+import { parseCourseRef } from "./core/ul/client";
+import type {
+  UlBackend,
+  UlCourse,
+  UlCourseDetail,
+  UlSessionInfo,
+  UlWatchRequest,
+  UlWatchSummary,
+} from "./core/ul/types";
+import { defaultUlWatchOptions } from "./core/ul/types";
 import type {
   AnswerBankInfo,
   Card,
@@ -27,6 +37,8 @@ import type {
   CourseStats,
   CourseSummary,
   CrawlOptions,
+  DocumentRequest,
+  DocumentSummary,
   Question,
   QuizRequest,
   QuizSummary,
@@ -622,6 +634,77 @@ export const mockApi = {
     return summarize(targets.length, passed, failed, errors, cancelled);
   },
 
+  async completeDocuments(request: DocumentRequest): Promise<DocumentSummary> {
+    requireSession();
+    if (request.dryRun === false) throw new Error("演示模式仅支持试运行；请返回正式版连接学校后执行真实任务。");
+    cancelled = false;
+    const summary = summaries.find(
+      (course) =>
+        course.course_id === request.course ||
+        course.class_id === request.course ||
+        course.name === request.course,
+    );
+    if (!summary) throw new Error("找不到该课程");
+    const detail = detailFor(summary);
+    const totalLeaves = countLeaves(detail.chapters);
+
+    demoEmit("job-progress", { kind: "crawl", done: 0, total: totalLeaves });
+    for (let done = 1; done <= totalLeaves; done += 1) {
+      await sleep(150);
+      if (cancelled) {
+        return { total: 0, passed: 0, failed: 0, skipped: 0, errors: [], cancelled: true, dryRun: true };
+      }
+      demoEmit("job-progress", { kind: "crawl", done, total: totalLeaves });
+    }
+
+    const targets = allTaskPoints(detail.chapters)
+      .filter(({ point }) => point.kind === "document")
+      .filter(({ point }) => request.includeCompleted || point.completed !== true)
+      .filter(({ point }) => !request.job || point.job_id === request.job)
+      .slice(0, request.maxDocuments ?? undefined);
+
+    demoEmit("job-progress", {
+      kind: "documentPlan",
+      total: targets.length,
+      dryRun: true,
+      skipped: 0,
+    });
+
+    for (const [offset, { chapter, point }] of targets.entries()) {
+      if (cancelled) {
+        return { total: targets.length, passed: 0, failed: 0, skipped: 0, errors: [], cancelled: true, dryRun: true };
+      }
+      const index = offset + 1;
+      const progress = {
+        kind: "document" as const,
+        index,
+        total: targets.length,
+        label: `${chapter.title} / ${point.name}`,
+        jobId: point.job_id ?? "",
+      };
+      demoEmit("job-progress", { ...progress, status: "running", message: null });
+      await sleep(420);
+      demoEmit("job-progress", {
+        ...progress,
+        status: "dry_run",
+        message:
+          "GET /mooc-ans/phone/wxcard?cardid=…&knowledgeid=… → window.AttachmentSetting.attachments[].jtoken\n" +
+          "GET /mooc-ans/job/document?jobid=…&jtoken=… → status=true\n" +
+          "演示模式：只规划，未向平台发送任何文档完成请求。",
+      });
+    }
+
+    return {
+      total: targets.length,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      errors: [],
+      cancelled,
+      dryRun: true,
+    };
+  },
+
   async completeQuizzes(request: QuizRequest): Promise<QuizSummary> {
     requireSession();
     if (request.dryRun === false) throw new Error("演示模式仅支持试运行；请返回正式版连接学校后提交。");
@@ -1186,3 +1269,236 @@ export const zhsMockApi: ZhsBackend = {
   },
 };
 
+
+// ---------------------------------------------------------------------------
+// Ulearning (优学院) demo backend. Never touches the network and never claims a
+// real completion: every write flow is dry-run only.
+// ---------------------------------------------------------------------------
+
+const ulCourses: UlCourse[] = [
+  {
+    textbook_id: 47353,
+    class_id: 1019700,
+    oc_id: 165508,
+    name: "【2026秋】26级习近平新时代中国特色社会主义思想概论",
+    teacher: "王老师",
+    locale: "zh_CN",
+    expired: false,
+  },
+];
+
+function ulPage(pageId: number, relationId: number, name: string, contentType: number) {
+  return { page_id: pageId, relation_id: relationId, name, content_type: contentType };
+}
+
+function ulDetailFor(course: UlCourse): UlCourseDetail {
+  return {
+    course,
+    chapters: [
+      {
+        chapter_id: 141351390,
+        name: "第一讲 习近平新时代中国特色社会主义思想",
+        sections: [
+          {
+            section_id: 2377981,
+            name: "1.1 思想的产生背景",
+            chapter_id: 141351390,
+            chapter_name: "第一讲 习近平新时代中国特色社会主义思想",
+            pages: [ulPage(2377982, 2377982, "视频：产生背景", 6)],
+            completion_status: 1,
+            video_secs: 1326,
+          },
+          {
+            section_id: 2377983,
+            name: "1.2 思想的核心要义",
+            chapter_id: 141351390,
+            chapter_name: "第一讲 习近平新时代中国特色社会主义思想",
+            pages: [ulPage(2377984, 2377984, "视频：核心要义", 6)],
+            completion_status: 0,
+            video_secs: 1180,
+          },
+          {
+            section_id: 2377985,
+            name: "1.3 思想的历史地位",
+            chapter_id: 141351390,
+            chapter_name: "第一讲 习近平新时代中国特色社会主义思想",
+            pages: [
+              ulPage(2377986, 2377986, "视频：历史地位", 6),
+              ulPage(2377987, 2377987, "图文：地位综述", 5),
+            ],
+            completion_status: 0,
+            video_secs: 980,
+          },
+          {
+            section_id: 2379018,
+            name: "1.4 章节练习",
+            chapter_id: 141351390,
+            chapter_name: "第一讲 习近平新时代中国特色社会主义思想",
+            pages: [ulPage(2379019, 2379019, "章节练习（5 题）", 7)],
+            completion_status: 0,
+            video_secs: null,
+          },
+        ],
+      },
+      {
+        chapter_id: 141351391,
+        name: "第二讲 坚持和发展中国特色社会主义",
+        sections: [
+          {
+            section_id: 2377991,
+            name: "2.1 中国特色社会主义是必由之路",
+            chapter_id: 141351391,
+            chapter_name: "第二讲 坚持和发展中国特色社会主义",
+            pages: [ulPage(2377992, 2377992, "视频：必由之路", 6)],
+            completion_status: 0,
+            video_secs: 1422,
+          },
+          {
+            section_id: 2377993,
+            name: "2.2 章节练习",
+            chapter_id: 141351391,
+            chapter_name: "第二讲 坚持和发展中国特色社会主义",
+            pages: [ulPage(2377994, 2377994, "章节练习（10 题）", 7)],
+            completion_status: 0,
+            video_secs: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+let ulSession: UlSessionInfo | null = null;
+
+function requireUlSession(): void {
+  if (!ulSession) throw new Error("请先进入优学院演示模式");
+}
+
+function ulCourse(ref: string): UlCourse {
+  const parsed = parseCourseRef(ref);
+  const match = ulCourses.find(
+    (course) =>
+      String(course.textbook_id) === ref
+      || course.name === ref
+      || (parsed !== null && course.textbook_id === parsed.textbook_id),
+  );
+  if (!match) throw new Error("演示数据中没有该课程；可粘贴示例播放器链接或直接填 47353/1019700。");
+  return match;
+}
+
+export const ulMockApi: UlBackend = {
+  async connect(): Promise<UlSessionInfo> {
+    await sleep(380);
+    ulSession = { logged_in: true, source: "优学院桥接（演示，不访问网络）" };
+    demoEmit("ul-session-changed", ulSession);
+    return ulSession;
+  },
+
+  async sessionInfo(): Promise<UlSessionInfo | null> {
+    await sleep(60);
+    return ulSession;
+  },
+
+  async disconnect(): Promise<void> {
+    cancelled = false;
+    ulSession = null;
+  },
+
+  async listCourses(): Promise<UlCourse[]> {
+    requireUlSession();
+    await sleep(180);
+    return clone(ulCourses);
+  },
+
+  async resolveCourse(ref: string): Promise<UlCourse> {
+    requireUlSession();
+    await sleep(240);
+    return clone(ulCourse(ref));
+  },
+
+  async courseDetail(courseRef: string): Promise<UlCourseDetail> {
+    requireUlSession();
+    const course = ulCourse(courseRef);
+    const detail = ulDetailFor(course);
+    const total = detail.chapters.reduce((sum, chapter) => sum + chapter.sections.length, 0);
+    demoEmit("ul-progress", { kind: "ul-crawl", done: 0, total, label: course.name });
+    for (let done = 1; done <= total; done += 1) {
+      await sleep(140);
+      demoEmit("ul-progress", { kind: "ul-crawl", done, total, label: course.name });
+    }
+    return clone(detail);
+  },
+
+  async watchSections(request: UlWatchRequest): Promise<UlWatchSummary> {
+    requireUlSession();
+    if (request.dryRun === false) throw new Error("演示模式仅支持试运行；请连接真实优学院账号后执行。");
+    cancelled = false;
+    const course = ulCourse(request.course);
+    const detail = ulDetailFor(course);
+    const options = defaultUlWatchOptions({
+      dry_run: true,
+      include_quizzes: request.includeQuizzes === true,
+      max_sections: request.maxSections ?? null,
+    });
+    const sections = detail.chapters.flatMap((chapter) => chapter.sections);
+    const candidates = sections.filter((section) => section.completion_status !== 1);
+    const limited = options.max_sections === null ? candidates : candidates.slice(0, options.max_sections);
+    const videos = limited.reduce(
+      (sum, section) => sum + section.pages.filter((page) => page.content_type === 6).length,
+      0,
+    );
+    const quizzes = limited.reduce(
+      (sum, section) => sum + section.pages.filter((page) => page.content_type === 7).length,
+      0,
+    );
+    demoEmit("ul-progress", {
+      kind: "ul-plan",
+      total: limited.length,
+      videos,
+      quizzes,
+      skippedDone: sections.length - candidates.length,
+      dryRun: true,
+    });
+    const outcomes: UlWatchSummary["outcomes"] = [];
+    for (const [index, section] of limited.entries()) {
+      const quizPage = section.pages.find((page) => page.content_type === 7);
+      const skipped = quizPage !== undefined && !options.include_quizzes;
+      const message = skipped
+        ? "含章节练习，默认跳过"
+        : `预演：${section.pages.length} 页，未发送`;
+      outcomes.push({
+        label: section.name,
+        state: skipped ? "skip" : "dry_run",
+        pages: section.pages.length,
+        response: null,
+        message,
+      });
+      demoEmit("ul-progress", {
+        kind: "ul-section",
+        index: index + 1,
+        total: limited.length,
+        label: section.name,
+        status: skipped ? "skip" : "dry_run",
+        message,
+      });
+      await sleep(220);
+    }
+    if (cancelled) {
+      outcomes.push({ label: course.name, state: "cancelled", pages: 0, response: null, message: "已取消" });
+    }
+    return {
+      total: limited.length,
+      ok: 0,
+      skipped: outcomes.length,
+      failed: 0,
+      cancelled,
+      dryRun: true,
+      outcomes,
+      errors: [],
+    };
+  },
+
+  async cancelJob(): Promise<void> {
+    cancelled = true;
+  },
+};

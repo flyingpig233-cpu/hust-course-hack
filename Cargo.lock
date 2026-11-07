@@ -1006,6 +1006,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "des"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffdd80ce8ce993de27e9f063a444a4d53ce8e8db4c1f00cc03af5ad5a9867a1e"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1915,13 +1924,14 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "hust-course-hack"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "anyhow",
  "base64 0.22.1",
  "cbc",
  "clap",
+ "des",
  "env_logger",
  "futures",
  "log",
@@ -1940,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "hust-course-hack-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "env_logger",

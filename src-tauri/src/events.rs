@@ -28,6 +28,20 @@ pub enum JobProgress {
         status: String,
         message: Option<String>,
     },
+    /// The course was refreshed and document task points were collected.
+    DocumentPlan { total: usize, dry_run: bool },
+    /// State change for one document task point in the completion queue.
+    Document {
+        /// 1-based position in the queue.
+        index: usize,
+        total: usize,
+        chapter: String,
+        name: String,
+        job_id: String,
+        /// `running`, `completed`, `failed`, or `dry_run`.
+        status: String,
+        message: Option<String>,
+    },
     /// The course was refreshed and quiz works were planned.
     QuizPlan {
         total: usize,

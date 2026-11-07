@@ -13,7 +13,7 @@ debug = false
 
 [package]
 name = "hust-course-hack"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [lib]
@@ -30,6 +30,7 @@ anyhow = "1"
 base64 = "0.22"
 cbc = "0.1"
 clap = { version = "4", features = ["derive"] }
+des = "0.8"
 env_logger = "0.11"
 futures = "0.3"
 log = "0.4"

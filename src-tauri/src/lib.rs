@@ -27,6 +27,7 @@ pub fn run() {
             commands::list_courses,
             commands::fetch_course,
             commands::watch_course,
+            commands::complete_documents,
             commands::complete_quizzes,
             commands::answer_bank_info,
             commands::cancel_job,

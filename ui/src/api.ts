@@ -8,6 +8,8 @@ import type {
   CourseDetail,
   CourseSummary,
   CrawlOptions,
+  DocumentRequest,
+  DocumentSummary,
   JobProgress,
   Platform,
   QuizRequest,
@@ -36,6 +38,8 @@ const tauriApi = {
     invoke<CourseDetail>("fetch_course", { courseId, options }),
   watchCourse: (request: WatchRequest) =>
     invoke<WatchSummary>("watch_course", { request }),
+  completeDocuments: (request: DocumentRequest) =>
+    invoke<DocumentSummary>("complete_documents", { request }),
   completeQuizzes: (request: QuizRequest) =>
     invoke<QuizSummary>("complete_quizzes", { request }),
   answerBankInfo: () => invoke<AnswerBankInfo>("answer_bank_info"),

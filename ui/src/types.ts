@@ -159,6 +159,32 @@ export interface WatchSummary {
   cancelled: boolean;
 }
 
+export interface DocumentRequest {
+  course: string;
+  job?: string | null;
+  includeCompleted?: boolean;
+  dryRun?: boolean;
+  maxDocuments?: number | null;
+}
+
+export interface DocumentResult {
+  jobId: string;
+  name: string;
+  chapter: string;
+  status: "completed" | "failed" | "dry_run";
+  message: string | null;
+}
+
+export interface DocumentSummary {
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: boolean;
+  dryRun: boolean;
+  errors: string[];
+  documents: DocumentResult[];
+}
+
 export interface QuizRequest {
   course: string;
   work?: string | null;
@@ -204,6 +230,17 @@ export type JobProgress =
       label: string;
       jobId: string;
       status: "running" | "passed" | "failed" | "error" | "dry_run";
+      message: string | null;
+    }
+  | { kind: "documentPlan"; total: number; dryRun: boolean }
+  | {
+      kind: "document";
+      index: number;
+      total: number;
+      chapter: string;
+      name: string;
+      jobId: string;
+      status: "running" | "completed" | "failed" | "dry_run";
       message: string | null;
     }
   | {
