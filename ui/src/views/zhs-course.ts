@@ -16,6 +16,7 @@ import {
   zhsLessonVideos,
   zhsTotalVideos,
 } from "../zhs";
+import { courseHeadHtml, noticeHtml, statStripHtml } from "./course-shell";
 
 const STATUS_TEXT: Record<string, string> = {
   running: "上报中",
@@ -258,22 +259,18 @@ export function renderZhsCourse(
 
   main.innerHTML = `
     <div class="course-view">
-      <header class="course-head">
-        <div class="course-head-copy">
-          <div class="eyebrow">知到共享课 · recruit ${esc(String(course.recruitId))}</div>
-          <h1>${esc(zhsCourseLabel(course))}</h1>
-          <p class="course-sub">${esc(course.teacher || "教师未知")} · 课程 ${esc(
-            String(course.courseId),
-          )} · ${detail.chapters.length} 章 ${lessons} 节</p>
-        </div>
-        <div class="head-actions">
+      ${courseHeadHtml({
+        eyebrow: `知到共享课 · recruit ${course.recruitId}`,
+        title: zhsCourseLabel(course),
+        subtitle: `${course.teacher || "教师未知"} · 课程 ${course.courseId} · ${detail.chapters.length} 章 ${lessons} 节`,
+        actions: `
           <button class="icon-button" data-action="back" title="返回课程列表" aria-label="返回课程列表">${icon("folder", 16)}</button>
           <button class="icon-button" data-action="refresh" title="重新抓取" aria-label="重新抓取">${icon("refresh", 16)}</button>
           <button class="icon-button" data-action="check" title="检查风控状态" aria-label="检查风控状态">${icon("shield", 16)}</button>
           <button class="btn btn-ghost" data-action="meet">${icon("live", 15)} 见面课</button>
           <button class="btn btn-primary" data-action="watch">${icon("play", 15)} 秒刷本课视频</button>
-        </div>
-      </header>
+        `,
+      })}
 
       ${
         handlers.busy
@@ -281,20 +278,23 @@ export function renderZhsCourse(
           : ""
       }
 
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 秒刷视频会让平台把课程标记为已完成，属于最高风险形态。默认仅试运行，确认风险后才会真正发送。
-      </div>
+      ${noticeHtml(
+        "alert",
+        "秒刷视频会让平台把课程标记为已完成，属于最高风险形态。默认仅试运行，确认风险后才会真正发送。",
+      )}
 
-      <div class="stat-strip">
-        <div class="stat-card stat-card-wide">
-          <div class="stat-head"><span>视频完成度</span><strong>${completed} / ${videos}</strong></div>
-          <div class="progress"><div class="progress-fill fill-good" style="width:${percent}%"></div></div>
-          <div class="stat-foot">${percent}% 的小节视频已被平台标记完成</div>
-        </div>
-        <div class="stat-card"><span class="stat-label">章节</span><strong>${detail.chapters.length}</strong><span class="stat-foot">${lessons} 节课</span></div>
-        <div class="stat-card"><span class="stat-label">视频</span><strong>${videos}</strong><span class="stat-foot">按小节统计</span></div>
-        <div class="stat-card"><span class="stat-label">已完成</span><strong>${completed}</strong><span class="stat-foot">watchState=1</span></div>
-      </div>
+      ${statStripHtml([
+        {
+          label: "视频完成度",
+          value: `${completed} / ${videos}`,
+          foot: `${percent}% 的小节视频已被平台标记完成`,
+          wide: true,
+          progress: percent,
+        },
+        { label: "章节", value: String(detail.chapters.length), foot: `${lessons} 节课` },
+        { label: "视频", value: String(videos), foot: "按小节统计" },
+        { label: "已完成", value: String(completed), foot: "watchState=1" },
+      ])}
 
       ${
         videos === 0

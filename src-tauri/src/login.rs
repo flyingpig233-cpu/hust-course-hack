@@ -8,18 +8,21 @@
 //!   (`pass.hust.edu.cn/cas/login`) → course-list API verification.
 //! * Zhihuishu (知到) — `onlineweb.zhihuishu.com/onlinestuh5` → Zhihuishu
 //!   passport → `getLoginUserInfo` verification.
+//! * Ulearning (优学院 / U学) — `umooc.ulearning.cn/pc.html#/login` → the
+//!   Ulearning student portal → `GET /user` verification.
 //!
 //! The login window uses its own temporary WebView2 data directory so no
 //! platform session is left in the app's main webview profile. The directory is
 //! deleted when the window is destroyed.
 
 use crate::state::{
-    AppState, HustSession, Platform, Session, SessionClient, SessionInfo, ZhsSession,
+    AppState, HustSession, Platform, Session, SessionClient, SessionInfo, UlSession, ZhsSession,
 };
 use anyhow::{Context, Result, anyhow};
 use hust_course_hack::{
     SmartCourseClient,
     cookie::{CookieRecord, jar_from_records},
+    ulearning::UlearningClient,
     zhihuishu::ZhsClient,
 };
 use std::{
@@ -50,6 +53,20 @@ const ZHS_COOKIE_URLS: [&str; 4] = [
     "https://studyvideoh5.zhihuishu.com/",
 ];
 
+const UL_ENTRY: &str = "https://umooc.ulearning.cn/pc.html#/login";
+const UL_HOST_SUFFIX: &str = "ulearning.cn";
+/// Cookie URLs read after an Ulearning login. The session token is the
+/// `AUTHORIZATION` cookie on the `.ulearning.cn` domain; the API hosts are
+/// listed so path-scoped copies are picked up as well.
+const UL_COOKIE_URLS: [&str; 6] = [
+    "https://umooc.ulearning.cn/",
+    "https://www.ulearning.cn/",
+    "https://ua.ulearning.cn/",
+    "https://api.ulearning.cn/",
+    "https://courseapi.ulearning.cn/",
+    "https://courseweb.ulearning.cn/",
+];
+
 struct LoginConfig {
     entry: &'static str,
     title: &'static str,
@@ -67,6 +84,11 @@ fn login_config(platform: Platform) -> LoginConfig {
             entry: ZHS_ENTRY,
             title: "登录 知到（智慧树）",
             cookie_urls: &ZHS_COOKIE_URLS,
+        },
+        Platform::Ulearning => LoginConfig {
+            entry: UL_ENTRY,
+            title: "登录 优学院（U学）",
+            cookie_urls: &UL_COOKIE_URLS,
         },
     }
 }
@@ -164,6 +186,9 @@ pub fn open_login_window(app: &AppHandle, platform: Platform) -> Result<(), Stri
 ///
 /// Zhihuishu: the passport host and login/register pages are skipped; the
 /// student portal and study pages are accepted.
+///
+/// Ulearning: the login SPA lives at `umooc.ulearning.cn/pc.html#/login`; the
+/// hash route is skipped so only post-login pages trigger validation.
 fn is_platform_page(platform: Platform, url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
@@ -186,6 +211,22 @@ fn is_platform_page(platform: Platform, url: &Url) -> bool {
                 || path.contains("passport")
                 || path.contains("register")
                 || path.contains("protocol"))
+        }
+        Platform::Ulearning => {
+            if !host.ends_with(UL_HOST_SUFFIX) {
+                return false;
+            }
+            if host.starts_with("passport.") || host.starts_with("utest.") {
+                return false;
+            }
+            let path = url.path().to_ascii_lowercase();
+            let fragment = url.fragment().unwrap_or("").to_ascii_lowercase();
+            !(path.contains("login")
+                || path.contains("passport")
+                || path.contains("register")
+                || fragment.contains("login")
+                || fragment.contains("passport")
+                || fragment.contains("register"))
         }
     }
 }
@@ -218,6 +259,7 @@ async fn try_finish_login(app: AppHandle, platform: Platform) -> Result<()> {
     match platform {
         Platform::Hust => finish_hust_login(&app, &state, cookies).await,
         Platform::Zhihuishu => finish_zhs_login(&app, &state, cookies).await,
+        Platform::Ulearning => finish_ul_login(&app, &state, cookies).await,
     }
 }
 
@@ -358,6 +400,70 @@ async fn finish_zhs_login(
     state.set_session(Session {
         info: info.clone(),
         client: SessionClient::Zhihuishu(ZhsSession { client, courses }),
+    });
+    let _ = app.emit("session-changed", info);
+    close_login_window(app);
+    Ok(())
+}
+
+async fn finish_ul_login(
+    app: &AppHandle,
+    state: &AppState,
+    cookies: Vec<CookieRecord>,
+) -> Result<()> {
+    // The session token is the `AUTHORIZATION` cookie; other cookies on the
+    // domain are only supporting data. Without it the page load is just an
+    // intermediate login step.
+    if !cookies
+        .iter()
+        .any(|cookie| cookie.name == hust_course_hack::ulearning::AUTH_COOKIE)
+    {
+        return Ok(());
+    }
+
+    let header = cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let client = UlearningClient::from_cookie_header(&header)?;
+    let user = client
+        .validate()
+        .await
+        .context("优学院会话校验失败（GET /user）；请确认已登录学生端")?;
+
+    // The course-list endpoint is best effort; a failure must not block the
+    // session. The UI offers the player-URL fallback in that case.
+    let courses = match client.list_courses().await {
+        Ok(courses) => courses,
+        Err(error) => {
+            log::warn!("ulearning course list unavailable after login: {error:#}");
+            Vec::new()
+        }
+    };
+
+    if !state.mark_login_succeeded() {
+        return Ok(());
+    }
+
+    let name = user.name.trim();
+    let info = SessionInfo {
+        platform: Platform::Ulearning,
+        cookie_source: if name.is_empty() {
+            "优学院网页登录".to_string()
+        } else {
+            format!("优学院网页登录（{name}）")
+        },
+        cookie_count: cookies.len(),
+    };
+    log::info!(
+        "ulearning session captured: {} cookies, {} courses",
+        cookies.len(),
+        courses.len()
+    );
+    state.set_session(Session {
+        info: info.clone(),
+        client: SessionClient::Ulearning(UlSession { client, courses }),
     });
     let _ = app.emit("session-changed", info);
     close_login_window(app);

@@ -18,6 +18,15 @@ import type {
   QuizSummary,
   SessionInfo,
   TaskPoint,
+  UlChapter,
+  UlCheck,
+  UlCourse,
+  UlCourseDetail,
+  UlOutcome,
+  UlPage,
+  UlSection,
+  UlWatchRequest,
+  UlWatchSummary,
   WatchRequest,
   WatchSummary,
   ZhsCourse,
@@ -88,7 +97,7 @@ let loginGeneration = 0;
 function requireSession(): void {
   if (!session) throw new Error("尚未连接账号，请先登录");
   if (session.platform !== "hust") {
-    throw new Error("当前连接的是知到平台，请使用知到页面");
+    throw new Error("当前连接的是其他平台，请使用对应平台的课程页");
   }
 }
 
@@ -725,6 +734,181 @@ function zhsWatchLabel(
   return parts.join(" / ");
 }
 
+// ---- Ulearning (优学院) demo data -----------------------------------------
+// Synthetic course trees; the demo backend never claims a real completion.
+
+const ulCourses: UlCourse[] = [
+  {
+    textbookId: 47353,
+    ocId: 165508,
+    classId: 1019700,
+    name: "军事理论（优学院）",
+    author: "张教授",
+    remainingSecs: 30 * 86400,
+    expired: false,
+  },
+  {
+    textbookId: 48001,
+    ocId: 166001,
+    classId: 1020001,
+    name: "大学生心理健康（优学院）",
+    author: "刘老师",
+    remainingSecs: 10 * 86400,
+    expired: false,
+  },
+];
+
+function ulPage(
+  id: number,
+  relationId: number,
+  name: string,
+  contentType: number,
+): UlPage {
+  const kind =
+    contentType === 6 ? "video" : contentType === 7 ? "practice" : "document";
+  return { id, relationId, name, contentType, kind };
+}
+
+function ulSection(
+  id: number,
+  idForClass: number,
+  name: string,
+  pages: UlPage[],
+): UlSection {
+  return { id, idForClass, name, hide: null, pages, completed: null };
+}
+
+const ulTrees: Record<number, UlChapter[]> = {
+  47353: [
+    {
+      id: 1001,
+      idForClass: 2001,
+      name: "第一章 中国国防",
+      hide: null,
+      sections: [
+        ulSection(2377981, 3001, "1.1 国防概述", [
+          ulPage(4001, 5001, "国防的含义", 6),
+          ulPage(4002, 5002, "现代国防的特征", 6),
+          ulPage(4003, 5003, "国防概述讲义", 5),
+        ]),
+        ulSection(2377982, 3002, "1.2 国防历史", [
+          ulPage(4004, 5004, "中国古代国防", 6),
+          ulPage(4005, 5005, "国防历史练习", 7),
+        ]),
+      ],
+    },
+    {
+      id: 1002,
+      idForClass: 2002,
+      name: "第二章 国家安全",
+      hide: null,
+      sections: [
+        ulSection(2377983, 3003, "2.1 国家安全形势", [
+          ulPage(4006, 5006, "当前国家安全形势分析", 6),
+          ulPage(4007, 5007, "阅读材料", 5),
+        ]),
+      ],
+    },
+  ],
+  48001: [
+    {
+      id: 1101,
+      idForClass: 2101,
+      name: "第一章 绪论",
+      hide: null,
+      sections: [
+        ulSection(2380001, 3101, "1.1 心理健康概述", [
+          ulPage(4101, 5101, "心理健康的标准", 6),
+        ]),
+        ulSection(2380002, 3102, "1.2 常见心理困扰", [
+          ulPage(4102, 5102, "常见的心理困扰", 6),
+          ulPage(4103, 5103, "章节练习", 7),
+        ]),
+      ],
+    },
+  ],
+};
+
+/** Section completion demo data (`completion_status == 1`). */
+const ulCompletion = new Map<number, boolean>([
+  [2377981, true],
+  [2377982, false],
+  [2377983, true],
+  [2380001, true],
+  [2380002, false],
+]);
+
+function requireUlSession(): void {
+  if (session?.platform !== "ulearning") {
+    throw new Error("尚未连接优学院账号，请先在连接页选择优学院并登录");
+  }
+}
+
+function ulCourse(ref: string): UlCourse {
+  const match = ulCourses.find(
+    (course) =>
+      String(course.textbookId) === ref ||
+      (course.ocId !== null && String(course.ocId) === ref) ||
+      (course.classId !== null && String(course.classId) === ref) ||
+      course.name === ref,
+  );
+  if (match) return match;
+  const numbers = (ref.match(/\d{4,}/g) ?? []).map(Number);
+  const decoded = ulCourses.find(
+    (course) =>
+      numbers.includes(course.textbookId) ||
+      (course.ocId !== null && numbers.includes(course.ocId)) ||
+      (course.classId !== null && numbers.includes(course.classId)),
+  );
+  if (decoded) return decoded;
+  throw new Error(
+    "演示数据中没有该课程；请从演示课程卡片进入，或粘贴包含演示课程编号的播放器链接。",
+  );
+}
+
+function ulChaptersFor(course: UlCourse): UlChapter[] {
+  return clone(ulTrees[course.textbookId] ?? []);
+}
+
+function ulSectionList(chapters: UlChapter[]): UlSection[] {
+  return chapters.flatMap((chapter) => chapter.sections);
+}
+
+function ulPageCounts(chapters: UlChapter[]): {
+  video: number;
+  practice: number;
+  document: number;
+} {
+  const counts = { video: 0, practice: 0, document: 0 };
+  for (const section of ulSectionList(chapters)) {
+    for (const page of section.pages) counts[page.kind] += 1;
+  }
+  return counts;
+}
+
+function ulCheckFor(course: UlCourse): UlCheck {
+  const chapters = ulChaptersFor(course);
+  const sections = ulSectionList(chapters);
+  for (const section of sections) {
+    section.completed = ulCompletion.get(section.id) ?? false;
+  }
+  const counts = ulPageCounts(chapters);
+  return {
+    course: clone(course),
+    chapters,
+    remainingSecs: course.remainingSecs,
+    className: `教学班 ${course.classId ?? "未知"}`,
+    expired: course.expired,
+    sectionCount: sections.length,
+    completedSections: sections.filter((section) => section.completed === true)
+      .length,
+    videoPages: counts.video,
+    practicePages: counts.practice,
+    documentPages: counts.document,
+    cancelled: false,
+  };
+}
+
 export const mockApi = {
   async sessionInfo(): Promise<SessionInfo | null> {
     await sleep(120);
@@ -746,11 +930,17 @@ export const mockApi = {
               cookieSource: "知到网页登录（演示）",
               cookieCount: 14,
             }
-          : {
-              platform: "hust",
-              cookieSource: "HUST 统一身份认证",
-              cookieCount: 18,
-            };
+          : platform === "ulearning"
+            ? {
+                platform: "ulearning",
+                cookieSource: "优学院网页登录（演示）",
+                cookieCount: 9,
+              }
+            : {
+                platform: "hust",
+                cookieSource: "HUST 统一身份认证",
+                cookieCount: 18,
+              };
       demoEmit("session-changed", session);
     }, 900);
   },
@@ -1430,6 +1620,160 @@ export const mockApi = {
   },
 
   async zhsCancelJob(): Promise<void> {
+    cancelled = true;
+  },
+
+  // ---- Ulearning (优学院) demo backend ----------------------------------
+  // Like the Zhihuishu demo, every job below is dry-run only.
+  async ulListCourses(): Promise<UlCourse[]> {
+    requireUlSession();
+    await sleep(220);
+    return clone(ulCourses);
+  },
+
+  async ulCourseDetail(courseId: string): Promise<UlCourseDetail> {
+    requireUlSession();
+    const course = ulCourse(courseId);
+    const chapters = ulChaptersFor(course);
+    const total = Math.max(1, ulSectionList(chapters).length);
+    demoEmit("job-progress", {
+      kind: "ulStage",
+      job: "ul-load",
+      stage: "directory",
+      done: 0,
+      total,
+      label: course.name,
+      message: "读取课程目录",
+    });
+    for (let done = 1; done <= total; done += 1) {
+      await sleep(140);
+      if (cancelled) throw new Error("已取消");
+      demoEmit("job-progress", {
+        kind: "ulStage",
+        job: "ul-load",
+        stage: "directory",
+        done,
+        total,
+        label: course.name,
+        message: "读取课程目录",
+      });
+    }
+    return {
+      course: clone(course),
+      chapters,
+      remainingSecs: course.remainingSecs,
+      className: `教学班 ${course.classId ?? "未知"}`,
+      expired: course.expired,
+    };
+  },
+
+  async ulCheck(courseId: string): Promise<UlCheck> {
+    requireUlSession();
+    cancelled = false;
+    const check = ulCheckFor(ulCourse(courseId));
+    const sections = ulSectionList(check.chapters);
+    for (const [index, section] of sections.entries()) {
+      if (cancelled) {
+        check.cancelled = true;
+        break;
+      }
+      await sleep(160);
+      demoEmit("job-progress", {
+        kind: "ulStage",
+        job: "ul-check",
+        stage: "verify",
+        done: index + 1,
+        total: sections.length,
+        label: section.name,
+        message: "读取学习记录",
+      });
+    }
+    return check;
+  },
+
+  async ulWatch(request: UlWatchRequest): Promise<UlWatchSummary> {
+    requireUlSession();
+    if (request.dryRun === false) {
+      throw new Error("演示模式仅支持试运行；请连接真实优学院账号后执行。");
+    }
+    cancelled = false;
+    const course = ulCourse(request.course);
+    const chapters = ulChaptersFor(course);
+    const all = ulSectionList(chapters);
+    let plans = all.filter(
+      (section) =>
+        request.includeCompleted === true ||
+        ulCompletion.get(section.id) !== true,
+    );
+    if (request.maxSections) {
+      plans = plans.slice(0, Math.max(1, request.maxSections));
+    }
+    demoEmit("job-progress", {
+      kind: "ulPlan",
+      job: "ul-watch",
+      total: all.length,
+      actionable: plans.length,
+      skipped: all.length - plans.length,
+      dryRun: true,
+    });
+    const outcomes: UlOutcome[] = [];
+    for (const [index, section] of plans.entries()) {
+      if (cancelled) break;
+      await sleep(180);
+      const completed = ulCompletion.get(section.id) === true;
+      const action = completed
+        ? "skip_done"
+        : section.pages.some((page) => page.kind === "practice")
+          ? "complete_practice"
+          : "complete";
+      const state = completed ? "skip" : "dry_run";
+      const message = completed
+        ? "平台已标记完成，跳过"
+        : "演示模式：已生成 sync 计划与 payload 摘要，未发送";
+      outcomes.push({
+        label: section.name,
+        sectionId: section.id,
+        action,
+        state,
+        completionStatus: completed ? 1 : 0,
+        message,
+      });
+      demoEmit("job-progress", {
+        kind: "ulTarget",
+        job: "ul-watch",
+        index: index + 1,
+        total: plans.length,
+        label: section.name,
+        status: state,
+        message,
+        completionStatus: completed ? 1 : 0,
+      });
+    }
+    if (cancelled) {
+      outcomes.push({
+        label: course.name,
+        sectionId: 0,
+        action: "skip_done",
+        state: "cancelled",
+        completionStatus: null,
+        message: "已取消",
+      });
+    }
+    return {
+      total: all.length,
+      ok: 0,
+      skipped: outcomes.filter(
+        (outcome) => outcome.state === "skip" || outcome.state === "dry_run",
+      ).length,
+      failed: 0,
+      cancelled,
+      dryRun: true,
+      outcomes,
+      errors: [],
+    };
+  },
+
+  async ulCancelJob(): Promise<void> {
     cancelled = true;
   },
 

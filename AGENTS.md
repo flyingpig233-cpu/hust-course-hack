@@ -41,7 +41,8 @@ The crawling core and the Tauri 2 desktop shell are implemented.
 - `src/models.rs` — serializable data model shared by the CLI and the GUI.
 - `src/main.rs` — `list`, `dump`, `tree`, `helper`, `watch`, `doc` commands plus
   the `zhs` subcommands (`list`, `tree`, `watch`, `check`, `meet list/status/watch`)
-  for Zhihuishu; `README.md` has usage and the verified endpoint table.
+  for Zhihuishu and the `ulearn` subcommands (`list`, `tree`, `watch`, `check`)
+  for Ulearning; `README.md` has usage and the verified endpoint table.
 - `src/documents.rs` — direct document (PDF) completion: collects document task
   points from a crawled course, resolves each card's `jtoken` from the
   `/mooc-ans/phone/wxcard` `window.AttachmentSetting`, and reports
@@ -49,6 +50,16 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   platform PDF viewer's `finishJob()` sends, ported from Chaoxing's official
   client (`flutter_chaoxing` 0.4.2). Live-verified on 2026-11-07: all 49
   document task points of 大学英语词汇解析(一) returned `status: true`.
+- `src/ulearning/` — Ulearning (优学院 / U学) student web app support, verified
+  from a real session on 2026-11-07 (`docs/ulearning/{recon-static,web-analysis,miaoshua-plan}.md`).
+  `cipher.rs` is DES-ECB + PKCS#7 + Base64 with the frontend key `12345678`;
+  `client.rs` is `UlearningClient` (dual `Authorization`/`UA-AUTHORIZATION`
+  headers, cookie-file/header constructors, injectable base for tests);
+  `parse.rs` decodes directory/wholepage/studyrecord/questionAnswer responses;
+  `record.rs` builds and submits the `/yws/api/personal/sync` payload; `plan.rs`
+  is the dry-run planner and paced executor (skip completed/unsupported,
+  practice answers, `completion_status` verification, code `2` cheat circuit
+  breaker). The `AUTHORIZATION` token is never logged.
 - `src/zhihuishu/` — Zhihuishu (智慧树 / 知到) support verified live on
   2026-11-07. `crypto.rs` implements the `secretStr` AES-128-CBC wrapper, the
   runtime module-key handshake (`RSAES-PKCS1-v1_5 {"module":n}` -> `c/has?uid=` ->
@@ -75,6 +86,13 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   `labc`/`yxyz` crypto helpers when present and falls back to WebCrypto +
   BigInt; meet coverage is randomized (90–100%), reports are paced (2–6 s) and
   the anti-cheat endpoint is polled as a circuit breaker.
+- `userscripts/ulearning-miaoshua.user.js` — browser-side one-click video and
+  chapter-practice completion for Ulearning's player page. It encrypts the
+  `/yws/api/personal/sync` body with the page's `CryptoJS.DES` (built-in DES
+  fallback), sends dual `Authorization`/`UA-AUTHORIZATION` headers, defaults to
+  dry-run, paces at 3–5 s and stops on server `2` (cheat detection).
+- `userscripts/ulearning-miaoshua.user.js` is not embedded in the Rust binary;
+  it is installed manually from the repo/website.
 - `src-tauri/` — Tauri 2 shell: `tauri.conf.json`, `capabilities/default.json`,
   `src/commands.rs`, `src/state.rs`, `src/events.rs`, `src/login.rs`. Commands
   wrap the core client; progress is emitted as `job-progress` events. Only one
@@ -107,22 +125,26 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   adds the header button, quiz-tab banner and per-work “提交本题”. The demo
   backend never claims a real quiz submission. The connect screen also offers
   the Zhihuishu platform; `views/zhs-course.ts` and `views/zhs-meet.ts` mirror
-  the CLI semantics (dry-run default, risk confirmation, progress/cancel).
+  the CLI semantics (dry-run default, risk confirmation, progress/cancel). A
+  third platform (Ulearning / 优学院) is offered on the same connect screen with
+  `src-tauri/src/ulearning.rs` commands and `views/ul-course.ts`.
 - `website/` — standalone Vite + TypeScript static app that mirrors the core
-  for SmartCourse and, since the Zhihuishu branch, also for Zhihuishu through
-  the `zhihuishu-bridge.user.js` userscript (`src/core/zhs/`,
-  `src/views/zhs-*.ts`, `src/zhs-bridge.user.ts`). Cross-origin requests are
-  relayed by the bridge inside a Zhihuishu page, so the static site never sees
-  cookies.
+  for SmartCourse, Zhihuishu and Ulearning through three bridge userscripts
+  (`hust-course-bridge`, `zhihuishu-bridge`, `ulearning-bridge`). Cross-origin
+  requests are relayed by the bridge inside each platform page, so the static
+  site never sees cookies; `src/core/{zhs,ul}/**` mirror the Rust protocols and
+  `src/views/{zhs-*,ul-*}.ts` mirror the GUI flow (dry-run, risk confirmation,
+  progress/cancel).
 - Tests live in `src/parse.rs`, `src/cookie.rs`, `src/playback.rs`,
-  `src/answers.rs`, `src/submit.rs`, `src/documents.rs`, `src/zhihuishu/**`, plus
-  `tests/submit_http.rs`, `tests/documents_http.rs`, `tests/zhs_core.rs` and
-  `tests/zhs_mock.rs`. The submission tests use `test-data/answer-bank.json` and
-  `test-data/courses.json` to verify all 541 questions across the 117 quiz works
-  encode successfully; the integration tests run the submit and document paths
-  against local mock pages, and `tests/zhs_mock.rs` runs the Zhihuishu
-  video/meet flows against a local mock HTTP server that decrypts `secretStr`
-  and asserts the `sdsew`/`paramSecret` fields. Default branch is `main`.
+  `src/answers.rs`, `src/submit.rs`, `src/documents.rs`, `src/zhihuishu/**`,
+  `src/ulearning/**`, plus `tests/submit_http.rs`, `tests/documents_http.rs`,
+  `tests/zhs_core.rs` and `tests/zhs_mock.rs`. The submission tests use
+  `test-data/answer-bank.json` and `test-data/courses.json` to verify all 541
+  questions across the 117 quiz works encode successfully; the integration
+  tests run the submit and document paths against local mock pages,
+  `tests/zhs_mock.rs` runs the Zhihuishu video/meet flows against a local mock
+  HTTP server that decrypts `secretStr`, and `src/ulearning/**` carries its own
+  DES/payload/parser/plan unit tests. Default branch is `main`.
 
 ## Commands
 
@@ -134,6 +156,8 @@ Run from the repo root in PowerShell 5.1:
 - `cargo run -- --cookies cookies.txt doc --course <id> --dry-run` (prints document targets without reporting)
 - `cargo run -- --cookies zhs-cookies.txt zhs list` (Zhihuishu shared courses; also
   `zhs tree`, `zhs watch`, `zhs check`, `zhs meet list/status/watch` — see README)
+- `cargo run -- --cookies ul-cookies.txt ulearn tree --course "textbookId=..&classId=.."`
+  (Ulearning; also `ulearn watch --dry-run`, `ulearn watch --practice`, `ulearn check`)
 - `cd website; npm test; npm run build` (website tests and static build)
 - `cargo test --workspace`
 - `cargo fmt --all`
@@ -228,3 +252,15 @@ Run from the repo root in PowerShell 5.1:
   userscript; keep the postMessage origin/nonce/endpoint-allowlist checks on
   both sides, and remember the `lc.zhihuishu.com` page replaces the global
   `Map` with a Java-style polyfill.
+- Ulearning protocol constants (DES key `12345678`, API/web bases, cookie name
+  `AUTHORIZATION`) live in `src/ulearning/mod.rs`; the `AUTHORIZATION` token is
+  read from cookies and sent as both `Authorization` and `UA-AUTHORIZATION`
+  headers — never log it and never return it over IPC.
+- Ulearning sync bodies are DES-ECB encrypted; keep `src/ulearning/cipher.rs`
+  and `website/src/core/ul/crypto.ts` byte-compatible, and never add the
+  plaintext token or sync body to logs. Server reply `2` means cheat detection:
+  stop the whole batch immediately (`run_watch` returns `CircuitBroken`).
+- Ulearning directory/page fields come from the public player JS (no captured
+  fixture); keep the tolerant parsing in `src/ulearning/parse.rs` and ask for a
+  live capture before removing aliases. Keep dry-run the default and 3–5 s
+  pacing on real runs.

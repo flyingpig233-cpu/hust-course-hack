@@ -1,6 +1,7 @@
 import { esc, toast } from "../dom";
 import { isTauri } from "../env";
 import { icon } from "../icons";
+import { platformMeta } from "../platforms";
 import type { Platform, SessionInfo } from "../types";
 
 /** One entry in the platform-neutral course list. */
@@ -40,6 +41,30 @@ function tone(id: string): number {
   return sum % 5;
 }
 
+/** Idle / empty list hint per platform. */
+function listHint(platform: Platform, connected: boolean): string {
+  if (!connected) return `${platformMeta(platform).idleHint}`;
+  switch (platform) {
+    case "zhihuishu":
+      return "没有解析到共享课，可在课程页粘贴学习页链接添加";
+    case "ulearning":
+      return "没有解析到课程，可在课程页粘贴播放器链接添加";
+    default:
+      return "当前账号没有课程";
+  }
+}
+
+function placeholderHint(platform: Platform): string {
+  switch (platform) {
+    case "zhihuishu":
+      return "连接知到后，共享课会出现在这里";
+    case "ulearning":
+      return "连接优学院后，课程会出现在这里";
+    default:
+      return "连接账号后，课程会出现在这里";
+  }
+}
+
 export function createSidebar(
   root: HTMLElement,
   handlers: SidebarHandlers,
@@ -54,20 +79,20 @@ export function createSidebar(
   let search = "";
 
   const renderShell = () => {
-    const zhs = state.platform === "zhihuishu";
+    const meta = platformMeta(state.platform);
     root.innerHTML = `
       <div class="brand">
         <div class="brand-mark">${icon("book", 20)}</div>
         <div class="brand-copy">
           <div class="brand-name">HUST Course Hack</div>
-          <div class="brand-sub">${zhs ? "知到（智慧树）桌面助手" : "SmartCourse 桌面助手"}</div>
+          <div class="brand-sub">${esc(meta.brandSub)}</div>
         </div>
       </div>
       ${isTauri ? "" : `<div class="demo-badge">${icon("spark", 12)} 演示模式</div>`}
       <div id="sidebar-session"></div>
       <div class="sidebar-nav">
         <div class="sidebar-nav-head">
-          <div class="sidebar-label">${zhs ? "共享课" : "我的课程"} <span id="course-count" class="count-pill"></span></div>
+          <div class="sidebar-label">${esc(meta.courseListLabel)} <span id="course-count" class="count-pill"></span></div>
           <button class="icon-button icon-button-dark" data-refresh title="刷新课程列表" aria-label="刷新课程列表">${icon("refresh", 15)}</button>
         </div>
         <div class="search-box">
@@ -77,7 +102,11 @@ export function createSidebar(
         <div class="course-list" id="course-list"></div>
       </div>
       <div class="sidebar-footer">
-        ${zhs ? "" : `<button class="sidebar-link" data-helper>${icon("copy", 15)} 浏览器助手脚本</button>`}
+        ${
+          state.platform === "hust"
+            ? `<button class="sidebar-link" data-helper>${icon("copy", 15)} 浏览器助手脚本</button>`
+            : ""
+        }
         <div class="sidebar-note">${icon("shield", 13)} 登录会话仅保存在内存</div>
       </div>
     `;
@@ -91,14 +120,14 @@ export function createSidebar(
 
   const renderSession = () => {
     const session = state.session;
-    const zhs = state.platform === "zhihuishu";
+    const meta = platformMeta(session?.platform ?? state.platform);
     if (!session) {
       sessionSlot.innerHTML = `
         <div class="session-card is-idle">
           <span class="status-dot status-dot-idle"></span>
           <div class="session-copy">
             <div class="session-title">未连接</div>
-            <div class="session-source">${zhs ? "登录知到账号开始" : "登录学校账号开始"}</div>
+            <div class="session-source">${esc(meta.idleHint)}</div>
           </div>
         </div>
       `;
@@ -108,9 +137,9 @@ export function createSidebar(
       <div class="session-card">
         <span class="status-dot"></span>
         <div class="session-copy">
-          <div class="session-title">已连接 ${zhs ? "知到" : "SmartCourse"}</div>
+          <div class="session-title">已连接 ${esc(meta.sessionTitle)}</div>
           <div class="session-source" title="${esc(session.cookieSource)}">${esc(
-            summarySource(session),
+            session.cookieSource,
           )} · ${session.cookieCount} 项 Cookie</div>
         </div>
         <button class="icon-button icon-button-dark" data-disconnect title="断开连接" aria-label="断开连接">${icon(
@@ -124,13 +153,12 @@ export function createSidebar(
   const renderList = () => {
     countPill.textContent = state.session ? String(state.courses.length) : "";
     list.classList.toggle("is-disabled", state.disabled);
-    const zhs = state.platform === "zhihuishu";
 
     if (!state.session) {
       list.innerHTML = `
         <div class="sidebar-placeholder">
           <div class="sidebar-placeholder-icon">${icon("folder", 20)}</div>
-          <p>${zhs ? "连接知到后，共享课会出现在这里" : "连接账号后，课程会出现在这里"}</p>
+          <p>${esc(placeholderHint(state.platform))}</p>
         </div>
       `;
       return;
@@ -147,13 +175,11 @@ export function createSidebar(
     });
 
     if (filtered.length === 0) {
-      list.innerHTML = `<div class="sidebar-placeholder"><p>${
+      list.innerHTML = `<div class="sidebar-placeholder"><p>${esc(
         state.courses.length
           ? "没有匹配的课程"
-          : zhs
-            ? "没有解析到共享课，可在课程页粘贴学习页链接添加"
-            : "当前账号没有课程"
-      }</p></div>`;
+          : listHint(state.platform, true),
+      )}</p></div>`;
       return;
     }
 
@@ -227,9 +253,4 @@ export function createSidebar(
       renderList();
     },
   };
-}
-
-/** Session source line: the login source is already human readable. */
-function summarySource(session: SessionInfo): string {
-  return session.cookieSource;
 }

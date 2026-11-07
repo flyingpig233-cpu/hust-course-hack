@@ -102,4 +102,41 @@ pub enum JobProgress {
         /// Watched minutes before the run (meet jobs only).
         watched_before: Option<usize>,
     },
+    /// An Ulearning job planned its sections.
+    ///
+    /// `job` is `ul-watch`; `total` counts every scanned section, `actionable`
+    /// the sections that will be submitted, `skipped` the already-completed /
+    /// unsupported ones.
+    UlPlan {
+        job: String,
+        total: usize,
+        actionable: usize,
+        skipped: usize,
+        dry_run: bool,
+    },
+    /// One Ulearning progress transition (directory / plan / submit / verify).
+    ///
+    /// Never carries the `AUTHORIZATION` token, the DES payload or answers.
+    UlStage {
+        job: String,
+        /// `directory`, `plan`, `submit`, or `verify`.
+        stage: String,
+        done: usize,
+        total: usize,
+        label: String,
+        message: String,
+    },
+    /// Terminal state of one Ulearning section.
+    UlTarget {
+        job: String,
+        /// 1-based position in the queue.
+        index: usize,
+        total: usize,
+        label: String,
+        /// `ok`, `skip`, `dry_run`, `failed`, `cancelled`, or `circuit_broken`.
+        status: String,
+        message: Option<String>,
+        /// `completion_status` observed by the verification read.
+        completion_status: Option<i64>,
+    },
 }

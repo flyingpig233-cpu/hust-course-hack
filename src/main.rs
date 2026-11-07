@@ -3,7 +3,12 @@ use clap::{Parser, Subcommand};
 use hust_course_hack::{
     Chapter, CourseDetail, CourseSummary, FetchOptions, REPORT_VERSION, SmartCourseClient,
     TaskKind, TaskPoint, VIDEO_HELPER_SCRIPT, WatchOptions, collect_document_targets,
-    collect_targets, watch_target,
+    collect_targets,
+    ulearning::{
+        UlAction, UlCourseDetail, UlPlan, UlProgress, UlSectionPlan, UlWatchOptions, UlWatchState,
+        UlearningClient, build_record_payload, plan_course, run_watch,
+    },
+    watch_target,
     zhihuishu::{
         ZhsClient, ZhsCourseDetail, ZhsExceptionStatus, ZhsMeet, ZhsMeetWatchOptions, ZhsProgress,
         ZhsVideoTarget, ZhsWatchOptions, ZhsWatchState, hms, watch::build_video_payload,
@@ -118,6 +123,12 @@ enum Command {
     Zhs {
         #[command(subcommand)]
         command: ZhsCommand,
+    },
+    /// Ulearning (优学院 / U学): course tree, video and practice completion.
+    #[command(visible_alias = "uly")]
+    Ulearn {
+        #[command(subcommand)]
+        command: UlearnCommand,
     },
 }
 
@@ -245,6 +256,68 @@ struct MeetWatchArgs {
     yes: bool,
 }
 
+#[derive(Debug, Subcommand)]
+enum UlearnCommand {
+    /// List the courses of the current account.
+    List {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the chapter/section/page tree and completion state of one course.
+    Tree {
+        /// Course reference: player URL, textbookId=...&classId=...,
+        /// textbookId;classId, or textbookId.
+        #[arg(long)]
+        course: String,
+    },
+    /// Complete video/document sections, and optionally practice sections.
+    Watch {
+        /// Course reference: player URL, textbookId=...&classId=...,
+        /// textbookId;classId, or textbookId.
+        #[arg(long)]
+        course: String,
+        /// Print the plan and payload summaries; send nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Process at most N actionable sections.
+        #[arg(long)]
+        max_sections: Option<usize>,
+        /// Also re-submit sections the platform already marks as completed.
+        #[arg(long)]
+        include_completed: bool,
+        /// Also submit sections that contain practice pages (answers are
+        /// fetched from the server).
+        #[arg(long)]
+        practice: bool,
+        /// Delay window between submissions in milliseconds, for example
+        /// 3000-5000.
+        #[arg(long, default_value = "3000-5000")]
+        delay_ms: String,
+        /// Skip the interactive confirmation and submit immediately.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Check the session and whether the course can be completed.
+    Check {
+        /// Course reference.
+        #[arg(long)]
+        course: String,
+    },
+}
+
+/// Arguments of `ulearn watch`.
+#[derive(Debug, Clone)]
+struct UlearnWatchArgs {
+    course: String,
+    dry_run: bool,
+    max_sections: Option<usize>,
+    include_completed: bool,
+    practice: bool,
+    delay_ms: String,
+    yes: bool,
+}
+
 /// Placeholder user uuid used when building the masked dry-run preview; the
 /// real uuid is only available after an authenticated request and is not
 /// needed for printing the plan.
@@ -269,6 +342,17 @@ impl RunSummary {
             ZhsWatchState::Failed => self.failed += 1,
             ZhsWatchState::Cancelled => self.cancelled += 1,
             ZhsWatchState::CircuitBroken => self.aborted += 1,
+        }
+    }
+
+    fn record_ul(&mut self, state: UlWatchState) {
+        match state {
+            UlWatchState::Ok => self.ok += 1,
+            UlWatchState::Skip => self.skipped += 1,
+            UlWatchState::DryRun => {}
+            UlWatchState::Failed => self.failed += 1,
+            UlWatchState::Cancelled => self.cancelled += 1,
+            UlWatchState::CircuitBroken => self.aborted += 1,
         }
     }
 
@@ -362,6 +446,13 @@ async fn main() -> Result<()> {
         }
         Command::Zhs { command } => {
             let code = zhs(command, &cli.cookies).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Command::Ulearn { command } => {
+            let code = ulearn(command, &cli.cookies).await?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1445,9 +1536,449 @@ fn parse_delay_ms(spec: &str) -> Result<(u64, u64)> {
     Ok((min, max))
 }
 
+/// Build the Ulearning client from the global `--cookies` file.
+fn ulearn_client(cookies: &Path) -> Result<UlearningClient> {
+    UlearningClient::from_cookie_file(cookies).context(
+        "加载优学院 Cookie 失败：需要 Netscape 格式的 cookies.txt（从已登录优学院的浏览器导出，需包含 AUTHORIZATION cookie）",
+    )
+}
+
+/// Dispatch one `ulearn` subcommand. The returned value is the process exit code.
+async fn ulearn(command: UlearnCommand, cookies: &Path) -> Result<i32> {
+    match command {
+        UlearnCommand::List { json } => {
+            let client = ulearn_client(cookies)?;
+            ulearn_list(&client, json).await
+        }
+        UlearnCommand::Tree { course } => {
+            let client = ulearn_client(cookies)?;
+            ulearn_tree(&client, &course).await
+        }
+        UlearnCommand::Watch {
+            course,
+            dry_run,
+            max_sections,
+            include_completed,
+            practice,
+            delay_ms,
+            yes,
+        } => {
+            let client = ulearn_client(cookies)?;
+            let args = UlearnWatchArgs {
+                course,
+                dry_run,
+                max_sections,
+                include_completed,
+                practice,
+                delay_ms,
+                yes,
+            };
+            ulearn_watch(&client, args).await
+        }
+        UlearnCommand::Check { course } => {
+            let client = ulearn_client(cookies)?;
+            ulearn_check(&client, &course).await
+        }
+    }
+}
+
+async fn ulearn_list(client: &UlearningClient, json: bool) -> Result<i32> {
+    let courses = match client.list_courses().await {
+        Ok(courses) => courses,
+        Err(error) => {
+            eprintln!("获取优学院课程列表失败：{error:#}");
+            eprintln!("课程列表接口可能不可用；可改用播放器 URL 或 textbookId 指定课程，例如：");
+            eprintln!(
+                "  cargo run -- --cookies cookies.txt ulearn tree --course \"https://ua.ulearning.cn/learnCourse/learnCourse.html?courseId=47353&classId=1019700\""
+            );
+            return Ok(1);
+        }
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&courses)?);
+        return Ok(0);
+    }
+    if courses.is_empty() {
+        eprintln!("没有找到优学院课程；请确认账号已选课且 Cookie 未过期");
+        return Ok(0);
+    }
+
+    println!(
+        "{:<12} {:<12} {:<32} {:<14} 剩余",
+        "课程ID", "班级ID", "课程名称", "教师"
+    );
+    for course in &courses {
+        let class_id = course
+            .class_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "{:<12} {:<12} {:<32} {:<14} {}",
+            course.textbook_id,
+            class_id,
+            course.name,
+            course.author.as_deref().unwrap_or("-"),
+            format_remaining(course.remaining_secs)
+        );
+    }
+    println!("\n共 {} 门优学院课程", courses.len());
+    Ok(0)
+}
+
+async fn ulearn_tree(client: &UlearningClient, reference: &str) -> Result<i32> {
+    let course = client.resolve_course(reference)?;
+    let detail = client.course_detail(&course).await?;
+    print_ulearn_header(&detail);
+
+    for (chapter_index, chapter) in detail.chapters.iter().enumerate() {
+        let chapter_number = chapter_index + 1;
+        let name = if chapter.name.trim().is_empty() {
+            format!("第{chapter_number}讲")
+        } else {
+            chapter.name.trim().to_string()
+        };
+        println!("{chapter_number}. {name}");
+        if chapter.sections.is_empty() {
+            println!("   （无节）");
+        }
+        for (section_index, section) in chapter.sections.iter().enumerate() {
+            let status = match client.section_record(section.id).await {
+                Ok(record) if record.completed() => "已完成",
+                Ok(_) => "未完成",
+                Err(_) => "状态未知",
+            };
+            let name = if section.name.trim().is_empty() {
+                format!("第{}节", section_index + 1)
+            } else {
+                section.name.trim().to_string()
+            };
+            println!(
+                "   {chapter_number}.{} {name} [{status}] itemid={}",
+                section_index + 1,
+                section.id
+            );
+            if section.pages.is_empty() {
+                println!("        （目录未返回页面；watch 时会重新枚举）");
+            }
+            for (page_index, page) in section.pages.iter().enumerate() {
+                let kind = if page.is_video() {
+                    "视频"
+                } else if page.is_practice() {
+                    "练习"
+                } else if page.is_document() {
+                    "图文"
+                } else {
+                    "其他"
+                };
+                let name = if page.name.trim().is_empty() {
+                    format!("页面{}", page_index + 1)
+                } else {
+                    page.name.trim().to_string()
+                };
+                println!(
+                    "        - [{kind}] {name} pageId={} relationId={}",
+                    page.id, page.relation_id
+                );
+            }
+        }
+    }
+    println!(
+        "\n统计：章节 {}，节 {}",
+        detail.chapters.len(),
+        detail.section_count()
+    );
+    Ok(0)
+}
+
+fn print_ulearn_header(detail: &UlCourseDetail) {
+    let course = &detail.course;
+    let class_id = course
+        .class_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    println!(
+        "{}（textbookId={}，classId={}，剩余：{}）",
+        course.label(),
+        course.textbook_id,
+        class_id,
+        format_remaining(detail.remaining_secs.or(course.remaining_secs))
+    );
+    if let Some(class_name) = detail
+        .class_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        println!("班级：{}", class_name.trim());
+    }
+}
+
+async fn ulearn_watch(client: &UlearningClient, args: UlearnWatchArgs) -> Result<i32> {
+    let (delay_min_ms, delay_max_ms) = parse_delay_ms(&args.delay_ms)?;
+    let options = UlWatchOptions {
+        dry_run: args.dry_run,
+        include_completed: args.include_completed,
+        max_sections: args.max_sections,
+        delay_min_ms,
+        delay_max_ms,
+        stop_on_error: true,
+        verify: true,
+    };
+    let course = client.resolve_course(&args.course)?;
+    let progress = |event: UlProgress| {
+        print_ul_progress(&event);
+        true
+    };
+    let plan = plan_course(client, &course, &options, &progress).await?;
+    if plan.cancelled {
+        println!("计划已取消");
+        return Ok(0);
+    }
+    let (_, practice_sections, done, unsupported) = plan.counts();
+    print_ulearn_plan(&plan, args.practice);
+
+    let executable = count_executable(&plan, args.practice);
+    if args.dry_run {
+        print_ul_payload_preview(&plan, args.practice)?;
+        println!(
+            "\n预演：将提交 {executable} 节，跳过 {} 节（已完成 {done}、不支持 {unsupported}），未发送任何请求",
+            plan.sections.len().saturating_sub(executable)
+        );
+        if !args.practice && practice_sections > 0 {
+            println!("提示：{practice_sections} 个含练习的节已跳过，加 --practice 才会提交。");
+        }
+        return Ok(0);
+    }
+    if executable == 0 {
+        println!("\n没有需要提交的节");
+        return Ok(0);
+    }
+
+    let prompt = format!("确认提交以上 {executable} 节的完成记录吗？");
+    if !confirm_real_run(&prompt, args.yes)? {
+        println!("已取消，未发送任何请求。");
+        return Ok(0);
+    }
+
+    println!();
+    let mut execution_plan = plan.clone();
+    if !args.practice {
+        execution_plan
+            .sections
+            .retain(|section| section.action != UlAction::CompletePractice);
+    }
+    let outcomes = run_watch(client, &execution_plan, &options, &progress).await?;
+
+    let mut summary = RunSummary::default();
+    if !args.practice {
+        summary.skipped += plan
+            .sections
+            .iter()
+            .filter(|section| section.action == UlAction::CompletePractice)
+            .count();
+    }
+    for outcome in &outcomes {
+        if !matches!(outcome.state, UlWatchState::Ok | UlWatchState::Skip) {
+            println!(
+                "[{}] {}：{}",
+                outcome.state.label(),
+                outcome.label,
+                outcome.message
+            );
+        }
+        summary.record_ul(outcome.state);
+    }
+    summary.print();
+    Ok(summary.exit_code())
+}
+
+fn print_ulearn_plan(plan: &UlPlan, practice: bool) {
+    let (complete, practice_sections, done, unsupported) = plan.counts();
+    let class_id = plan
+        .course
+        .class_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    println!(
+        "\n课程：{}（textbookId={}，classId={}，剩余：{}）",
+        plan.course.label(),
+        plan.course.textbook_id,
+        class_id,
+        format_remaining(plan.remaining_secs.or(plan.course.remaining_secs))
+    );
+    println!(
+        "计划：可刷视频/图文 {complete} 节，含练习 {practice_sections} 节，已完成 {done} 节，不支持 {unsupported} 节"
+    );
+    if !practice && practice_sections > 0 {
+        println!("（含练习的节默认跳过；加 --practice 才会提交）");
+    }
+    for (position, section) in plan.sections.iter().enumerate() {
+        let index = position + 1;
+        let label = section.label();
+        if section.action == UlAction::CompletePractice && !practice {
+            println!("[{index}] {label} —— 跳过：含练习（未加 --practice）");
+            continue;
+        }
+        match section.action {
+            UlAction::Complete | UlAction::CompletePractice => {
+                let start = section.study_start_time.unwrap_or(0);
+                println!(
+                    "[{index}] {label} —— {}，itemid={}，studyStartTime={start}，{}",
+                    section.action.label(),
+                    section.section_id,
+                    section.summary()
+                );
+            }
+            UlAction::SkipDone => println!("[{index}] {label} —— 已完成，跳过"),
+            UlAction::SkipUnsupported | UlAction::SkipExpired => {
+                println!(
+                    "[{index}] {label} —— {}：{}",
+                    section.action.label(),
+                    section.note
+                );
+            }
+        }
+    }
+}
+
+/// Number of sections that would actually be submitted.
+fn count_executable(plan: &UlPlan, practice: bool) -> usize {
+    plan.sections
+        .iter()
+        .filter(|section| {
+            section.is_actionable() && (practice || section.action != UlAction::CompletePractice)
+        })
+        .count()
+}
+
+fn print_ul_payload_preview(plan: &UlPlan, practice: bool) -> Result<()> {
+    let executable: Vec<&UlSectionPlan> = plan
+        .sections
+        .iter()
+        .filter(|section| {
+            section.is_actionable() && (practice || section.action != UlAction::CompletePractice)
+        })
+        .collect();
+    if executable.is_empty() {
+        return Ok(());
+    }
+    println!("\n将发送的 payload 摘要（正文经 DES 加密后提交，不打印 token/密文）：");
+    for section in executable {
+        let start = section.study_start_time.unwrap_or(0);
+        println!(
+            "  {}：{}",
+            section.label(),
+            ul_payload_summary(section, start)?
+        );
+    }
+    Ok(())
+}
+
+/// Build a one-line, secret-free summary of the `sync` payload.
+fn ul_payload_summary(section: &UlSectionPlan, study_start_time: i64) -> Result<String> {
+    let payload = build_record_payload(section, study_start_time)?;
+    let mut pages = Vec::new();
+    for page in payload["pageStudyRecordDTOList"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let page_id = page["pageid"].as_i64().unwrap_or(0);
+        let mut detail = format!("pageid={page_id}/complete={}", page["complete"]);
+        let videos: Vec<String> = page["videos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|video| format!("videoid={}/time={}", video["videoid"], video["time"]))
+            .collect();
+        if !videos.is_empty() {
+            detail.push_str(&format!("，视频[{}]", videos.join(",")));
+        }
+        let questions = page["questions"].as_array().map(Vec::len).unwrap_or(0);
+        if questions > 0 {
+            detail.push_str(&format!("，练习 {questions} 题"));
+        }
+        pages.push(detail);
+    }
+    Ok(format!(
+        "POST sync itemid={}，complete=1，score={}，studyStartTime={}，{} 页 [{}]",
+        payload["itemid"].as_i64().unwrap_or(0),
+        payload["score"].as_i64().unwrap_or(0),
+        payload["studyStartTime"].as_i64().unwrap_or(0),
+        pages.len(),
+        pages.join("；")
+    ))
+}
+
+async fn ulearn_check(client: &UlearningClient, reference: &str) -> Result<i32> {
+    match client.validate().await {
+        Ok(_) => println!("会话：有效"),
+        Err(error) => {
+            eprintln!("优学院会话无效：{error:#}");
+            return Ok(1);
+        }
+    }
+    let course = client.resolve_course(reference)?;
+    let detail = client.course_detail(&course).await?;
+    print_ulearn_header(&detail);
+
+    let sections = detail.section_count();
+    let mut completed = 0usize;
+    let mut unknown = 0usize;
+    for chapter in &detail.chapters {
+        for section in &chapter.sections {
+            match client.section_record(section.id).await {
+                Ok(record) if record.completed() => completed += 1,
+                Ok(_) => {}
+                Err(_) => unknown += 1,
+            }
+        }
+    }
+    let remaining = sections.saturating_sub(completed + unknown);
+    println!(
+        "\n章节：{} 章 / {sections} 节；已完成 {completed} 节，未完成 {remaining} 节，状态未知 {unknown} 节",
+        detail.chapters.len()
+    );
+    if detail.is_expired() {
+        println!("可学性：已过期，拒绝刷课");
+        return Ok(1);
+    }
+    if sections == 0 {
+        println!("可学性：目录为空，无法刷课");
+        return Ok(1);
+    }
+    println!("可学性：可以刷课（建议先用 --dry-run 预览）");
+    Ok(0)
+}
+
+fn format_remaining(seconds: Option<i64>) -> String {
+    match seconds {
+        None => "未知".to_string(),
+        Some(secs) if secs < 0 => "已过期".to_string(),
+        Some(secs) if secs < 3_600 => format!("{} 分钟", (secs / 60).max(1)),
+        Some(secs) if secs < 86_400 => format!("{} 小时", secs / 3_600),
+        Some(secs) => format!("{} 天", secs / 86_400),
+    }
+}
+
+fn print_ul_progress(event: &UlProgress) {
+    let suffix = if event.message.trim().is_empty() {
+        String::new()
+    } else {
+        format!("：{}", event.message)
+    };
+    println!(
+        "[{}] {}/{} {}{suffix}",
+        event.stage.label(),
+        event.done,
+        event.total,
+        event.label
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hust_course_hack::ulearning::{UlPage, UlPageKind, UlPagePlan, UlQuestionAnswer, UlVideo};
 
     fn meet(meet_course_id: u64, live_id: u64, has_replay: bool) -> ZhsMeet {
         ZhsMeet {
@@ -1542,5 +2073,124 @@ mod tests {
         assert!(lines[1].contains("sdsew"));
         assert!(lines[1].contains("已脱敏"));
         assert!(lines[2].contains("zwsds"));
+    }
+
+    fn ul_video_section() -> UlSectionPlan {
+        UlSectionPlan {
+            chapter_id: 141_351_390,
+            chapter_name: "第一讲 导论".to_string(),
+            section_id: 2_377_981,
+            section_name: "第一节".to_string(),
+            pages: vec![UlPagePlan {
+                page: UlPage {
+                    id: 2_377_983,
+                    relation_id: 2_377_984,
+                    name: "视频页".to_string(),
+                    content_type: 6,
+                },
+                kind: UlPageKind::Video,
+                videos: vec![UlVideo {
+                    video_id: 1_563_126,
+                    duration_secs: 1_326,
+                }],
+                questions: Vec::new(),
+                coursepage_id: None,
+                score: 100,
+            }],
+            action: UlAction::Complete,
+            study_start_time: Some(1_794_062_059),
+            score: 100,
+            note: String::new(),
+        }
+    }
+
+    fn ul_practice_section() -> UlSectionPlan {
+        UlSectionPlan {
+            chapter_id: 141_351_390,
+            chapter_name: "第一讲 导论".to_string(),
+            section_id: 2_379_018,
+            section_name: "章节练习".to_string(),
+            pages: vec![UlPagePlan {
+                page: UlPage {
+                    id: 2_379_019,
+                    relation_id: 2_379_020,
+                    name: "章节练习".to_string(),
+                    content_type: 7,
+                },
+                kind: UlPageKind::Practice,
+                videos: Vec::new(),
+                questions: vec![UlQuestionAnswer {
+                    question_id: 17_393_623,
+                    score: 20,
+                    answer: vec!["D".to_string()],
+                }],
+                coursepage_id: Some(9_002),
+                score: 100,
+            }],
+            action: UlAction::CompletePractice,
+            study_start_time: Some(1_794_062_059),
+            score: 100,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn formats_remaining_windows() {
+        assert_eq!(format_remaining(None), "未知");
+        assert_eq!(format_remaining(Some(-1)), "已过期");
+        assert_eq!(format_remaining(Some(120)), "2 分钟");
+        assert_eq!(format_remaining(Some(3_600)), "1 小时");
+        assert_eq!(format_remaining(Some(2 * 86_400)), "2 天");
+    }
+
+    #[test]
+    fn builds_ulearn_payload_summaries_without_secrets() {
+        let video_line = ul_payload_summary(&ul_video_section(), 1_794_062_059).unwrap();
+        assert!(video_line.contains("itemid=2377981"));
+        assert!(video_line.contains("videoid=1563126/time=1326"));
+        assert!(!video_line.contains("AUTHORIZATION"));
+        assert!(!video_line.contains("token"));
+
+        let practice_line = ul_payload_summary(&ul_practice_section(), 1_794_062_059).unwrap();
+        assert!(practice_line.contains("itemid=2379018"));
+        assert!(practice_line.contains("练习 1 题"));
+        assert!(!practice_line.contains("answerList"));
+    }
+
+    #[test]
+    fn counts_executable_sections_with_the_practice_toggle() {
+        let plan = UlPlan {
+            sections: vec![
+                UlSectionPlan {
+                    action: UlAction::Complete,
+                    ..UlSectionPlan::default()
+                },
+                UlSectionPlan {
+                    action: UlAction::CompletePractice,
+                    ..UlSectionPlan::default()
+                },
+                UlSectionPlan {
+                    action: UlAction::SkipDone,
+                    ..UlSectionPlan::default()
+                },
+            ],
+            ..UlPlan::default()
+        };
+        assert_eq!(count_executable(&plan, false), 1);
+        assert_eq!(count_executable(&plan, true), 2);
+    }
+
+    #[test]
+    fn summarizes_ulearn_terminal_states() {
+        let mut summary = RunSummary::default();
+        summary.record_ul(UlWatchState::Ok);
+        summary.record_ul(UlWatchState::Skip);
+        summary.record_ul(UlWatchState::CircuitBroken);
+        summary.record_ul(UlWatchState::Failed);
+        assert_eq!(summary.ok, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.aborted, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.exit_code(), 1);
     }
 }

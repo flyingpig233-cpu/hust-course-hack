@@ -8,6 +8,7 @@ import {
 import { errorText, qs, toast } from "./dom";
 import { isTauri } from "./env";
 import { safeFileName } from "./format";
+import { platformMeta } from "./platforms";
 import { openExternal, pickSavePath } from "./platform";
 import type {
   CourseDetail,
@@ -15,6 +16,10 @@ import type {
   CrawlOptions,
   Platform,
   SessionInfo,
+  UlCheck,
+  UlCourse,
+  UlCourseDetail,
+  UlWatchSummary,
   ZhsCourse,
   ZhsCourseDetail,
   ZhsMeet,
@@ -58,6 +63,15 @@ import {
   zhsCourseLabel,
   zhsTotalVideos,
 } from "./zhs";
+import {
+  openUlWatchModal,
+  renderUlCourse,
+  renderUlCourseError,
+  renderUlHome,
+  renderUlLoading,
+  ulCourseLabel,
+  updateUlLoading,
+} from "./views/ul-course";
 
 const app = qs<HTMLElement>("#app");
 app.innerHTML = `
@@ -70,6 +84,7 @@ app.innerHTML = `
 const main = qs<HTMLElement>("#main");
 
 type ZhsView = "home" | "course" | "meet";
+type UlView = "home" | "course";
 
 const store = {
   /** Platform selected on the connect screen (also the last active platform). */
@@ -97,6 +112,14 @@ const store = {
     meetProgress: new Map<number, ZhsMeetProgress>(),
     view: "home" as ZhsView,
   },
+  ul: {
+    courses: [] as UlCourse[],
+    selectedId: null as string | null,
+    detail: null as UlCourseDetail | null,
+    check: null as UlCheck | null,
+    checking: false,
+    view: "home" as UlView,
+  },
 };
 
 const sidebar = createSidebar(qs<HTMLElement>("#sidebar"), {
@@ -122,13 +145,22 @@ function updateSidebar(): void {
       meta: course.course_id,
     }));
     selectedId = store.hust.selectedId;
-  } else if (session) {
+  } else if (session && platform === "zhihuishu") {
     courses = store.zhs.courses.map((course) => ({
       id: String(course.courseId),
       name: zhsCourseLabel(course),
       meta: `recruit ${course.recruitId}`,
     }));
     selectedId = store.zhs.selectedId;
+  } else if (session) {
+    courses = store.ul.courses.map((course) => ({
+      id: String(course.textbookId),
+      name: ulCourseLabel(course),
+      meta: `textbook ${course.textbookId}${
+        course.classId === null ? "" : ` · 班级 ${course.classId}`
+      }`,
+    }));
+    selectedId = store.ul.selectedId;
   }
   sidebar.update({
     session,
@@ -155,6 +187,14 @@ function showHome(): void {
     });
     return;
   }
+  if (store.session.platform === "ulearning") {
+    renderUlHome(main, store.session, store.ul.courses, {
+      onSelect: (courseId) => void selectCourse(courseId),
+      onRefreshCourses: () => void refreshCourses(),
+      onAddCourse: (reference) => void addUlCourse(reference),
+    });
+    return;
+  }
   renderZhsHome(main, store.session, store.zhs.courses, {
     onSelect: (courseId) => void selectCourse(courseId),
     onRefreshCourses: () => void refreshCourses(),
@@ -165,6 +205,7 @@ function showHome(): void {
 function showConnect(): void {
   store.hust.selectedId = null;
   store.zhs.selectedId = null;
+  store.ul.selectedId = null;
   updateSidebar();
   renderConnect(main, {
     platform: store.platform,
@@ -201,7 +242,24 @@ async function activateSession(info: SessionInfo, announce: boolean): Promise<vo
     }
     updateSidebar();
     showHome();
-    if (announce) toast("已通过学校统一身份认证登录", "success");
+    if (announce) toast(platformMeta(info.platform).connectedToast, "success");
+    return;
+  }
+
+  if (info.platform === "ulearning") {
+    store.ul = {
+      courses: [],
+      selectedId: null,
+      detail: null,
+      check: null,
+      checking: false,
+      view: "home",
+    };
+    updateSidebar();
+    await loadUlCourseList();
+    updateSidebar();
+    showHome();
+    if (announce) toast(platformMeta(info.platform).connectedToast, "success");
     return;
   }
 
@@ -217,7 +275,7 @@ async function activateSession(info: SessionInfo, announce: boolean): Promise<vo
   await loadZhsCourseList();
   updateSidebar();
   showHome();
-  if (announce) toast("已连接知到账号", "success");
+  if (announce) toast(platformMeta(info.platform).connectedToast, "success");
 }
 
 async function startLogin(): Promise<void> {
@@ -243,10 +301,7 @@ function handleLoginClosed(): void {
   if (store.session) return;
   if (store.loginStatus !== "opening" && store.loginStatus !== "waiting") return;
   store.loginStatus = "failed";
-  store.loginError =
-    store.platform === "zhihuishu"
-      ? "登录窗口已关闭，未获取到知到会话。请重新打开知到登录窗口并完成登录。"
-      : "登录窗口已关闭，未获取到学校会话。请重新打开登录窗口完成统一身份认证。";
+  store.loginError = platformMeta(store.platform).closedError;
   showConnect();
 }
 
@@ -272,6 +327,10 @@ function currentHustSummary(): CourseSummary | null {
 async function selectCourse(courseId: string): Promise<void> {
   if (store.session?.platform === "zhihuishu") {
     await selectZhsCourse(courseId);
+    return;
+  }
+  if (store.session?.platform === "ulearning") {
+    await selectUlCourse(courseId);
     return;
   }
   if (store.busy) {
@@ -711,11 +770,250 @@ async function checkZhsStatus(courseId: string): Promise<void> {
   }
 }
 
+// ---- Ulearning (优学院) flows -------------------------------------------
+
+function findUlCourse(reference: string): UlCourse | null {
+  return (
+    store.ul.courses.find(
+      (course) =>
+        String(course.textbookId) === reference ||
+        (course.ocId !== null && String(course.ocId) === reference) ||
+        (course.classId !== null && String(course.classId) === reference) ||
+        ulCourseLabel(course) === reference,
+    ) ?? null
+  );
+}
+
+function upsertUlCourse(course: UlCourse): void {
+  const index = store.ul.courses.findIndex(
+    (item) => item.textbookId === course.textbookId,
+  );
+  if (index >= 0) {
+    store.ul.courses[index] = course;
+  } else {
+    store.ul.courses.push(course);
+  }
+}
+
+function ulSectionCount(detail: UlCourseDetail): number {
+  return detail.chapters.reduce(
+    (total, chapter) => total + chapter.sections.length,
+    0,
+  );
+}
+
+async function loadUlCourseList(): Promise<void> {
+  try {
+    store.ul.courses = await api.ulListCourses();
+    if (store.ul.courses.length === 0) {
+      toast(
+        "优学院没有返回可用的课程。可粘贴播放器链接（含 courseId / classId）手动添加。",
+        "info",
+      );
+    }
+  } catch (error) {
+    store.ul.courses = [];
+    toast(
+      `优学院课程列表接口暂不可用：${errorText(error)}。可粘贴播放器链接手动添加课程。`,
+      "error",
+    );
+  }
+}
+
+async function refreshUlCourses(): Promise<void> {
+  await loadUlCourseList();
+  updateSidebar();
+  if (!store.ul.selectedId) showHome();
+}
+
+async function addUlCourse(reference: string): Promise<void> {
+  if (store.busy) {
+    toast("正在执行任务，请先取消当前任务");
+    return;
+  }
+  store.busy = true;
+  updateSidebar();
+  try {
+    const detail = await api.ulCourseDetail(reference);
+    upsertUlCourse(detail.course);
+    store.ul.selectedId = String(detail.course.textbookId);
+    store.ul.detail = detail;
+    store.ul.check = null;
+    store.ul.view = "course";
+    store.busy = false;
+    updateSidebar();
+    toast(`已解析课程：${ulCourseLabel(detail.course)}`, "success");
+    showUlCourseView();
+    void runUlCheck(detail.course);
+  } catch (error) {
+    store.busy = false;
+    updateSidebar();
+    toast(errorText(error), "error");
+  }
+}
+
+async function selectUlCourse(courseId: string): Promise<void> {
+  if (store.busy) {
+    toast("正在执行任务，请先取消当前任务");
+    return;
+  }
+  const course = findUlCourse(courseId);
+  if (!course) return;
+  if (store.ul.selectedId === courseId && store.ul.detail) {
+    store.ul.view = "course";
+    showUlCourseView();
+    return;
+  }
+  store.ul.selectedId = courseId;
+  store.ul.view = "course";
+  store.ul.detail = null;
+  store.ul.check = null;
+  updateSidebar();
+  await loadUlDetail(course);
+}
+
+async function loadUlDetail(course: UlCourse): Promise<void> {
+  if (store.busy) return;
+  store.busy = true;
+  updateSidebar();
+  renderUlLoading(main, course, () => void cancelCurrentJob());
+
+  let unlisten: (() => void) | null = null;
+  let detail: UlCourseDetail | null = null;
+  let failure: string | null = null;
+
+  try {
+    unlisten = await onJobProgress((progress) => {
+      if (progress.kind === "ulStage" && progress.job === "ul-load") {
+        updateUlLoading(main, progress.done, progress.total, progress.message);
+      }
+    });
+    detail = await api.ulCourseDetail(String(course.textbookId));
+    store.ul.detail = detail;
+    store.ul.check = null;
+    upsertUlCourse(detail.course);
+  } catch (error) {
+    failure = errorText(error);
+  } finally {
+    unlisten?.();
+    store.busy = false;
+    updateSidebar();
+  }
+
+  if (store.ul.selectedId !== String(course.textbookId)) return;
+
+  if (detail) {
+    store.ul.view = "course";
+    showUlCourseView();
+    // Auto-run the read-only completion scan so the tree shows real status.
+    void runUlCheck(detail.course);
+    return;
+  }
+  if (failure?.includes("已取消")) {
+    store.ul.selectedId = null;
+    store.ul.view = "home";
+    toast("已取消读取", "info");
+    showHome();
+    return;
+  }
+  if (failure) {
+    renderUlCourseError(main, course, failure, () => void loadUlDetail(course));
+  }
+}
+
+async function runUlCheck(course: UlCourse): Promise<void> {
+  if (store.ul.checking || store.busy) return;
+  store.ul.checking = true;
+  showUlCourseView();
+
+  let unlisten: (() => void) | null = null;
+  try {
+    unlisten = await onJobProgress((progress) => {
+      if (progress.kind === "ulStage" && progress.job === "ul-check") {
+        const fill = main.querySelector<HTMLElement>(".ul-check-fill");
+        if (fill) {
+          fill.style.width = `${
+            progress.total > 0
+              ? Math.min(100, Math.round((progress.done / progress.total) * 100))
+              : 0
+          }%`;
+        }
+        const label = main.querySelector<HTMLElement>(".ul-check-label");
+        if (label) {
+          label.textContent = progress.label
+            ? `正在读取每节完成状态：${progress.label}`
+            : "正在读取每节完成状态…";
+        }
+        const count = main.querySelector<HTMLElement>(".ul-check-count");
+        if (count) {
+          count.textContent =
+            progress.total > 0 ? `${progress.done} / ${progress.total}` : "";
+        }
+      }
+    });
+    const check = await api.ulCheck(String(course.textbookId));
+    store.ul.check = check;
+    upsertUlCourse(check.course);
+    if (check.cancelled) toast("已取消完成状态检查", "info");
+  } catch (error) {
+    const message = errorText(error);
+    if (message.includes("已取消")) {
+      toast("已取消完成状态检查", "info");
+    } else {
+      toast(message, "error");
+    }
+  } finally {
+    unlisten?.();
+    store.ul.checking = false;
+    if (store.ul.selectedId === String(course.textbookId)) showUlCourseView();
+  }
+}
+
+function showUlCourseView(): void {
+  const detail = store.ul.detail;
+  if (!detail) {
+    showHome();
+    return;
+  }
+  const course = detail.course;
+  renderUlCourse(main, detail, store.ul.check, {
+    busy: store.busy,
+    checking: store.ul.checking,
+    onBack: () => {
+      store.ul.selectedId = null;
+      store.ul.view = "home";
+      store.ul.detail = null;
+      store.ul.check = null;
+      updateSidebar();
+      showHome();
+    },
+    onRefresh: () => void loadUlDetail(course),
+    onCheck: () => void runUlCheck(course),
+    onWatch: () =>
+      openUlWatchModal({
+        courseId: String(course.textbookId),
+        courseName: ulCourseLabel(course),
+        sectionTotal: store.ul.check?.sectionCount ?? ulSectionCount(detail),
+        completedSections: store.ul.check?.completedSections ?? 0,
+        onToast: (message, tone) => toast(message, tone),
+        onFinished: (summary: UlWatchSummary) => {
+          if (!summary.dryRun && summary.ok > 0) {
+            void loadUlDetail(course);
+          }
+        },
+      }),
+  });
+}
+
 // ---- Shared flows -------------------------------------------------------
 
 async function refreshCourses(): Promise<void> {
   if (store.session?.platform === "zhihuishu") {
     await refreshZhsCourses();
+    return;
+  }
+  if (store.session?.platform === "ulearning") {
+    await refreshUlCourses();
     return;
   }
   try {
@@ -768,6 +1066,12 @@ async function disconnect(): Promise<void> {
   store.zhs.meets = [];
   store.zhs.meetProgress.clear();
   store.zhs.view = "home";
+  store.ul.courses = [];
+  store.ul.selectedId = null;
+  store.ul.detail = null;
+  store.ul.check = null;
+  store.ul.checking = false;
+  store.ul.view = "home";
   store.busy = false;
   store.loginStatus = "idle";
   store.loginError = null;

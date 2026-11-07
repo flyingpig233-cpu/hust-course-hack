@@ -4,6 +4,7 @@ mod commands;
 mod events;
 mod login;
 mod state;
+mod ulearning;
 mod zhihuishu;
 
 use state::AppState;
@@ -42,6 +43,11 @@ pub fn run() {
             zhihuishu::zhs_meet_watch,
             zhihuishu::zhs_exception_status,
             zhihuishu::zhs_cancel_job,
+            ulearning::ul_list_courses,
+            ulearning::ul_course_detail,
+            ulearning::ul_check,
+            ulearning::ul_watch,
+            ulearning::ul_cancel_job,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HUST Course Hack");

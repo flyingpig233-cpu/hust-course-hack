@@ -1,12 +1,13 @@
 //! App-wide session state shared by the Tauri commands.
 //!
-//! Two platforms are supported: the original HUST SmartCourse client and the
-//! Zhihuishu (智慧树 / 知到) client. Only one platform session is active at a
-//! time; the platform-neutral helpers (`info`, `has_session`) stay available so
-//! the existing commands keep working unchanged.
+//! Three platforms are supported: HUST SmartCourse, Zhihuishu (智慧树 / 知到)
+//! and Ulearning (优学院 / U学). Only one platform session is active at a time;
+//! the platform-neutral helpers (`info`, `has_session`) stay available so the
+//! existing commands keep working unchanged.
 
 use hust_course_hack::{
     CourseSummary, SmartCourseClient,
+    ulearning::{UlCourse, UlearningClient},
     zhihuishu::{ZhsClient, ZhsCourse},
 };
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,8 @@ pub enum Platform {
     Hust,
     /// Zhihuishu / 知到 (`zhihuishu.com`).
     Zhihuishu,
+    /// Ulearning / 优学院 (`ulearning.cn`).
+    Ulearning,
 }
 
 impl Platform {
@@ -35,6 +38,7 @@ impl Platform {
         match self {
             Self::Hust => "学在华科大",
             Self::Zhihuishu => "知到（智慧树）",
+            Self::Ulearning => "优学院（U学）",
         }
     }
 }
@@ -62,10 +66,17 @@ pub struct ZhsSession {
     pub courses: Vec<ZhsCourse>,
 }
 
+/// Ulearning session.
+pub struct UlSession {
+    pub client: UlearningClient,
+    pub courses: Vec<UlCourse>,
+}
+
 /// Platform-specific payload of the active session.
 pub enum SessionClient {
     Hust(HustSession),
     Zhihuishu(ZhsSession),
+    Ulearning(UlSession),
 }
 
 /// The active session, built by the login window.
@@ -119,19 +130,27 @@ impl AppState {
             .map(|session| session.info.clone())
     }
 
-    /// HUST client; `None` when the active session is Zhihuishu.
+    /// HUST client; `None` when the active session is another platform.
     pub fn client(&self) -> Option<SmartCourseClient> {
         match self.read_session().as_ref()?.client {
             SessionClient::Hust(ref hust) => Some(hust.client.clone()),
-            SessionClient::Zhihuishu(_) => None,
+            SessionClient::Zhihuishu(_) | SessionClient::Ulearning(_) => None,
         }
     }
 
-    /// Zhihuishu client; `None` when the active session is HUST.
+    /// Zhihuishu client; `None` when the active session is another platform.
     pub fn zhs_client(&self) -> Option<ZhsClient> {
         match self.read_session().as_ref()?.client {
-            SessionClient::Hust(_) => None,
+            SessionClient::Hust(_) | SessionClient::Ulearning(_) => None,
             SessionClient::Zhihuishu(ref zhs) => Some(zhs.client.clone()),
+        }
+    }
+
+    /// Ulearning client; `None` when the active session is another platform.
+    pub fn ul_client(&self) -> Option<UlearningClient> {
+        match self.read_session().as_ref()?.client {
+            SessionClient::Hust(_) | SessionClient::Zhihuishu(_) => None,
+            SessionClient::Ulearning(ref ul) => Some(ul.client.clone()),
         }
     }
 
@@ -195,6 +214,52 @@ impl AppState {
             {
                 Some(item) => *item = course,
                 None => zhs.courses.push(course),
+            }
+        }
+    }
+
+    /// Replace the Ulearning course list. No-op for other platforms.
+    pub fn set_ul_courses(&self, courses: Vec<UlCourse>) {
+        if let Some(SessionClient::Ulearning(ul)) =
+            self.write_session().as_mut().map(|s| &mut s.client)
+        {
+            ul.courses = courses;
+        }
+    }
+
+    /// Snapshot of the Ulearning course list.
+    pub fn ul_courses(&self) -> Vec<UlCourse> {
+        let session = self.read_session();
+        match session.as_ref().map(|s| &s.client) {
+            Some(SessionClient::Ulearning(ul)) => ul.courses.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Find an Ulearning course by textbook id, `ocId`, class id or name.
+    pub fn ul_course(&self, reference: &str) -> Option<UlCourse> {
+        self.ul_courses().into_iter().find(|course| {
+            course.textbook_id.to_string() == reference
+                || course.oc_id.is_some_and(|id| id.to_string() == reference)
+                || course
+                    .class_id
+                    .is_some_and(|id| id.to_string() == reference)
+                || course.name == reference
+        })
+    }
+
+    /// Insert or refresh one Ulearning course in the session list.
+    pub fn upsert_ul_course(&self, course: UlCourse) {
+        if let Some(SessionClient::Ulearning(ul)) =
+            self.write_session().as_mut().map(|s| &mut s.client)
+        {
+            match ul
+                .courses
+                .iter_mut()
+                .find(|item| item.textbook_id == course.textbook_id)
+            {
+                Some(item) => *item = course,
+                None => ul.courses.push(course),
             }
         }
     }

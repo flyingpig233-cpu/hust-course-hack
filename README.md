@@ -1,8 +1,11 @@
-# HUST SmartCourse 课程助手
+# 华科课程助手（SmartCourse / 知到 / 优学院）
 
-Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hust.edu.cn`（学在华科大）与知到（智慧树）上当前账号的课程数据：
+Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hust.edu.cn`（学在华科大）、
+知到（智慧树）与优学院（U学，`*.ulearning.cn`）上当前账号的课程数据：
 
-- 课程列表和课程基本信息（课程 id、班级 id、cpi、封面、详情页）
+- 课程列表、章节目录树、任务点、视频/文档/测验数据（学在华科大）；
+- 知到（智慧树）共享课视频与见面课回放考勤；
+- 优学院（U学）课程目录、视频/图文与章节练习。
 - 章节目录树（章 / 节 / 知识点，含完成状态）
 - 每个知识点下的卡片和任务点
 - 视频任务点：文件名、大小、时长、完成状态、观看进度、截图、签名播放/下载地址
@@ -17,6 +20,10 @@ Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hu
 > （`/mooc-ans/phone/wxcard` 取 `jtoken` → `/mooc-ans/job/document`）。协议按 Chaoxing
 > 官方客户端移植，并已在 2026-11-07 用真实账号实测（49/49 个文档返回 `status: true`）；
 > 首次使用仍建议先试运行并只跑一个文档。
+>
+> 0.3.0 同时新增优学院（U学）平台，并把三平台（学在华科大 / 知到 / 优学院）统一到
+> CLI、桌面 GUI、网站版和浏览器助手四个入口；协议调研与分析报告见
+> `docs/ulearning/`、`docs/analysis/`。
 
 ## 桌面 GUI（Tauri 2）
 
@@ -38,7 +45,8 @@ npm run tauri dev      # 开发：Vite + 桌面窗口
 npm run tauri build    # 生产：构建安装包
 ```
 
-界面能力：
+界面能力（连接页可选择三个平台：学在华科大 / 知到（智慧树）/ 优学院（U学），各自独立登录窗口与
+课程页；所有写操作默认试运行，真实执行需勾选风险确认）：
 
 | 页面 | 功能 |
 | --- | --- |
@@ -48,6 +56,7 @@ npm run tauri build    # 生产：构建安装包
 | 测验任务 | 右上角“完成题目”或测验页“提交本题”：内置题库匹配答案，已批改作业跳过，题库缺答案的作业不提交；默认试运行，确认后才发送真实提交 |
 | 视频任务 | 整门课或单视频上报；试运行只生成签名 URL；可设置心跳间隔、延迟、数量上限并随时停止 |
 | 文档任务 | 顶部“完成文档”或文档行“完成”：按卡片取 `jtoken` 后调用 `/mooc-ans/job/document`；默认试运行，逐条显示服务端结果 |
+| 平台切换 | 连接页选择学在华科大 / 知到 / 优学院；知到含见面课页，优学院含章/节/页课程树与视频/章节练习秒刷 |
 | 工具 | 导出课程 JSON、在浏览器打开课程页、查看并保存 Tampermonkey 课程助手脚本（视频 / 文档，浏览器兜底） |
 
 登录流程：点击“打开 HUST 登录窗口”后，应用打开
@@ -441,6 +450,68 @@ cargo run -- --cookies $zhs zhs check --course "..."
 - 平台有独立行为分析（`cheat/exceptionActionDetail`）：秒刷属高风险形态，本工具默认 dry-run、限速、随机覆盖率与熔断；请自行评估账号风险；
 - 课程列表接口（`queryShareCourseInfo`）尚未用真实抓包确认，失败时请用学习页 URL/`recruitAndCourseId` 兜底；见面课列表响应字段也可能随平台调整。
 
+## 优学院（U学）视频与章节练习秒刷
+
+除学在华科大、知到之外，本仓库也支持优学院（Ulearning / U学，`*.ulearning.cn`）学生端：
+
+- 课程目录（章 / 节 / 页）与完成状态：只读抓取；
+- **视频/图文秒刷**：调用学习记录接口把视频页标记为已完成（`status=1`）；
+- **章节练习秒刷**：从 `/questionAnswer/{qid}?parentId={pageId}` 取答案后按实测 payload 提交，
+  页面 `complete=1`、`score=100`；
+- 不支持：作业/测验（`utest`）、小组作业、考试、直播、课堂、考勤。
+
+### CLI
+
+```powershell
+$ul = "D:\ul-cookies.txt"
+
+# 课程目录（播放器 URL 或 textbookId=..&classId=..；优学院没有稳定的学生课程列表接口）
+cargo run -- --cookies $ul ulearn tree --course "textbookId=47353&classId=1019700"
+
+# 视频/图文：先看计划，再真实上报
+cargo run -- --cookies $ul ulearn watch --course "..." --dry-run
+cargo run -- --cookies $ul ulearn watch --course "..."
+
+# 含章节练习（从平台取答案后提交）
+cargo run -- --cookies $ul ulearn watch --course "..." --practice
+
+# 会话/课程可学性检查
+cargo run -- --cookies $ul ulearn check --course "..."
+```
+
+常用参数：`--dry-run` 只打印计划（不发 POST）；`--yes` 跳过确认；`--max-sections`；
+`--include-completed`；`--practice` 处理含练习的节；`--delay-ms 3000-5000` 限速。
+
+### 桌面 GUI
+
+连接页选择“优学院”，内嵌登录窗口打开 `https://umooc.ulearning.cn/pc.html#/login`，登录后读取
+`AUTHORIZATION` Cookie 并校验会话。课程页可“秒刷本课”（默认 dry-run，真实执行需勾选风险确认，
+可勾选包含章节练习），进度通过 `job-progress`/`ul-watch` 事件推送、可取消。
+
+### 浏览器助手脚本
+
+`userscripts/ulearning-miaoshua.user.js` 安装到 Tampermonkey 后，在
+`ua.ulearning.cn/learnCourse` 播放器页右下角出现面板，可秒刷本课视频或章节练习（dry-run 默认、
+3–5 秒随机限速、失败即停、判定刷分立即中止）。脚本优先使用页面自带的 CryptoJS，缺失时内置
+DES-ECB 实现。
+
+### 网站版
+
+`website/` 增加优学院平台并通过 `ulearning-bridge.user.js` 在优学院页面内转发同源请求；静态站不接触
+`AUTHORIZATION` token（由桥接脚本在页面内注入请求头）。
+
+### 实现与风险
+
+- 鉴权：Cookie `AUTHORIZATION`，每个请求同时带 `Authorization` 与 `UA-AUTHORIZATION` 头；
+  token 不打印、不跨窗口传递；
+- 记录上报：`POST /yws/api/personal/sync?courseType=4&platform=PC`，body 为
+  DES-ECB（key `12345678`，PKCS7，Base64）加密的 JSON；服务端返回 `1` 成功、`2` 判定刷分
+  （立即熔断停止整批）；
+- 目录/页面字段来自公开播放器 JS，**没有原始响应 fixture**；首次使用建议先 `--dry-run` 核对，
+  再单节灰度并回读 `/studyrecord/item` 的 `completion_status`；
+- 课程列表接口未抓包，CLI/GUI/网站均用播放器 URL 或 `textbookId/classId` 兜底；
+- 默认 dry-run、3–5 秒随机限速、失败即停；请自行评估账号与平台风控风险。
+
 ## 已验证的平台接口
 
 以下接口在 2026-10 使用真实学生账号验证通过。路径都相对于
@@ -519,5 +590,11 @@ let client = SmartCourseClient::from_cookie_header("name=value; other=value")?;
 - 文档完成依赖 `/mooc-ans/phone/wxcard` 返回的 `jtoken`；该 token 是页面/附件绑定的短期凭证，
   每次完成都重新获取，不写入磁盘。只有 `/mooc-ans/job/document` 返回 `status: true` 才算完成，
   命令不会在本地伪造完成状态。
+- 优学院（U学）的 `AUTHORIZATION` token 不打印、不跨窗口；学习记录 body 用前端硬编码密钥
+  DES 加密，平台改版时 `src/ulearning/cipher.rs` 与 `website/src/core/ul/crypto.ts` 都要同步。
+- 优学院的目录/页面字段来自公开播放器 JS（无原始响应 fixture），首次使用先 `--dry-run` 核对；
+  服务端返回 `2` 表示判定刷分，工具会立即停止整批。
+- 三个平台的写操作（视频/文档/测验/文档/练习）默认都是 dry-run 或需勾选风险确认；真实执行前
+  请先单条灰度并回读平台状态。
 - 平台改版时优先检查 `stats.errors` 和题目解析结果；解析器依赖的 class 名集中在
   `src/parse.rs`。

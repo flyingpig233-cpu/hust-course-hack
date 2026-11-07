@@ -15,6 +15,11 @@ import type {
   QuizRequest,
   QuizSummary,
   SessionInfo,
+  UlCheck,
+  UlCourse,
+  UlCourseDetail,
+  UlWatchRequest,
+  UlWatchSummary,
   WatchRequest,
   WatchSummary,
   ZhsCourse,
@@ -65,6 +70,15 @@ const tauriApi = {
   zhsExceptionStatus: (courseId: string) =>
     invoke<ZhsExceptionStatus>("zhs_exception_status", { courseId }),
   zhsCancelJob: () => invoke<void>("zhs_cancel_job"),
+
+  // ---- Ulearning (优学院) -----------------------------------------------
+  ulListCourses: () => invoke<UlCourse[]>("ul_list_courses"),
+  ulCourseDetail: (courseId: string) =>
+    invoke<UlCourseDetail>("ul_course_detail", { courseId }),
+  ulCheck: (courseId: string) => invoke<UlCheck>("ul_check", { courseId }),
+  ulWatch: (request: UlWatchRequest) =>
+    invoke<UlWatchSummary>("ul_watch", { request }),
+  ulCancelJob: () => invoke<void>("ul_cancel_job"),
 };
 
 export type Backend = typeof tauriApi;
