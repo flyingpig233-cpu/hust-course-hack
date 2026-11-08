@@ -10,9 +10,44 @@
 2. 打开网页，点击“安装桥接脚本 .user.js”并安装。
 3. 点击“连接学校课程页面”。在打开的学校窗口完成统一身份认证，并允许连接页面显示的本站来源。
 4. 返回静态站查看课程。使用期间保持学校窗口打开；如果学校登录跳转导致窗口被浏览器隔离，请先完成学校登录，然后重新点击连接。
-5. 视频和测验任务默认试运行；测验实际提交还需要勾选确认框。平台要求验证码时，到学校页面手动处理。
+5. 视频、文档和测验任务默认试运行；测验实际提交还需要勾选确认框。文档真实运行会按卡片的
+   `wxcard` 响应取 `jtoken` 后调用 `/mooc-ans/job/document`。平台要求验证码时，到学校页面手动处理。
 
 `?demo=1` 是独立演示模式，只有合成示例数据，不会执行真实提交或视频上报。生产默认使用真实 TS core，不会静默切换到演示数据。
+
+## 知到（智慧树）秒刷
+
+网页版包含独立的知到入口：在连接页选择“知到（智慧树）”。
+
+1. 安装 `zhihuishu-bridge.user.js`（与学校桥接脚本相互独立；`npm run build` 会同时更新两份脚本）。
+2. 点击“连接知到页面”，在打开的知到学生端窗口完成登录并允许连接。使用期间保持该知到窗口打开。
+3. 共享课页查看章节 / 节 / 小节视频树与完成状态。“秒刷本课视频”默认 dry-run，只在本地生成 `sdsew` / `ewssw` / `zwsds` 字段；勾选风险确认后才会真正上报并通过 `queryStuyInfo` 复核。
+4. 见面课页列出有回放的场次与已看分钟，按随机 90–100% 覆盖率逐分钟上报，带随机间隔限速、每 N 条风控检查与熔断；同样默认 dry-run。
+
+实现要点：
+
+- `src/core/zhs/`：`crypto.ts`（WebCrypto AES-CBC、BigInt RSA 公钥运算与模块密钥获取、XOR、watchPoints）、`client.ts`（接口与解析、限速器）、`watch.ts`（视频计划 / 执行 / 复核）、`meet.ts`（随机覆盖 / 限速 / 熔断）、`transport.ts`（桥接协议与接口白名单）。
+- 模块密钥：视频课（module 11）优先运行时获取，失败才回退已验证常量；见面课（module 9）绝不硬编码。所有 live（`appcomm-live-api`）加密接口都是 GET + `secretStr` = AES(module 9)，密文不注入 `dateFormate`、只额外带 `_=<ts>`：`getWatchHistory`（`{courseId,userId}`）、`setWatchHistorySecret`（`{paramSecret,jsonpCallBack}`）、`chect/exceptionActionDetail`（`{uuid,recruitId}`）。见面课列表首选 `online.zhihuishu.com/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss`，失败回退 `stuonline.zhihuishu.com/stuonline/teachMeeting/listTeachMeetingStu?examV2=ss`，两者都用 form `recruitId` + `page.pageNo=0` + `page.pageSize=50`。
+- 桥接脚本只放行白名单内的知到 API（`studyservice-api`、`appcomm-live-api`、`appcomm-user`、`onlineservice-api`、`online`、`stuonline`、`im`），来源、`nonce`、窗口对象与请求 id 在两端校验；Cookie 只留在知到窗口。`lc.zhihuishu.com` 会把全局 `Map` 替换成 Java 风格 polyfill，因此桥接脚本用普通对象保存进行中的请求。
+- 限制：必须保持知到窗口打开；跨子域请求是否放行取决于平台 CORS 配置，被浏览器拦截时会显示明确错误。秒刷属于最高风险形态，请自行评估账号与成绩风险。
+- `?demo=1&platform=zhs` 为知到演示模式，只用合成数据，所有写操作强制 dry-run。
+
+## 优学院（U学）课件秒刷
+
+连接页选择“优学院”即可进入第三个平台入口。
+
+1. 安装 `ulearning-bridge.user.js`（与学校 / 知到桥接脚本相互独立；`npm run build` 同时更新三份脚本）。
+2. 点击“连接优学院页面”，在打开的 courseweb 窗口完成登录并允许连接。桥接脚本在页面内读取 `AUTHORIZATION` cookie，并给 API 请求注入 `Authorization` + `UA-AUTHORIZATION` 双 header；token 不会发送给静态站。使用期间保持该窗口打开。
+3. 返回首页添加课程：粘贴播放器链接（`learnCourse.html?courseId=…&classId=…`）或填写 `textbookId/classId`。课程页展示章 / 节 / 页树、页面类型（图文/视频/练习）与每节 `completion_status`。
+4. “秒刷本课视频”默认 dry-run，只读取目录并生成将发送的 payload 摘要；真实执行需勾选风险确认。默认只处理纯视频/图文节，含章节练习的节默认跳过；勾选“同时处理章节练习”后会通过 `questionAnswer` 取平台答案再提交。
+
+实现要点：
+
+- `src/core/ul/`：`crypto.ts`（自实现 DES-ECB + PKCS#7 + Base64，密钥 `12345678`，附 FIPS/OpenSSL 向量测试）、`client.ts`（course/directory/wholepage/studyrecord/questionAnswer/sync 接口与解析、限速器）、`watch.ts`（计划、payload 构造、提交/复核/失败即停）、`transport.ts`（桥接协议 + 接口白名单）、`backend.ts`。
+- `sync` 请求体按实测 `ItemStudyRecordUpdateDTO` 构造：`itemid`、`complete=1`、`studyStartTime`、`pageStudyRecordDTOList`（`pageid` 用页面 `relationid`，视频 `videoid` 用 `resourceid`、`time` 用 `videoLength`）；服务端返回 `1` 为成功、`2` 为判定刷分，返回 2 时整批立即停止。
+- 桥接脚本只放行白名单内的 `api.ulearning.cn` 接口（directory / wholepage / studyrecord / questionAnswer / sync），来源、窗口对象、nonce 与请求 id 在两端校验；响应只回 status/text，不包含 token 或 headers。
+- 限制：优学院没有稳定的学生课程列表接口，需要粘贴播放器链接；含练习的节才会把课件进度补满。秒刷属于最高风险形态，默认 dry-run。
+- `?demo=1&platform=ul` 为优学院演示模式，只有合成课程数据，所有写操作强制 dry-run。
 
 ## 为什么需要桥接脚本
 
@@ -43,10 +78,13 @@ npm run dev
 - `src/core/parse.ts`：与 Rust 模型一致的章节、卡片、任务点和题目解析；`mArg` 仅解析 JSON，绝不 eval 平台代码。
 - `src/core/answers.ts`：题号优先、NFKC 题干兜底匹配，支持单选、多选、判断、填空和自由文本编码。
 - `src/core/playback.ts`、`md5.ts`：复现已有协议的 MD5 签名和 4→3→4→2 心跳序列；只有服务端 `isPassed=true` 才标记完成。
+- `src/core/documents.ts`：文档任务点规划与 `wxcard` 解析；`/mooc-ans/phone/wxcard` 的 `window.AttachmentSetting` 提供 `jtoken`，`/mooc-ans/job/document` 只有 `status: true` 才算完成。协议按 Chaoxing 官方客户端 7.0.2 移植（`flutter_chaoxing` 0.4.2）；2026-11-07 已在 HUST 真实账号上验证协议（英语课程 49/49 个文档返回 `status: true`），网页版这一步经桥接窗口的整门课运行尚未单独实测。
 - `src/core/submit.ts`：提交前刷新题页、保留表单 action 的签名查询串和隐藏字段、完整性检查、验证码前置校验；已批改或缺答案作业不提交。
 - `src/core/backend.ts`：浏览器会话、单任务互斥、题库加载、取消与界面适配。
-- `src/bridge.user.ts`：学校窗口桥接；`public/` 包含编译脚本、课程助手（视频 / PDF 文档）和运行所需题库。
-- `tests/`：合成 HTML、模拟 transport 与原 Rust 签名向量；验证内置 541 题答案可编码。测试不会使用真实 Cookie、请求学校或提交真实作业。
+- `src/bridge.user.ts`、`src/zhs-bridge.user.ts`、`src/ul-bridge.user.ts`：学校 / 知到 / 优学院窗口桥接；学校桥接白名单放行课程接口（含 `phone/wxcard`、`job/document` 两条文档 GET），`public/` 包含两份编译脚本、课程助手（视频 / PDF 文档）和运行所需题库。桥接脚本升级后需在 Tampermonkey 重新安装。
+- `src/core/zhs/**`、`src/views/zhs-*.ts`：知到共享课视频树、见面课回放进度、默认 dry-run 的秒刷弹窗与风险确认。
+- `src/core/ul/**`、`src/views/ul-course.ts`：优学院章/节/页课程树、DES 加密学习记录提交、默认 dry-run 的秒刷弹窗。
+- `tests/`：合成 HTML、模拟 transport 与原 Rust 签名向量；验证内置 541 题答案可编码，以及文档 `AttachmentSetting`/`jtoken`/`job/document` 的解析与严格 `status` 判定。测试不会使用真实 Cookie、请求学校或提交真实作业。
 
 题库为已有仓库题库的运行时字段副本，不包含个人作答、得分、班级信息或登录令牌。更新题库时同时更新 `public/answer-bank.json`，保持 `question_index` 和 `stem_index` 一致。
 
@@ -60,4 +98,4 @@ npm run dev
 
 ## 验证范围
 
-自动化覆盖离线解析、所有内置题目的答案编码、签名向量、模拟抓取、视频心跳和测验试运行/提交协议。真实学校浏览器登录、平台页面变化、验证码与校方实际计分须在用户浏览器会话中验证；构建或离线测试通过不代表真实任务已完成。
+自动化覆盖离线解析、所有内置题目的答案编码、签名向量、模拟抓取、视频心跳、文档完成协议和测验试运行/提交协议。真实学校浏览器登录、平台页面变化、验证码和校方实际计分仍须在用户浏览器会话中验证；文档协议本身已在 2026-11-07 通过 CLI 在真实账号上验证（49/49 `status: true`），但网页版桥接窗口路径尚未单独跑完整门课。

@@ -10,9 +10,15 @@
 # Authenticated session data and crawl output must never be committed.
 cookies.txt
 *.cookies.txt
+
+# Local reconnaissance scratch (may contain live session cookies).
+/.tmp-icourse/
 courses.json
 dump*.json
 
 # The sanitized crawl fixture is compiled into the Rust tests via include_str!,
 # so it has to ship with the source. Never put a raw crawl at this path.
 !test-data/courses.json
+
+# Local Rust toolchain used for verification (not part of the app).
+/.toolchain

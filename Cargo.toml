@@ -2,9 +2,18 @@
 members = ["src-tauri"]
 resolver = "3"
 
+# ring's bundled C code fails to compile with the VS 2022 17.14 MSVC toolset when
+# /Z7 debug records are requested (cl.exe D8050). Keep debug info for project
+# crates, but drop it for ring so `cargo test`/`cargo build` work on Windows.
+[profile.dev.package.ring]
+debug = false
+
+[profile.test.package.ring]
+debug = false
+
 [package]
 name = "hust-course-hack"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [lib]
@@ -16,21 +25,28 @@ name = "hust-course-hack"
 path = "src/main.rs"
 
 [dependencies]
+aes = "0.8"
 anyhow = "1"
+base64 = "0.22"
+cbc = "0.1"
 clap = { version = "4", features = ["derive"] }
+des = "0.8"
 env_logger = "0.11"
 futures = "0.3"
 log = "0.4"
 md5 = "0.7"
 percent-encoding = "2"
+rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [
     "brotli",
     "charset",
     "cookies",
     "gzip",
     "http2",
+    "json",
     "rustls-tls",
 ] }
+rsa = "0.9"
 scraper = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

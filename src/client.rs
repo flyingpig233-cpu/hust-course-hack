@@ -11,6 +11,7 @@
 use crate::{
     answers::AnswerBank,
     cookie,
+    documents::{self, DocumentReport, DocumentTarget},
     models::{
         Card, CourseDetail, CourseStats, CourseSummary, FetchOptions, PlaybackEnv, TaskKind,
         TaskPoint,
@@ -895,6 +896,96 @@ impl SmartCourseClient {
             page.questions,
             page.status.as_work_status().map(str::to_string),
         ))
+    }
+
+    /// Fetch one card's attachments (`window.AttachmentSetting`) to obtain the
+    /// `jtoken` that `/mooc-ans/job/document` requires.
+    ///
+    /// This is a cookie-only GET on the `mooc-ans` application, same as the
+    /// card page the platform PDF viewer loads.
+    pub async fn fetch_document_attachment_setting(
+        &self,
+        target: &DocumentTarget,
+    ) -> Result<Value> {
+        let referer = self
+            .base
+            .join("mooc-ans/mycourse/studentstudy")
+            .context("invalid studentstudy URL")?;
+        let url = self.endpoint(
+            "mooc-ans/phone/wxcard",
+            &[
+                ("cardid", target.card_id.as_str()),
+                ("courseid", target.course_id.as_str()),
+                ("knowledgeid", target.knowledge_id.as_str()),
+                ("clazzid", target.class_id.as_str()),
+                ("cpi", target.cpi.as_str()),
+                ("ut", "s"),
+                ("isMicroCourse", "false"),
+            ],
+        );
+        let (body, final_url) = self.get_text(&url, Some(referer.as_str())).await?;
+        if final_url.path().contains("passport") || body.contains("<title>登录") {
+            bail!("login expired while fetching document settings ({final_url})");
+        }
+        documents::parse_attachment_setting(&body).with_context(|| {
+            format!(
+                "wxcard response has no AttachmentSetting for card {} ({})",
+                target.card_id, target.name
+            )
+        })
+    }
+
+    /// Mark one document task point as read.
+    ///
+    /// Success is judged only by the platform's `status: true`; everything else
+    /// is surfaced as an error.
+    pub async fn report_document_read(&self, target: &DocumentTarget, jtoken: &str) -> Result<()> {
+        let referer = self
+            .base
+            .join("mooc-ans/mycourse/studentstudy")
+            .context("invalid studentstudy URL")?;
+        let url = self.endpoint(
+            "mooc-ans/job/document",
+            &[
+                ("jobid", target.job_id.as_str()),
+                ("knowledgeid", target.knowledge_id.as_str()),
+                ("courseid", target.course_id.as_str()),
+                ("clazzid", target.class_id.as_str()),
+                ("jtoken", jtoken),
+                ("checkMicroTopic", "true"),
+                ("microTopicId", "undefined"),
+                ("courseEngineInfo", "false"),
+            ],
+        );
+        let (body, final_url) = self.get_text(&url, Some(referer.as_str())).await?;
+        if final_url.path().contains("passport") || body.contains("<title>登录") {
+            bail!("login expired while reporting document read ({final_url})");
+        }
+        documents::parse_document_report(&body)
+            .with_context(|| format!("document report failed for {}", target.name))
+    }
+
+    /// Resolve the attachment `jtoken` and report one document as read.
+    pub async fn complete_document(&self, target: &DocumentTarget) -> Result<DocumentReport> {
+        let setting = self.fetch_document_attachment_setting(target).await?;
+        let jtoken = documents::attachment_jtoken(
+            &setting,
+            &target.job_id,
+            target.object_id.as_deref(),
+        )
+        .with_context(|| {
+            format!(
+                "card {} has no jtoken for job {} ({}); the document may be archived or not a PDF",
+                target.card_id, target.job_id, target.name
+            )
+        })?;
+        self.report_document_read(target, &jtoken).await?;
+        Ok(DocumentReport {
+            job_id: target.job_id.clone(),
+            name: target.name.clone(),
+            accepted: true,
+            message: None,
+        })
     }
 
     fn endpoint(&self, path: &str, params: &[(&str, &str)]) -> String {

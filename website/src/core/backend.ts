@@ -1,10 +1,11 @@
 import type { Backend } from '../api.ts';
 import { demoEmit } from '../bus.ts';
 import { downloadText } from '../platform.ts';
-import type { CourseDetail, CourseSummary, JobProgress, QuizSummary, SessionInfo, WatchSummary } from '../types.ts';
+import type { CourseDetail, CourseSummary, DocumentRequest, DocumentSummary, DocumentTarget, JobProgress, QuizSummary, SessionInfo, WatchSummary } from '../types.ts';
 import { AnswerBank, type BankData } from './answers.ts';
 import { SmartCourseClient, type WorkContext } from './client.ts';
-import { allChapters } from './parse.ts';
+import { attachmentJToken, collectDocumentTargets } from './documents.ts';
+import { allChapters, type Json } from './parse.ts';
 import { pause, reportUrl, videoTargets, watchTarget } from './playback.ts';
 import { checkAnswers, submitWork } from './submit.ts';
 import { BridgeTransport } from './transport.ts';
@@ -88,6 +89,63 @@ export const browserApi: Backend = {
             emit({ ...base, status: 'error', message: message(error) });
           }
           await pause(Math.max(0, request.delayMs ?? 1000), signal);
+        }
+      } catch (error) {
+        if (signal.aborted) summary.cancelled = true; else throw error;
+      }
+      return summary;
+    });
+  },
+  completeDocuments(request: DocumentRequest) {
+    return job(async (signal) => {
+      const summary: DocumentSummary = { total: 0, passed: 0, failed: 0, skipped: 0, errors: [], cancelled: false, dryRun: request.dryRun !== false };
+      try {
+        const detail = await client.fetchCourse(selected(request.course), { includeQuestions: false, includeVideoInfo: false }, signal);
+        const plan = collectDocumentTargets(detail, request.includeCompleted === true);
+        summary.errors.push(...detail.stats.errors, ...plan.errors);
+        const targets = plan.targets
+          .filter((target) => !request.job || target.job_id === request.job)
+          .slice(0, request.maxDocuments ?? Infinity);
+        summary.total = targets.length;
+        emit({ kind: 'documentPlan', total: targets.length, dryRun: summary.dryRun, skipped: plan.errors.length });
+
+        // One wxcard response holds every attachment of a card; reuse it for all
+        // documents of that card, including a failed fetch.
+        const settings = new Map<string, Promise<Json | null>>();
+        const settingFor = (target: DocumentTarget): Promise<Json | null> => {
+          const key = `${target.knowledge_id}:${target.card_id}`;
+          let pending = settings.get(key);
+          if (!pending) {
+            pending = client.fetchDocumentSetting(detail, target.knowledge_id, target.card_id, signal);
+            settings.set(key, pending);
+          }
+          return pending;
+        };
+
+        for (let i = 0; i < targets.length; i++) {
+          signal.throwIfAborted();
+          const target = targets[i];
+          const progress = { kind: 'document' as const, index: i + 1, total: targets.length, label: `${target.knowledge_title} / ${target.name}`, jobId: target.job_id };
+          if (summary.dryRun) {
+            emit({ ...progress, status: 'dry_run', message: `试运行：计划读取卡片 ${target.card_id} 的 jtoken 后调用 /mooc-ans/job/document，未发送请求` });
+            continue;
+          }
+          emit({ ...progress, status: 'running', message: null });
+          try {
+            const setting = await settingFor(target);
+            const jtoken = attachmentJToken(setting, target.job_id, target.object_id);
+            if (!jtoken) {
+              summary.skipped++;
+              emit({ ...progress, status: 'skipped', message: `卡片 ${target.card_id} 的附件中没有该文档的 jtoken（可能已归档或不是 PDF）` });
+              continue;
+            }
+            await client.completeDocument(target, jtoken, signal);
+            summary.passed++;
+            emit({ ...progress, status: 'passed', message: '服务端返回 status=true' });
+          } catch (error) {
+            signal.throwIfAborted(); summary.failed++; summary.errors.push(message(error));
+            emit({ ...progress, status: 'error', message: message(error) });
+          }
         }
       } catch (error) {
         if (signal.aborted) summary.cancelled = true; else throw error;

@@ -6,7 +6,9 @@ use crate::{
 };
 use hust_course_hack::{
     AnswerBank, CourseDetail, CourseSummary, CrawlProgress, FetchOptions, PlannedWork,
-    REPORT_VERSION, VIDEO_HELPER_SCRIPT, WatchOptions, collect_targets, plan_course, watch_target,
+    REPORT_VERSION, VIDEO_HELPER_SCRIPT, WatchOptions, collect_targets,
+    documents::{DocumentTarget, collect_document_targets},
+    plan_course, watch_target,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -52,6 +54,44 @@ pub struct WatchSummaryDto {
     pub failed: usize,
     pub errors: Vec<String>,
     pub cancelled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DocumentRequest {
+    /// Course id, class id, or exact course name.
+    pub course: String,
+    /// Only complete this job id.
+    pub job: Option<String>,
+    /// Also process documents the platform already reports as completed.
+    pub include_completed: Option<bool>,
+    /// Build the plan and skip every network report.
+    pub dry_run: Option<bool>,
+    /// Process at most this many documents (for a cautious first run).
+    pub max_documents: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentResultDto {
+    pub job_id: String,
+    pub name: String,
+    pub chapter: String,
+    /// `completed`, `failed`, or `dry_run`.
+    pub status: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentSummaryDto {
+    pub total: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub cancelled: bool,
+    pub dry_run: bool,
+    pub errors: Vec<String>,
+    pub documents: Vec<DocumentResultDto>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -103,11 +143,14 @@ pub struct AnswerBankInfoDto {
 }
 
 #[tauri::command]
-pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
+pub async fn open_login_window(
+    app: AppHandle,
+    platform: Option<crate::state::Platform>,
+) -> Result<(), String> {
     // Must be async: creating a WebView2 window blocks until the main event
     // loop creates the webview. A synchronous command runs on the main thread
     // and would deadlock there, leaving the login window blank and unresponsive.
-    crate::login::open_login_window(&app)
+    crate::login::open_login_window(&app, platform.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -315,6 +358,150 @@ pub async fn watch_course(
         errors,
         cancelled,
     })
+}
+
+/// Complete PDF document task points directly through the official client
+/// protocol: read each card's `window.AttachmentSetting` (`/mooc-ans/phone/wxcard`)
+/// for its `jtoken`, then report `/mooc-ans/job/document`.
+///
+/// The platform viewer is not involved, so every run refreshes the course and
+/// re-reads the per-card tokens instead of reusing stale ones.
+#[tauri::command]
+pub async fn complete_documents(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: DocumentRequest,
+) -> Result<DocumentSummaryDto, String> {
+    let _job = state.begin_job()?;
+    let client = state.client().ok_or_else(not_connected)?;
+    let course = state.course(&request.course).ok_or_else(course_not_found)?;
+
+    // Document targets only need the card structure; quiz questions and signed
+    // video URLs are not required.
+    let fetch_options = FetchOptions {
+        include_questions: false,
+        include_video_info: false,
+        concurrency: 4,
+    };
+    let app_state: &AppState = &state;
+    let progress = |progress: CrawlProgress| {
+        emit(
+            &app,
+            JobProgress::Crawl {
+                done: progress.done_leaves,
+                total: progress.total_leaves,
+            },
+        );
+        !app_state.is_cancelled()
+    };
+    let detail = client
+        .fetch_course_with_progress(&course, &fetch_options, &progress)
+        .await
+        .map_err(job_error)?;
+
+    let include_completed = request.include_completed.unwrap_or(false);
+    let mut targets = collect_document_targets(&detail, include_completed);
+    if let Some(selector) = request
+        .job
+        .as_deref()
+        .map(str::trim)
+        .filter(|selector| !selector.is_empty())
+    {
+        targets.retain(|target| target.job_id == selector);
+        if targets.is_empty() {
+            return Err(format!("没有找到文档任务点 {selector}，请刷新课程后重试"));
+        }
+    }
+    if let Some(max_documents) = request.max_documents {
+        targets.truncate(max_documents.max(1));
+    }
+
+    let total = targets.len();
+    let dry_run = request.dry_run.unwrap_or(false);
+    emit(&app, JobProgress::DocumentPlan { total, dry_run });
+
+    let mut summary = DocumentSummaryDto {
+        total,
+        completed: 0,
+        failed: 0,
+        cancelled: false,
+        dry_run,
+        errors: Vec::new(),
+        documents: Vec::with_capacity(total),
+    };
+
+    for (offset, target) in targets.iter().enumerate() {
+        if app_state.is_cancelled() {
+            summary.cancelled = true;
+            break;
+        }
+        let index = offset + 1;
+        emit(
+            &app,
+            JobProgress::Document {
+                index,
+                total,
+                chapter: target.knowledge_title.clone(),
+                name: target.name.clone(),
+                job_id: target.job_id.clone(),
+                status: "running".to_string(),
+                message: None,
+            },
+        );
+
+        if dry_run {
+            let message = format!(
+                "试运行：将向 /mooc-ans/job/document 上报 {}（job {}）",
+                target.name, target.job_id
+            );
+            let result = DocumentResultDto {
+                job_id: target.job_id.clone(),
+                name: target.name.clone(),
+                chapter: target.knowledge_title.clone(),
+                status: "dry_run".to_string(),
+                message: Some(message),
+            };
+            emit_document(&app, index, total, target, &result);
+            summary.documents.push(result);
+            continue;
+        }
+
+        match client.complete_document(target).await {
+            Ok(report) => {
+                // `complete_document` only returns `Ok` for the platform's
+                // explicit `status: true`; rejected reports are errors.
+                summary.completed += 1;
+                let result = DocumentResultDto {
+                    job_id: report.job_id,
+                    name: report.name,
+                    chapter: target.knowledge_title.clone(),
+                    status: "completed".to_string(),
+                    message: report.message,
+                };
+                emit_document(&app, index, total, target, &result);
+                summary.documents.push(result);
+            }
+            Err(error) => {
+                summary.failed += 1;
+                let message = format!("{error:#}");
+                summary.errors.push(format!(
+                    "{} / {}: {message}",
+                    target.knowledge_title, target.name
+                ));
+                let result = DocumentResultDto {
+                    job_id: target.job_id.clone(),
+                    name: target.name.clone(),
+                    chapter: target.knowledge_title.clone(),
+                    status: "failed".to_string(),
+                    message: Some(message),
+                };
+                emit_document(&app, index, total, target, &result);
+                summary.documents.push(result);
+            }
+        }
+    }
+
+    Ok(summary)
 }
 
 /// One-click quiz completion: refresh the course, match every in-progress
@@ -595,6 +782,28 @@ fn emit(app: &AppHandle, progress: JobProgress) {
     let _ = app.emit("job-progress", progress);
 }
 
+/// Mirror one document result to the `job-progress` channel.
+fn emit_document(
+    app: &AppHandle,
+    index: usize,
+    total: usize,
+    target: &DocumentTarget,
+    result: &DocumentResultDto,
+) {
+    emit(
+        app,
+        JobProgress::Document {
+            index,
+            total,
+            chapter: target.knowledge_title.clone(),
+            name: target.name.clone(),
+            job_id: result.job_id.clone(),
+            status: result.status.clone(),
+            message: result.message.clone(),
+        },
+    );
+}
+
 fn job_error(error: anyhow::Error) -> String {
     let text = format!("{error:#}");
     if text.contains("cancelled") {
@@ -605,7 +814,7 @@ fn job_error(error: anyhow::Error) -> String {
 }
 
 fn not_connected() -> String {
-    "尚未连接账号，请先导入 Cookie".to_string()
+    "尚未连接账号，请先在连接页登录对应平台".to_string()
 }
 
 fn course_not_found() -> String {

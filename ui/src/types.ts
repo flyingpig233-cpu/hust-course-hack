@@ -126,7 +126,11 @@ export interface CourseDetail extends CourseSummary {
   stats: CourseStats;
 }
 
+/** Active platform. Mirrors `Platform` in `src-tauri/src/state.rs`. */
+export type Platform = "hust" | "zhihuishu" | "ulearning";
+
 export interface SessionInfo {
+  platform: Platform;
   cookieSource: string;
   cookieCount: number;
 }
@@ -153,6 +157,32 @@ export interface WatchSummary {
   failed: number;
   errors: string[];
   cancelled: boolean;
+}
+
+export interface DocumentRequest {
+  course: string;
+  job?: string | null;
+  includeCompleted?: boolean;
+  dryRun?: boolean;
+  maxDocuments?: number | null;
+}
+
+export interface DocumentResult {
+  jobId: string;
+  name: string;
+  chapter: string;
+  status: "completed" | "failed" | "dry_run";
+  message: string | null;
+}
+
+export interface DocumentSummary {
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: boolean;
+  dryRun: boolean;
+  errors: string[];
+  documents: DocumentResult[];
 }
 
 export interface QuizRequest {
@@ -202,6 +232,17 @@ export type JobProgress =
       status: "running" | "passed" | "failed" | "error" | "dry_run";
       message: string | null;
     }
+  | { kind: "documentPlan"; total: number; dryRun: boolean }
+  | {
+      kind: "document";
+      index: number;
+      total: number;
+      chapter: string;
+      name: string;
+      jobId: string;
+      status: "running" | "completed" | "failed" | "dry_run";
+      message: string | null;
+    }
   | {
       kind: "quizPlan";
       total: number;
@@ -220,4 +261,331 @@ export type JobProgress =
       questionCount: number;
       status: "running" | "submitted" | "failed" | "skipped" | "dry_run";
       message: string | null;
+    }
+  // ---- Zhihuishu (知到) jobs -------------------------------------------
+  | {
+      kind: "zhsPlan";
+      /** `zhs-watch` or `zhs-meet-watch`. */
+      job: string;
+      /** `videos` or `meet`. */
+      stage: string;
+      total: number;
+      dryRun: boolean;
+      skipped: number;
+    }
+  | {
+      kind: "zhsStage";
+      job: string;
+      /** `loading`, `videos`, `meet_list`, `meet_minutes`, `verify`, `circuit_check`. */
+      stage: string;
+      done: number;
+      total: number;
+      label: string;
+      message: string;
+    }
+  | {
+      kind: "zhsTarget";
+      job: string;
+      index: number;
+      total: number;
+      label: string;
+      status:
+        | "running"
+        | "ok"
+        | "skip"
+        | "dry_run"
+        | "failed"
+        | "cancelled"
+        | "circuit_broken";
+      message: string | null;
+      targetMinutes: number | null;
+      watchedBefore: number | null;
+    }
+  // ---- Ulearning (优学院) jobs ------------------------------------------
+  | {
+      kind: "ulPlan";
+      /** `ul-watch`. */
+      job: string;
+      total: number;
+      actionable: number;
+      skipped: number;
+      dryRun: boolean;
+    }
+  | {
+      kind: "ulStage";
+      job: string;
+      /** `directory`, `plan`, `submit`, or `verify`. */
+      stage: string;
+      done: number;
+      total: number;
+      label: string;
+      message: string;
+    }
+  | {
+      kind: "ulTarget";
+      job: string;
+      index: number;
+      total: number;
+      label: string;
+      status:
+        | "ok"
+        | "skip"
+        | "dry_run"
+        | "failed"
+        | "cancelled"
+        | "circuit_broken";
+      message: string | null;
+      completionStatus: number | null;
     };
+
+// ---- Zhihuishu (知到) DTOs -------------------------------------------------
+// Mirrors `src-tauri/src/zhihuishu.rs`; camelCase over the IPC boundary.
+
+export interface ZhsCourse {
+  recruitId: number;
+  courseId: number;
+  classId: number | null;
+  schoolId: number | null;
+  name: string;
+  teacher: string;
+  secret: string | null;
+  isApply: number | null;
+  courseType: string | null;
+  progress: number | null;
+  studiedLessonCount: number | null;
+  totalLessonCount: number | null;
+  status: number | null;
+}
+
+export interface ZhsVideo {
+  videoId: number;
+  /** Small-lesson id (`videoSmallLessons[].id`), also called `lessonVideoId`. */
+  lessonVideoId: number;
+  videoSec: number;
+  isStudied: number | null;
+  name: string;
+}
+
+export interface ZhsLesson {
+  lessonId: number;
+  name: string;
+  isStudied: number | null;
+  videoId: number | null;
+  videoSec: number | null;
+  videos: ZhsVideo[];
+}
+
+export interface ZhsChapter {
+  chapterId: number | null;
+  name: string;
+  learningLessonStatus: number | null;
+  isPass: number | null;
+  limitChecked: boolean | null;
+  lessons: ZhsLesson[];
+}
+
+export interface ZhsCourseDetail {
+  course: ZhsCourse;
+  chapters: ZhsChapter[];
+}
+
+export interface ZhsExceptionStatus {
+  lock: boolean;
+  abnormal: boolean;
+  message: string;
+}
+
+export interface ZhsMeet {
+  meetCourseId: number;
+  liveId: number;
+  videoId: number | null;
+  recruitId: number;
+  courseId: number;
+  name: string;
+  teacher: string;
+  startTime: string | null;
+  endTime: string | null;
+  replayUrl: string | null;
+  examUrl: string | null;
+  durationSecs: number | null;
+  status: number | null;
+}
+
+export interface ZhsMeetProgress {
+  totalMinutes: number;
+  watchedMinutes: number[];
+  watchedCount: number;
+  percent: number;
+}
+
+export type ZhsWatchState =
+  | "ok"
+  | "skip"
+  | "dry_run"
+  | "failed"
+  | "cancelled"
+  | "circuit_broken";
+
+export interface ZhsVideoOutcome {
+  label: string;
+  state: ZhsWatchState;
+  watchState: number | null;
+  message: string;
+}
+
+export interface ZhsWatchSummary {
+  total: number;
+  ok: number;
+  skipped: number;
+  failed: number;
+  cancelled: boolean;
+  dryRun: boolean;
+  outcomes: ZhsVideoOutcome[];
+  errors: string[];
+}
+
+export interface ZhsMeetOutcome {
+  label: string;
+  targetMinutes: number;
+  watchedBefore: number;
+  submitted: number;
+  skipped: number;
+  failed: number;
+  watchedAfter: number | null;
+  state: ZhsWatchState;
+  message: string;
+}
+
+export interface ZhsMeetWatchSummary {
+  meets: number;
+  submitted: number;
+  skipped: number;
+  failed: number;
+  cancelled: boolean;
+  dryRun: boolean;
+  outcomes: ZhsMeetOutcome[];
+  errors: string[];
+}
+
+export interface ZhsWatchRequest {
+  /** Course id, recruit id, or a study-page reference. */
+  course: string;
+  dryRun?: boolean;
+  includeCompleted?: boolean;
+  maxVideos?: number | null;
+  verify?: boolean;
+}
+
+export interface ZhsMeetWatchRequest {
+  course: string;
+  /** Only process this `meetCourseId`; omit to process every replay. */
+  meet?: number | null;
+  dryRun?: boolean;
+  /** Percent (90) or fraction (0.9). */
+  coverageMin?: number;
+  coverageMax?: number;
+  delayMinMs?: number;
+  delayMaxMs?: number;
+  circuitBreaker?: boolean;
+  checkEvery?: number;
+}
+
+// ---- Ulearning (优学院) DTOs ----------------------------------------------
+// Mirrors `src-tauri/src/ulearning.rs`; camelCase over the IPC boundary.
+
+export interface UlCourse {
+  textbookId: number;
+  ocId: number | null;
+  classId: number | null;
+  name: string;
+  author: string | null;
+  remainingSecs: number | null;
+  expired: boolean;
+}
+
+export type UlPageKind = "video" | "practice" | "document";
+
+export interface UlPage {
+  id: number;
+  /** Page id used as `pageid` in the study record. */
+  relationId: number;
+  name: string;
+  contentType: number;
+  kind: UlPageKind;
+}
+
+export interface UlSection {
+  id: number;
+  idForClass: number | null;
+  name: string;
+  hide: number | null;
+  pages: UlPage[];
+  /** `completion_status == 1`; `null` until the completion scan runs. */
+  completed: boolean | null;
+}
+
+export interface UlChapter {
+  id: number;
+  idForClass: number | null;
+  name: string;
+  hide: number | null;
+  sections: UlSection[];
+}
+
+export interface UlCourseDetail {
+  course: UlCourse;
+  chapters: UlChapter[];
+  remainingSecs: number | null;
+  className: string | null;
+  expired: boolean;
+}
+
+export interface UlCheck extends UlCourseDetail {
+  sectionCount: number;
+  completedSections: number;
+  videoPages: number;
+  practicePages: number;
+  documentPages: number;
+  cancelled: boolean;
+}
+
+export interface UlWatchRequest {
+  /** Course id / player URL / `textbookId;classId`. */
+  course: string;
+  dryRun?: boolean;
+  includeCompleted?: boolean;
+  maxSections?: number | null;
+  delayMinMs?: number;
+  delayMaxMs?: number;
+  stopOnError?: boolean;
+  verify?: boolean;
+}
+
+export type UlWatchState =
+  | "ok"
+  | "skip"
+  | "dry_run"
+  | "failed"
+  | "cancelled"
+  | "circuit_broken";
+
+export interface UlOutcome {
+  label: string;
+  sectionId: number;
+  /** `complete`, `complete_practice`, `skip_done`, `skip_unsupported`, `skip_expired`. */
+  action: string;
+  state: UlWatchState;
+  completionStatus: number | null;
+  message: string;
+}
+
+export interface UlWatchSummary {
+  total: number;
+  ok: number;
+  skipped: number;
+  failed: number;
+  cancelled: boolean;
+  dryRun: boolean;
+  outcomes: UlOutcome[];
+  errors: string[];
+}

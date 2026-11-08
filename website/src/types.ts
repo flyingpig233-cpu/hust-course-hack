@@ -162,6 +162,47 @@ export interface QuizRequest {
   maxWorks?: number | null;
 }
 
+export interface DocumentRequest {
+  course: string;
+  /** Only process this document job id (used by a single task-row button). */
+  job?: string | null;
+  includeCompleted?: boolean;
+  dryRun?: boolean;
+  maxDocuments?: number | null;
+}
+
+/**
+ * One document task point that can be reported as read. The `card_id` is
+ * required to fetch the attachment `jtoken` from `phone/wxcard`; documents
+ * whose card id is missing are skipped while planning.
+ */
+export interface DocumentTarget {
+  course_id: string;
+  class_id: string;
+  cpi: string;
+  knowledge_id: string;
+  knowledge_title: string;
+  card_id: string;
+  job_id: string;
+  object_id: string | null;
+  name: string;
+  size_bytes: number | null;
+  content_ext: string | null;
+  completed: boolean | null;
+}
+
+export interface DocumentSummary {
+  total: number;
+  /** Documents the server accepted (`status: true`). */
+  passed: number;
+  failed: number;
+  /** Targets skipped because the card had no jtoken for them. */
+  skipped: number;
+  errors: string[];
+  cancelled: boolean;
+  dryRun: boolean;
+}
+
 export interface QuizWorkResult {
   workId: string;
   workName: string;
@@ -209,6 +250,16 @@ export type JobProgress =
       incomplete: number;
       dryRun: boolean;
       bankQuestions: number;
+    }
+  | { kind: "documentPlan"; total: number; dryRun: boolean; skipped: number }
+  | {
+      kind: "document";
+      index: number;
+      total: number;
+      label: string;
+      jobId: string;
+      status: "running" | "passed" | "failed" | "skipped" | "error" | "dry_run";
+      message: string | null;
     }
   | {
       kind: "quiz";

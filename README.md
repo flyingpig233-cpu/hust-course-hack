@@ -1,17 +1,29 @@
-# HUST SmartCourse 课程助手
+# 华科课程助手（SmartCourse / 知到 / 优学院）
 
-Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hust.edu.cn` 上当前账号的课程数据：
+Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hust.edu.cn`（学在华科大）、
+知到（智慧树）与优学院（U学，`*.ulearning.cn`）上当前账号的课程数据：
 
-- 课程列表和课程基本信息（课程 id、班级 id、cpi、封面、详情页）
+- 课程列表、章节目录树、任务点、视频/文档/测验数据（学在华科大）；
+- 知到（智慧树）共享课视频与见面课回放考勤；
+- 优学院（U学）课程目录、视频/图文与章节练习。
 - 章节目录树（章 / 节 / 知识点，含完成状态）
 - 每个知识点下的卡片和任务点
 - 视频任务点：文件名、大小、时长、完成状态、观看进度、截图、签名播放/下载地址
-- 文档任务点：文件名、大小、类型、objectId、jobId
+- 文档任务点：文件名、大小、类型、objectId、jobId；可通过 `doc` / 桌面端“完成文档”直接上报完成
 - 章节测验/练习题：题目、题型、选项、我的答案、正确答案、得分（已批改的作业才有答案）
 - 作业页面状态：`graded`（查看已批改）或 `in_progress`（做题页）
 
 网络层与解析层完全独立于 Tauri/UI，桌面壳通过 Tauri command 直接调用
 `SmartCourseClient`。
+
+> 0.3.0 新增：CLI、桌面 GUI 和网页版都可直接完成 PDF 文档任务点
+> （`/mooc-ans/phone/wxcard` 取 `jtoken` → `/mooc-ans/job/document`）。协议按 Chaoxing
+> 官方客户端移植，并已在 2026-11-07 用真实账号实测（49/49 个文档返回 `status: true`）；
+> 首次使用仍建议先试运行并只跑一个文档。
+>
+> 0.3.0 同时新增优学院（U学）平台，并把三平台（学在华科大 / 知到 / 优学院）统一到
+> CLI、桌面 GUI、网站版和浏览器助手四个入口；协议调研与分析报告见
+> `docs/ulearning/`、`docs/analysis/`。
 
 ## 桌面 GUI（Tauri 2）
 
@@ -33,7 +45,8 @@ npm run tauri dev      # 开发：Vite + 桌面窗口
 npm run tauri build    # 生产：构建安装包
 ```
 
-界面能力：
+界面能力（连接页可选择三个平台：学在华科大 / 知到（智慧树）/ 优学院（U学），各自独立登录窗口与
+课程页；所有写操作默认试运行，真实执行需勾选风险确认）：
 
 | 页面 | 功能 |
 | --- | --- |
@@ -42,7 +55,9 @@ npm run tauri build    # 生产：构建安装包
 | 课程详情 | 目录树（章 / 节 / 知识点 / 卡片 / 任务点）、任务点表格与筛选、测验题目与答案、诊断信息 |
 | 测验任务 | 右上角“完成题目”或测验页“提交本题”：内置题库匹配答案，已批改作业跳过，题库缺答案的作业不提交；默认试运行，确认后才发送真实提交 |
 | 视频任务 | 整门课或单视频上报；试运行只生成签名 URL；可设置心跳间隔、延迟、数量上限并随时停止 |
-| 工具 | 导出课程 JSON、在浏览器打开课程页、查看并保存 Tampermonkey 课程助手脚本（视频 / 文档） |
+| 文档任务 | 顶部“完成文档”或文档行“完成”：按卡片取 `jtoken` 后调用 `/mooc-ans/job/document`；默认试运行，逐条显示服务端结果 |
+| 平台切换 | 连接页选择学在华科大 / 知到 / 优学院；知到含见面课页，优学院含章/节/页课程树与视频/章节练习秒刷 |
+| 工具 | 导出课程 JSON、在浏览器打开课程页、查看并保存 Tampermonkey 课程助手脚本（视频 / 文档，浏览器兜底） |
 
 登录流程：点击“打开 HUST 登录窗口”后，应用打开
 `https://smartcourse.hust.edu.cn/passport`（跳转到 `pass.hust.edu.cn` 统一身份认证）。
@@ -59,6 +74,11 @@ npm run tauri build    # 生产：构建安装包
 弹窗默认处于“试运行”，只刷新课程并生成匹配计划；取消勾选试运行、再勾选“我确认提交未批改作业”
 后才会发送真实提交请求。已批改作业自动跳过，题目没抓全或题库缺少答案的作业只会在日志里标记为
 跳过，不会部分提交。成功后作业在界面上临时显示“已提交”，最终结果仍以平台批改为准。
+
+“完成文档”同样默认试运行：只刷新课程并列出待完成的 PDF 任务点，不发请求；取消试运行后才逐个
+调用 `/mooc-ans/phone/wxcard` 取 `jtoken` 并上报 `/mooc-ans/job/document`，只有服务端
+`status: true` 才在界面上标记完成。文档完成状态在课程树里通常是“未知”，以弹窗日志和平台任务点
+页面为准。浏览器脚本仍保留作为 viewer 路径兜底。
 
 `npm run dev` 后直接在普通浏览器打开 `http://localhost:1420` 会进入**演示模式**
 （`ui/src/mock.ts` 内置示例课程，不访问平台），方便调整界面；在 Tauri 窗口中运行时自动使用
@@ -82,6 +102,12 @@ cargo run -- --cookies "D:\cookies.txt" dump --out courses.json
 
 # 只打印目录和任务点，不抓题目/视频地址
 cargo run -- --cookies "D:\cookies.txt" --no-questions --no-video-info tree --course 17310000026063
+
+# 只看文档完成计划，不发请求
+cargo run -- --cookies "D:\cookies.txt" doc --course 17310000026063 --dry-run
+
+# 完成整门课的文档（PDF）任务点
+cargo run -- --cookies "D:\cookies.txt" doc --course 17310000026063
 ```
 
 常用参数（全局参数，放在子命令前后都可以）：
@@ -183,9 +209,9 @@ cargo run -- --cookies "D:\cookies.txt" --no-questions --no-video-info tree --co
 脚本走的是已经在真实账号上验证过的播放器路径：覆盖 `reportProgress`、seek 到结尾、
 触发 `ended`，最后调用平台的 `ed_complete`。
 
-文档（PDF）走平台自己的内联 viewer：脚本找到课程页里的 `iframe.insertdoc-online-pdf`，
-调用 viewer 暴露的 `finishJob()`，由平台发 `/mooc-ans/job/document` 并在成功后加
-`ans-job-finished`。脚本不复制 `jtoken`，也不伪造阅读进度。
+文档（PDF）在 CLI、桌面端和网站版里走直接上报；浏览器脚本仍保留 viewer 路径作为兜底：
+脚本找到课程页里的 `iframe.insertdoc-online-pdf`，调用 viewer 暴露的 `finishJob()`，由平台发
+`/mooc-ans/job/document` 并在成功后加 `ans-job-finished`。
 
 ```powershell
 cargo run -- helper --out video-helper.user.js
@@ -266,6 +292,50 @@ md5("[clazzId][userid][jobid][objectId][playingTime*1000][d_yHJ!$pdA~5][duration
 
 `--step`/`--delay-ms` 用于平台加强节奏校验时放慢请求；默认快速模式与验证时的播放器行为一致。
 
+## 直接完成文档（doc）
+
+`doc` 不打开浏览器，直接走平台的文档任务点协议：
+
+1. `GET /mooc-ans/phone/wxcard?cardid&courseid&knowledgeid&clazzid&cpi&ut=s&isMicroCourse=false`
+   返回卡片 HTML，其中的 `window.AttachmentSetting` JSON 为每个附件提供 `jtoken`；
+2. `GET /mooc-ans/job/document?jobid&knowledgeid&courseid&clazzid&jtoken&checkMicroTopic=true&microTopicId=undefined&courseEngineInfo=false`
+   只有响应 `status: true` 才视为服务端已计入完成。
+
+这条请求与平台 PDF viewer 的 `finishJob()` 相同。协议来自 Chaoxing 官方客户端 7.0.2
+（`flutter_chaoxing` 0.4.2 的 `fetchDocumentJobs` / `reportDocumentRead`）；Rust 实现在
+`src/documents.rs`，桌面端和网站版复用同一套字段与判定。
+
+```powershell
+# 只看计划，不发请求
+cargo run -- --cookies "D:\cookies.txt" doc --course 17310000026063 --dry-run
+
+# 完成整门课文档
+cargo run -- --cookies "D:\cookies.txt" doc --course 17310000026063
+
+# 只处理一个任务点（job id 来自 tree/dump 里的 job_id）
+cargo run -- --cookies "D:\cookies.txt" doc --course 17310000026063 --job YOUR_JOB_ID
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--course` | 必填 | 课程 id、班级 id 或课程名 |
+| `--job` | 无 | 只处理指定 job id |
+| `--include-completed` | 关闭 | 连平台已标记完成的文档也重新上报 |
+| `--dry-run` | 关闭 | 只打印待完成文档，不发请求 |
+| `--max-documents` | 无 | 最多处理多少个文档 |
+
+第一次运行建议先 `--dry-run`，再用 `--job <jobid>` 只确认一个文档，最后跑整门课。文档的
+完成状态在课程树里通常是 `null`（平台 `mArg` 不返回），不要据此判断失败；以 `doc` 输出和平台
+任务点页面的状态为准。Office/WPS 附件可能不走 `/mooc-ans/job/document`；如果 `wxcard` 没有返回
+对应 `jtoken`，该文档会报错并跳过。
+
+**验证状态**：2026-11-07 已用真实账号在 HUST 上验证：`/mooc-ans/phone/wxcard` 返回
+`window.AttachmentSetting` 与 `jtoken`，`/mooc-ans/job/document` 对
+《大学英语词汇解析(一)》全部 **49/49** 个文档返回 `status: true`；`doc` 命令实际完成整门课，
+无失败。`tests/documents_http.rs` 另外覆盖了协议参数和拒绝分支。桌面 GUI 复用同一个核心方法；
+网页版走同一协议但经桥接窗口，尚未单独在真实浏览器里跑过整门课。仍建议第一次先 `--job`
+单个确认；Office/WPS 文档若没有对应 `jtoken` 会报错跳过。
+
 ## 一键完成题目（核心库接口）
 
 `src/answers.rs` 加载 `test-data/answer-bank.json`（GUI 使用编译进应用的副本），
@@ -326,6 +396,122 @@ for outcome in outcomes {
 题库的 `low` / `medium` 置信度题目（尤其是填空题）建议提交前人工复核，具体题号见
 `test-data/README.md` 的 `review` 部分。
 
+## 知到（智慧树）视频与见面课秒刷
+
+除学在华科大之外，本仓库也支持知到（智慧树）共享课：
+
+- 课程/章节/视频树：只读抓取，含视频时长与完成状态；
+- **视频课秒刷**：把未完成视频直接标记为已完成（`watchState=1`）；
+- **见面课回放考勤秒刷**：按"随机 90%–100% 覆盖率 + 每次 2–6 秒随机间隔 + 每 10 条检查异常接口"逐分钟上报，达到页面要求的观看比例；
+- 不支持：随堂测验、考试、直播实时参与、翻转课/融合课/智能课（polymas）。
+
+### CLI
+
+```powershell
+$zhs = "D:\zhs-cookies.txt"
+
+# 课程列表（接口未确认时可用学习页 URL / recruitAndCourseId 兜底）
+cargo run -- --cookies $zhs zhs list
+cargo run -- --cookies $zhs zhs tree --course "<学习页 URL 或 recruitAndCourseId>"
+
+# 视频课：先 dry-run 看计划，再真实上报
+cargo run -- --cookies $zhs zhs watch --course "..." --dry-run
+cargo run -- --cookies $zhs zhs watch --course "..."
+
+# 见面课
+cargo run -- --cookies $zhs zhs meet list --course "..."
+cargo run -- --cookies $zhs zhs meet status --course "..." --meeting <meetCourseId>
+cargo run -- --cookies $zhs zhs meet watch --course "..." --meeting <meetCourseId> --dry-run
+cargo run -- --cookies $zhs zhs meet watch --course "..." --all --coverage 0.90-1.00 --delay-ms 2000-6000
+
+# 视频课/见面课异常状态
+cargo run -- --cookies $zhs zhs check --course "..."
+```
+
+常用参数：`--dry-run` 只打印计划；`--yes` 跳过交互确认；`--max-videos`；`--include-completed`；见面课另有 `--coverage`、`--delay-ms`、`--check-every`、`--no-circuit-breaker`。
+
+### 桌面 GUI
+
+连接页选择"知到"平台，内嵌登录窗口打开 `https://onlineweb.zhihuishu.com/onlinestuh5`，登录成功后读取 Cookie（含 HttpOnly）并校验会话。课程页可"秒刷本课视频"，见面课页可查看回放进度并"秒刷回放考勤"；默认 dry-run，真实执行需勾选风险确认，进度通过 `job-progress` 事件推送、可取消。
+
+### 浏览器助手脚本
+
+`userscripts/zhihuishu-miaoshua.user.js` 安装到 Tampermonkey 后，在知到学习页/回放页右下角出现面板，可一键秒刷本课视频或当前回放考勤，并可调整覆盖率与间隔。脚本优先复用页面自带的加密函数，缺失时使用内置 WebCrypto 实现。
+
+### 网站版
+
+`website/` 增加知到平台（课程/视频树/见面课/秒刷）。跨域请求由 `zhihuishu-bridge.user.js` 桥接脚本在知到页面内完成：安装桥接脚本、保持知到页面打开，即可在静态站操作。
+
+### 实现与风险
+
+- 请求体使用 `secretStr`（AES-128-CBC，固定 IV）；见面课 AES key 每次运行时通过 RSA 公钥握手获取，不硬编码；视频课 key 优先运行时获取，失败回退已验证常量；
+- 视频完成上报字段：`sdsew`（XOR 编码字段表）、`ewssw`（监测点序列）、`zwsds`（noteId 的 base64）；
+- 见面课考勤：`getWatchHistory` 查已看分钟，`setWatchHistorySecret` 逐分钟上报；
+- 平台有独立行为分析（`cheat/exceptionActionDetail`）：秒刷属高风险形态，本工具默认 dry-run、限速、随机覆盖率与熔断；请自行评估账号风险；
+- 课程列表接口（`queryShareCourseInfo`）尚未用真实抓包确认，失败时请用学习页 URL/`recruitAndCourseId` 兜底；见面课列表响应字段也可能随平台调整。
+
+## 优学院（U学）视频与章节练习秒刷
+
+除学在华科大、知到之外，本仓库也支持优学院（Ulearning / U学，`*.ulearning.cn`）学生端：
+
+- 课程目录（章 / 节 / 页）与完成状态：只读抓取；
+- **视频/图文秒刷**：调用学习记录接口把视频页标记为已完成（`status=1`）；
+- **章节练习秒刷**：从 `/questionAnswer/{qid}?parentId={pageId}` 取答案后按实测 payload 提交，
+  页面 `complete=1`、`score=100`；
+- 不支持：作业/测验（`utest`）、小组作业、考试、直播、课堂、考勤。
+
+### CLI
+
+```powershell
+$ul = "D:\ul-cookies.txt"
+
+# 课程目录（播放器 URL 或 textbookId=..&classId=..；优学院没有稳定的学生课程列表接口）
+cargo run -- --cookies $ul ulearn tree --course "textbookId=47353&classId=1019700"
+
+# 视频/图文：先看计划，再真实上报
+cargo run -- --cookies $ul ulearn watch --course "..." --dry-run
+cargo run -- --cookies $ul ulearn watch --course "..."
+
+# 含章节练习（从平台取答案后提交）
+cargo run -- --cookies $ul ulearn watch --course "..." --practice
+
+# 会话/课程可学性检查
+cargo run -- --cookies $ul ulearn check --course "..."
+```
+
+常用参数：`--dry-run` 只打印计划（不发 POST）；`--yes` 跳过确认；`--max-sections`；
+`--include-completed`；`--practice` 处理含练习的节；`--delay-ms 3000-5000` 限速。
+
+### 桌面 GUI
+
+连接页选择“优学院”，内嵌登录窗口打开 `https://umooc.ulearning.cn/pc.html#/login`，登录后读取
+`AUTHORIZATION` Cookie 并校验会话。课程页可“秒刷本课”（默认 dry-run，真实执行需勾选风险确认，
+可勾选包含章节练习），进度通过 `job-progress`/`ul-watch` 事件推送、可取消。
+
+### 浏览器助手脚本
+
+`userscripts/ulearning-miaoshua.user.js` 安装到 Tampermonkey 后，在
+`ua.ulearning.cn/learnCourse` 播放器页右下角出现面板，可秒刷本课视频或章节练习（dry-run 默认、
+3–5 秒随机限速、失败即停、判定刷分立即中止）。脚本优先使用页面自带的 CryptoJS，缺失时内置
+DES-ECB 实现。
+
+### 网站版
+
+`website/` 增加优学院平台并通过 `ulearning-bridge.user.js` 在优学院页面内转发同源请求；静态站不接触
+`AUTHORIZATION` token（由桥接脚本在页面内注入请求头）。
+
+### 实现与风险
+
+- 鉴权：Cookie `AUTHORIZATION`，每个请求同时带 `Authorization` 与 `UA-AUTHORIZATION` 头；
+  token 不打印、不跨窗口传递；
+- 记录上报：`POST /yws/api/personal/sync?courseType=4&platform=PC`，body 为
+  DES-ECB（key `12345678`，PKCS7，Base64）加密的 JSON；服务端返回 `1` 成功、`2` 判定刷分
+  （立即熔断停止整批）；
+- 目录/页面字段来自公开播放器 JS，**没有原始响应 fixture**；首次使用建议先 `--dry-run` 核对，
+  再单节灰度并回读 `/studyrecord/item` 的 `completion_status`；
+- 课程列表接口未抓包，CLI/GUI/网站均用播放器 URL 或 `textbookId/classId` 兜底；
+- 默认 dry-run、3–5 秒随机限速、失败即停；请自行评估账号与平台风控风险。
+
 ## 已验证的平台接口
 
 以下接口在 2026-10 使用真实学生账号验证通过。路径都相对于
@@ -341,13 +527,21 @@ for outcome in outcomes {
 | 章节测验题目 | GET | `/mooc-ans/api/work` | `workId&jobid&originJobId&knowledgeid&ktoken&clazzId&enc&courseid`，跟随 302 |
 | 视频签名地址 | GET | `/ananas/status/{objectId}` | `k={fid}` |
 | 视频进度上报 | GET | `/mooc-ans/multimedia/log/a/{cpi}/{dtoken}` | `clazzId&playingTime&duration&clipTime&objectId&otherInfo&courseId&jobid&userid&isdrag&view=pc&enc&rt&dtype=Video&_t&attDuration&attDurationEnc&courseEngineInfo` |
+| 文档附件 / jtoken | GET | `/mooc-ans/phone/wxcard` | `cardid&courseid&knowledgeid&clazzid&cpi&ut=s&isMicroCourse=false`，响应含 `window.AttachmentSetting` |
+| 文档完成上报 | GET | `/mooc-ans/job/document` | `jobid&knowledgeid&courseid&clazzid&jtoken&checkMicroTopic=true&microTopicId=undefined&courseEngineInfo=false`，仅 `status: true` 成功 |
 
 > 章节测验提交（`POST /mooc-ans/work/addStudentWorkNewWeb`）已在核心库实现，但还没有用真实
 > 作答会话验证，因此没有列入上表；验证通过后请补上并更新 `src/submit.rs` 的说明。
+>
+> 文档两行（`phone/wxcard`、`job/document`）来自 Chaoxing 官方客户端 7.0.2 的协议移植
+> （`flutter_chaoxing` 0.4.2）。2026-11-07 已用真实账号在 HUST 验证：`wxcard` 返回
+> `window.AttachmentSetting` 和 `jtoken`；`job/document` 对《大学英语词汇解析(一)》49 个文档
+> 全部返回 `status: true`。第一次使用时仍建议先用 `doc --dry-run` 和 `--job` 单个确认。
 
 `knowledge/cards` 返回的 HTML 里有一个内联 `mArg = {...};` JSON，任务点列表就在
 `mArg.attachments` 中；视频/文档/测验的 `jobid`、`objectid`、`workid`、完成状态和
-观看进度都来自这里。
+观看进度都来自这里。文档的 `jtoken` 不在 `mArg` 里，需要按卡片 id 调 `/mooc-ans/phone/wxcard`
+再取 `window.AttachmentSetting.attachments[].jtoken`。
 
 ## 库用法
 
@@ -393,5 +587,14 @@ let client = SmartCourseClient::from_cookie_header("name=value; other=value")?;
 - 平台可能把“课程存在但没有章节”的课程返回为空目录（本账号的军事理论、信息技术导论、
   华科大校史就是这种情况），这是平台数据，不是抓取失败。
 - 单个知识点/卡片/作业失败不会中断整门课程，错误会记录在 `stats.errors`。
+- 文档完成依赖 `/mooc-ans/phone/wxcard` 返回的 `jtoken`；该 token 是页面/附件绑定的短期凭证，
+  每次完成都重新获取，不写入磁盘。只有 `/mooc-ans/job/document` 返回 `status: true` 才算完成，
+  命令不会在本地伪造完成状态。
+- 优学院（U学）的 `AUTHORIZATION` token 不打印、不跨窗口；学习记录 body 用前端硬编码密钥
+  DES 加密，平台改版时 `src/ulearning/cipher.rs` 与 `website/src/core/ul/crypto.ts` 都要同步。
+- 优学院的目录/页面字段来自公开播放器 JS（无原始响应 fixture），首次使用先 `--dry-run` 核对；
+  服务端返回 `2` 表示判定刷分，工具会立即停止整批。
+- 三个平台的写操作（视频/文档/测验/文档/练习）默认都是 dry-run 或需勾选风险确认；真实执行前
+  请先单条灰度并回读平台状态。
 - 平台改版时优先检查 `stats.errors` 和题目解析结果；解析器依赖的 class 名集中在
   `src/parse.rs`。

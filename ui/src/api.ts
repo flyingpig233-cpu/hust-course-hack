@@ -8,16 +8,34 @@ import type {
   CourseDetail,
   CourseSummary,
   CrawlOptions,
+  DocumentRequest,
+  DocumentSummary,
   JobProgress,
+  Platform,
   QuizRequest,
   QuizSummary,
   SessionInfo,
+  UlCheck,
+  UlCourse,
+  UlCourseDetail,
+  UlWatchRequest,
+  UlWatchSummary,
   WatchRequest,
   WatchSummary,
+  ZhsCourse,
+  ZhsCourseDetail,
+  ZhsExceptionStatus,
+  ZhsMeet,
+  ZhsMeetProgress,
+  ZhsMeetWatchRequest,
+  ZhsMeetWatchSummary,
+  ZhsWatchRequest,
+  ZhsWatchSummary,
 } from "./types";
 
 const tauriApi = {
-  openLoginWindow: () => invoke<void>("open_login_window"),
+  openLoginWindow: (platform: Platform) =>
+    invoke<void>("open_login_window", { platform }),
   sessionInfo: () => invoke<SessionInfo | null>("session_info"),
   disconnect: () => invoke<void>("disconnect"),
   listCourses: () => invoke<CourseSummary[]>("list_courses"),
@@ -25,6 +43,8 @@ const tauriApi = {
     invoke<CourseDetail>("fetch_course", { courseId, options }),
   watchCourse: (request: WatchRequest) =>
     invoke<WatchSummary>("watch_course", { request }),
+  completeDocuments: (request: DocumentRequest) =>
+    invoke<DocumentSummary>("complete_documents", { request }),
   completeQuizzes: (request: QuizRequest) =>
     invoke<QuizSummary>("complete_quizzes", { request }),
   answerBankInfo: () => invoke<AnswerBankInfo>("answer_bank_info"),
@@ -32,6 +52,33 @@ const tauriApi = {
   helperScript: () => invoke<string>("helper_script"),
   saveTextFile: (path: string, contents: string) =>
     invoke<void>("save_text_file", { path, contents }),
+
+  // ---- Zhihuishu (知到) -------------------------------------------------
+  zhsListCourses: () => invoke<ZhsCourse[]>("zhs_list_courses"),
+  zhsAddCourse: (reference: string) =>
+    invoke<ZhsCourse>("zhs_add_course", { reference }),
+  zhsCourseDetail: (courseId: string) =>
+    invoke<ZhsCourseDetail>("zhs_course_detail", { courseId }),
+  zhsWatchVideos: (request: ZhsWatchRequest) =>
+    invoke<ZhsWatchSummary>("zhs_watch_videos", { request }),
+  zhsMeetList: (courseId: string) =>
+    invoke<ZhsMeet[]>("zhs_meet_list", { courseId }),
+  zhsMeetProgress: (courseId: string, meetId: number) =>
+    invoke<ZhsMeetProgress>("zhs_meet_progress", { courseId, meetId }),
+  zhsMeetWatch: (request: ZhsMeetWatchRequest) =>
+    invoke<ZhsMeetWatchSummary>("zhs_meet_watch", { request }),
+  zhsExceptionStatus: (courseId: string) =>
+    invoke<ZhsExceptionStatus>("zhs_exception_status", { courseId }),
+  zhsCancelJob: () => invoke<void>("zhs_cancel_job"),
+
+  // ---- Ulearning (优学院) -----------------------------------------------
+  ulListCourses: () => invoke<UlCourse[]>("ul_list_courses"),
+  ulCourseDetail: (courseId: string) =>
+    invoke<UlCourseDetail>("ul_course_detail", { courseId }),
+  ulCheck: (courseId: string) => invoke<UlCheck>("ul_check", { courseId }),
+  ulWatch: (request: UlWatchRequest) =>
+    invoke<UlWatchSummary>("ul_watch", { request }),
+  ulCancelJob: () => invoke<void>("ul_cancel_job"),
 };
 
 export type Backend = typeof tauriApi;

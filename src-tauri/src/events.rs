@@ -28,6 +28,20 @@ pub enum JobProgress {
         status: String,
         message: Option<String>,
     },
+    /// The course was refreshed and document task points were collected.
+    DocumentPlan { total: usize, dry_run: bool },
+    /// State change for one document task point in the completion queue.
+    Document {
+        /// 1-based position in the queue.
+        index: usize,
+        total: usize,
+        chapter: String,
+        name: String,
+        job_id: String,
+        /// `running`, `completed`, `failed`, or `dry_run`.
+        status: String,
+        message: Option<String>,
+    },
     /// The course was refreshed and quiz works were planned.
     QuizPlan {
         total: usize,
@@ -48,5 +62,81 @@ pub enum JobProgress {
         /// `running`, `submitted`, `failed`, `skipped`, or `dry_run`.
         status: String,
         message: Option<String>,
+    },
+    /// A Zhihuishu job planned its targets.
+    ///
+    /// `job` is `zhs-watch` or `zhs-meet-watch`; `stage` is `videos` or `meet`.
+    ZhsPlan {
+        job: String,
+        stage: String,
+        total: usize,
+        dry_run: bool,
+        skipped: usize,
+    },
+    /// One Zhihuishu progress transition (video target, replay minute, …).
+    ///
+    /// Never carries cookies, `secretStr` values or signed URLs.
+    ZhsStage {
+        job: String,
+        /// `loading`, `videos`, `meet_list`, `meet_minutes`, `verify`, or
+        /// `circuit_check`.
+        stage: String,
+        done: usize,
+        total: usize,
+        label: String,
+        message: String,
+    },
+    /// Terminal state of one Zhihuishu target (a video or a meet replay).
+    ZhsTarget {
+        job: String,
+        /// 1-based position in the queue.
+        index: usize,
+        total: usize,
+        label: String,
+        /// `running`, `ok`, `skip`, `dry_run`, `failed`, `cancelled`, or
+        /// `circuit_broken`.
+        status: String,
+        message: Option<String>,
+        /// Replay goal in minutes (meet jobs only).
+        target_minutes: Option<u32>,
+        /// Watched minutes before the run (meet jobs only).
+        watched_before: Option<usize>,
+    },
+    /// An Ulearning job planned its sections.
+    ///
+    /// `job` is `ul-watch`; `total` counts every scanned section, `actionable`
+    /// the sections that will be submitted, `skipped` the already-completed /
+    /// unsupported ones.
+    UlPlan {
+        job: String,
+        total: usize,
+        actionable: usize,
+        skipped: usize,
+        dry_run: bool,
+    },
+    /// One Ulearning progress transition (directory / plan / submit / verify).
+    ///
+    /// Never carries the `AUTHORIZATION` token, the DES payload or answers.
+    UlStage {
+        job: String,
+        /// `directory`, `plan`, `submit`, or `verify`.
+        stage: String,
+        done: usize,
+        total: usize,
+        label: String,
+        message: String,
+    },
+    /// Terminal state of one Ulearning section.
+    UlTarget {
+        job: String,
+        /// 1-based position in the queue.
+        index: usize,
+        total: usize,
+        label: String,
+        /// `ok`, `skip`, `dry_run`, `failed`, `cancelled`, or `circuit_broken`.
+        status: String,
+        message: Option<String>,
+        /// `completion_status` observed by the verification read.
+        completion_status: Option<i64>,
     },
 }
