@@ -63,6 +63,10 @@ pub const MODULE_VIDEO: u32 = 11;
 /// Meet-course (live replay) module id.
 pub const MODULE_MEET: u32 = 9;
 
+/// Shared-course list module id (measured 2026-11-08: `queryShareCourseInfo`
+/// encrypts with the runtime module-13 key, not module 11).
+pub const MODULE_COURSE_LIST: u32 = 13;
+
 /// XOR key for the video `sdsew` report.
 pub const XOR_KEY_VIDEO: &str = "zzpttjd";
 
@@ -101,6 +105,9 @@ pub const STUONLINE_BASE: &str = "https://stuonline.zhihuishu.com";
 
 /// Referer/origin of the student portal.
 pub const ONLINE_REFERER: &str = "https://online.zhihuishu.com/";
+
+/// Referer/origin of `onlineservice-api` (shared-course list).
+pub const ONLINE_SERVICE_REFERER: &str = "https://onlineweb.zhihuishu.com/";
 
 /// Replay page host (`lc`).
 pub const LC_BASE: &str = "https://lc.zhihuishu.com";

@@ -20,13 +20,15 @@ use anyhow::{Context, Result, bail};
 use reqwest::{
     Client, StatusCode,
     cookie::{CookieStore, Jar},
-    header::{ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, CONTENT_TYPE, HeaderName, USER_AGENT},
+    header::{
+        ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, CONTENT_TYPE, HeaderName, REFERER, USER_AGENT,
+    },
 };
 use serde_json::Value;
 use url::Url;
 
 use super::{
-    API_BASE, AUTH_COOKIE, WEB_BASE,
+    API_BASE, AUTH_COOKIE, COURSE_API_BASE, WEB_BASE,
     models::{
         UlCourse, UlCourseDetail, UlPage, UlPageContent, UlSectionRecord, UlSyncOutcome, UlUser,
     },
@@ -51,6 +53,12 @@ const PLAYER_TOKEN_COOKIE: &str = "token";
 /// Browser user agent used for all requests.
 const UL_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
                              (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+
+/// Referer the course portal sends to `courseapi` (measured 2026-11-08).
+const COURSE_API_REFERER: &str = "https://courseweb.ulearning.cn/";
+
+/// `Accept` header the course portal sends to `courseapi`.
+const COURSE_API_ACCEPT: &str = "application/json, text/javascript, */*; q=0.01";
 
 /// Normalized Ulearning API error.
 ///
@@ -104,6 +112,13 @@ fn unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+fn unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn login_expired(endpoint: &str, code: Option<i64>) -> UlError {
     UlError::new(
         code,
@@ -118,32 +133,49 @@ pub struct UlearningClient {
     http: Client,
     jar: Arc<Jar>,
     api_base: String,
+    course_api_base: String,
     web_base: String,
 }
 
 impl UlearningClient {
     /// Build a client from an already populated cookie jar (production hosts).
     pub fn with_cookie_jar(jar: Arc<Jar>) -> Result<Self> {
-        Self::with_cookie_jar_and_bases(jar, API_BASE, WEB_BASE)
+        Self::with_cookie_jar_and_endpoints(jar, API_BASE, COURSE_API_BASE, WEB_BASE)
     }
 
     /// Build a client from a cookie jar and an API base override.
     ///
-    /// Integration tests use this to point the client at a local mock server;
-    /// production callers should keep the default [`API_BASE`].
+    /// Integration tests use this to point **both** the study API and the course
+    /// API at a local mock server; production callers should keep
+    /// [`Self::with_cookie_jar`].
     pub fn with_cookie_jar_and_base(jar: Arc<Jar>, api_base: impl Into<String>) -> Result<Self> {
-        Self::with_cookie_jar_and_bases(jar, api_base, WEB_BASE)
+        let api_base = api_base.into();
+        Self::with_cookie_jar_and_endpoints(jar, api_base.clone(), api_base, WEB_BASE)
     }
 
-    /// Build a client from a cookie jar and API/web base overrides.
+    /// Build a client with study-API and web base overrides.
+    ///
+    /// The course API keeps its production host; use
+    /// [`Self::with_cookie_jar_and_endpoints`] to override it as well.
     pub fn with_cookie_jar_and_bases(
         jar: Arc<Jar>,
         api_base: impl Into<String>,
         web_base: impl Into<String>,
     ) -> Result<Self> {
+        Self::with_cookie_jar_and_endpoints(jar, api_base, COURSE_API_BASE, web_base)
+    }
+
+    /// Build a client with explicit study-API, course-API and web bases.
+    pub fn with_cookie_jar_and_endpoints(
+        jar: Arc<Jar>,
+        api_base: impl Into<String>,
+        course_api_base: impl Into<String>,
+        web_base: impl Into<String>,
+    ) -> Result<Self> {
         let api_base = api_base.into();
+        let course_api_base = course_api_base.into();
         let web_base = web_base.into();
-        if api_base.trim().is_empty() {
+        if api_base.trim().is_empty() || course_api_base.trim().is_empty() {
             bail!("优学院 API 地址不能为空");
         }
         let http = Client::builder()
@@ -171,72 +203,46 @@ impl UlearningClient {
             http,
             jar,
             api_base: api_base.trim_end_matches('/').to_string(),
+            course_api_base: course_api_base.trim_end_matches('/').to_string(),
             web_base: web_base.trim_end_matches('/').to_string(),
         })
     }
 
     /// Load cookies from a browser-exported Netscape `cookies.txt` file.
     pub fn from_cookie_file(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_cookie_file_with_base(path, API_BASE)
+        let jar = jar_from_cookie_file(path)?;
+        Self::with_cookie_jar(jar)
     }
 
-    /// Load a Netscape cookie file and use an API base override.
+    /// Load a Netscape cookie file and point both API bases at an override.
     pub fn from_cookie_file_with_base(
         path: impl AsRef<Path>,
         api_base: impl Into<String>,
     ) -> Result<Self> {
-        let path = path.as_ref();
-        let contents = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read cookie file {}", path.display()))?;
-        let records = crate::cookie::parse_netscape_cookies(&contents);
-        if records.is_empty() {
-            bail!(
-                "no cookies found in {} (expected a Netscape cookies.txt export for ulearning.cn)",
-                path.display()
-            );
-        }
-        let jar = jar_from_records(&records)?;
+        let jar = jar_from_cookie_file(path)?;
         Self::with_cookie_jar_and_base(jar, api_base)
     }
 
     /// Build a client from a raw `Cookie:` header value.
     pub fn from_cookie_header(header: &str) -> Result<Self> {
-        Self::from_cookie_header_with_base(header, API_BASE)
+        let jar = jar_from_cookie_header(header)?;
+        Self::with_cookie_jar(jar)
     }
 
     /// Build a client from a raw `Cookie:` header and an API base override.
     pub fn from_cookie_header_with_base(header: &str, api_base: impl Into<String>) -> Result<Self> {
-        let header = header
-            .trim()
-            .strip_prefix("Cookie:")
-            .unwrap_or(header.trim());
-        let mut pairs: Vec<(String, String)> = Vec::new();
-        for part in header.split(';') {
-            let part = part.trim();
-            if part.is_empty() {
-                continue;
-            }
-            let Some((name, value)) = part.split_once('=') else {
-                continue;
-            };
-            pairs.push((name.trim().to_string(), value.trim().to_string()));
-        }
-        if pairs.is_empty() {
-            bail!("no cookies found in the Cookie header");
-        }
-        let jar = Jar::default();
-        for host in COOKIE_HOSTS {
-            let url = Url::parse(host).context("invalid built-in Ulearning cookie host")?;
-            for (name, value) in &pairs {
-                jar.add_cookie_str(&format!("{name}={value}"), &url);
-            }
-        }
-        Self::with_cookie_jar_and_base(Arc::new(jar), api_base)
+        let jar = jar_from_cookie_header(header)?;
+        Self::with_cookie_jar_and_base(jar, api_base)
     }
 
     /// API base currently in use (production host unless overridden for tests).
     pub fn api_base(&self) -> &str {
         &self.api_base
+    }
+
+    /// Course API base (`courseapi.ulearning.cn` in production).
+    pub fn course_api_base(&self) -> &str {
+        &self.course_api_base
     }
 
     /// Web/player base currently in use.
@@ -302,6 +308,30 @@ impl UlearningClient {
         self.read_value(path, response).await
     }
 
+    /// GET one `courseapi` endpoint with the headers the course portal uses.
+    ///
+    /// Measured 2026-11-08: `Authorization: <token>`, `version: 1`,
+    /// `Content-Type: application/json`, `Referer: https://courseweb.ulearning.cn/`
+    /// and `Accept: application/json, text/javascript, */*; q=0.01`.
+    async fn get_course_api_value(&self, path: &str) -> Result<Value> {
+        let token = self.auth_token()?;
+        let url = format!("{}{}", self.course_api_base, path);
+        let response = self
+            .http
+            .get(&url)
+            .header(AUTHORIZATION, token.as_str())
+            .header(HeaderName::from_static("version"), "1")
+            .header(CONTENT_TYPE, "application/json")
+            .header(REFERER, COURSE_API_REFERER)
+            .header(ACCEPT, COURSE_API_ACCEPT)
+            .header(USER_AGENT, UL_USER_AGENT)
+            .send()
+            .await
+            .map_err(|error| error.without_url())
+            .with_context(|| format!("request to {path} failed"))?;
+        self.read_value(path, response).await
+    }
+
     /// GET one endpoint and return its raw text (used for JSONJ/JSONP bodies).
     async fn read_value(&self, path: &str, response: reqwest::Response) -> Result<Value> {
         let status = response.status();
@@ -360,13 +390,87 @@ impl UlearningClient {
         Ok(user)
     }
 
-    /// Student course list (`GET /courseListStu`).
+    /// Student course list (measured 2026-11-08).
     ///
-    /// The endpoint was not captured in the protocol analysis, so the result is
-    /// best effort; callers can fall back to a player URL / `textbookId`.
+    /// Two `courseapi` calls per course:
+    ///
+    /// 1. `GET /courses/students?keyword=&publishStatus=1&type=1&pn={pn}&ps={ps}&lang=zh`
+    ///    — `courseList[].id` is the external `ocId`;
+    /// 2. `GET /textbook/student/{ocId}/list?lang=zh` — `courseId` is the internal
+    ///    `textbookId`, `limit` its validity in Unix milliseconds.
+    ///
+    /// Courses whose textbook list is empty/unavailable are skipped with a log
+    /// line (no silent invention of a `textbookId`). When several textbooks are
+    /// listed, the smallest `textbookId` is used.
     pub async fn list_courses(&self) -> Result<Vec<UlCourse>> {
-        let value = self.get_value("/courseListStu").await?;
-        Ok(parse::parse_course_list(&value))
+        const PAGE_SIZE: u64 = 15;
+        let mut students = Vec::new();
+        let mut total_count = None;
+        for page_no in 1..=20u64 {
+            let path = format!(
+                "/courses/students?keyword=&publishStatus=1&type=1&pn={page_no}&ps={PAGE_SIZE}&lang=zh"
+            );
+            let value = self
+                .get_course_api_value(&path)
+                .await
+                .context("优学院课程列表接口不可用，请确认已登录并导出 cookies")?;
+            if total_count.is_none() {
+                total_count = parse::parse_students_total(&value);
+            }
+            let page = parse::parse_student_courses(&value);
+            let fetched = page.len();
+            students.extend(page);
+            let total = total_count.unwrap_or(students.len() as u64);
+            if fetched == 0
+                || students.len() as u64 >= total
+                || fetched < PAGE_SIZE as usize
+                || page_no == 20
+            {
+                break;
+            }
+        }
+        if students.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now_millis = unix_millis();
+        let mut courses = Vec::with_capacity(students.len());
+        for student in students {
+            let Some(oc_id) = student.oc_id.filter(|oc_id| *oc_id > 0) else {
+                continue;
+            };
+            let path = format!("/textbook/student/{oc_id}/list?lang=zh");
+            let textbooks = match self.get_course_api_value(&path).await {
+                Ok(value) => parse::parse_textbook_list(&value),
+                Err(error) => {
+                    log::warn!("优学院课程 {oc_id} 的教材列表读取失败：{error:#}");
+                    Vec::new()
+                }
+            };
+            let mut textbooks = textbooks;
+            textbooks.sort_by_key(|textbook| textbook.textbook_id);
+            let Some(textbook) = textbooks
+                .into_iter()
+                .find(|textbook| textbook.textbook_id > 0)
+            else {
+                log::warn!("优学院课程 {oc_id} 没有可用教材（textbookId 为空），已跳过");
+                continue;
+            };
+            let name = if textbook.name.trim().is_empty() {
+                student.name
+            } else {
+                textbook.name.clone()
+            };
+            courses.push(UlCourse {
+                oc_id: Some(oc_id),
+                textbook_id: textbook.textbook_id,
+                class_id: student.class_id,
+                name,
+                author: student.author,
+                remaining_secs: textbook.remaining_secs(now_millis),
+            });
+        }
+        Ok(courses)
     }
 
     /// Resolve a course reference into a [`UlCourse`] skeleton.
@@ -626,6 +730,51 @@ fn resolve_course_url(url: &Url) -> Result<UlCourse> {
     })
 }
 
+/// Read a Netscape cookie file into a jar.
+fn jar_from_cookie_file(path: impl AsRef<Path>) -> Result<Arc<Jar>> {
+    let path = path.as_ref();
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read cookie file {}", path.display()))?;
+    let records = crate::cookie::parse_netscape_cookies(&contents);
+    if records.is_empty() {
+        bail!(
+            "no cookies found in {} (expected a Netscape cookies.txt export for ulearning.cn)",
+            path.display()
+        );
+    }
+    jar_from_records(&records)
+}
+
+/// Build a jar from a raw `Cookie:` header value for every Ulearning host.
+fn jar_from_cookie_header(header: &str) -> Result<Arc<Jar>> {
+    let header = header
+        .trim()
+        .strip_prefix("Cookie:")
+        .unwrap_or(header.trim());
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for part in header.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = part.split_once('=') else {
+            continue;
+        };
+        pairs.push((name.trim().to_string(), value.trim().to_string()));
+    }
+    if pairs.is_empty() {
+        bail!("no cookies found in the Cookie header");
+    }
+    let jar = Jar::default();
+    for host in COOKIE_HOSTS {
+        let url = Url::parse(host).context("invalid built-in Ulearning cookie host")?;
+        for (name, value) in &pairs {
+            jar.add_cookie_str(&format!("{name}={value}"), &url);
+        }
+    }
+    Ok(Arc::new(jar))
+}
+
 /// Build a cookie jar from Netscape records, preserving domain attributes.
 fn jar_from_records(records: &[crate::cookie::CookieRecord]) -> Result<Arc<Jar>> {
     let jar = Jar::default();
@@ -739,5 +888,33 @@ mod tests {
             parse_sync_outcome(&serde_json::json!("bad")),
             UlSyncOutcome::Other(-1)
         );
+    }
+
+    #[test]
+    fn course_api_base_defaults_and_overrides() {
+        let client = bare_client();
+        assert_eq!(client.api_base(), API_BASE);
+        assert_eq!(client.course_api_base(), COURSE_API_BASE);
+
+        // The mock-injection constructor routes both APIs at the same server.
+        let mock = UlearningClient::with_cookie_jar_and_base(
+            Arc::new(Jar::default()),
+            "http://127.0.0.1:9",
+        )
+        .unwrap();
+        assert_eq!(mock.api_base(), "http://127.0.0.1:9");
+        assert_eq!(mock.course_api_base(), "http://127.0.0.1:9");
+
+        // All three bases can be overridden explicitly.
+        let explicit = UlearningClient::with_cookie_jar_and_endpoints(
+            Arc::new(Jar::default()),
+            "http://study",
+            "http://courseapi",
+            "http://web",
+        )
+        .unwrap();
+        assert_eq!(explicit.api_base(), "http://study");
+        assert_eq!(explicit.course_api_base(), "http://courseapi");
+        assert_eq!(explicit.web_base(), "http://web");
     }
 }

@@ -14,6 +14,7 @@
 	var UL_CHANNEL = "ul-bridge-v1";
 	var UL_PAGE_ORIGINS = ["https://courseweb.ulearning.cn", "https://ua.ulearning.cn"];
 	var UL_API_ORIGIN = "https://api.ulearning.cn";
+	var UL_COURSEAPI_ORIGIN = "https://courseapi.ulearning.cn";
 	var ROUTES = [
 		{
 			origin: UL_API_ORIGIN,
@@ -64,6 +65,16 @@
 			origin: UL_API_ORIGIN,
 			method: "POST",
 			path: /^\/user\/currentUnit$/
+		},
+		{
+			origin: UL_COURSEAPI_ORIGIN,
+			method: "GET",
+			path: /^\/courses\/students$/
+		},
+		{
+			origin: UL_COURSEAPI_ORIGIN,
+			method: "GET",
+			path: /^\/textbook\/student\/\d+\/list$/
 		}
 	];
 	var MAX_BODY_BYTES = 2e5;
@@ -186,6 +197,10 @@
 					headers.version = "1";
 				}
 				if (input.method === "POST") headers["Content-Type"] = "application/json;charset=UTF-8";
+				if (target.origin === "https://courseapi.ulearning.cn") {
+					headers["Content-Type"] = "application/json";
+					headers.Accept = "application/json, text/javascript, */*; q=0.01";
+				}
 				const response = await fetch(input.url, {
 					method: input.method ?? "GET",
 					body: input.method === "POST" ? input.body : void 0,

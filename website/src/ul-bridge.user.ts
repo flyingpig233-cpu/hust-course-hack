@@ -119,6 +119,11 @@ if ((UL_PAGE_ORIGINS as readonly string[]).includes(location.origin) && window.t
         headers.version = '1';
       }
       if (input.method === 'POST') headers['Content-Type'] = 'application/json;charset=UTF-8';
+      if (target.origin === UL_COURSEAPI_ORIGIN) {
+        // The course-list / textbook endpoints expect the courseweb AJAX headers.
+        headers['Content-Type'] = 'application/json';
+        headers.Accept = 'application/json, text/javascript, */*; q=0.01';
+      }
       const response = await fetch(input.url, {
         method: input.method ?? 'GET',
         body: input.method === 'POST' ? input.body : undefined,

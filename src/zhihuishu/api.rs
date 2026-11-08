@@ -31,10 +31,11 @@ use url::Url;
 use super::{
     APPCOMM_USER_BASE, COURSE_LIST_PATH, IM_BASE, IM_LIVE_VIDEOS_PATH, LIVE_BASE, LIVE_REFERER,
     LOGIN_USER_INFO_PATH, MEET_EXCEPTION_PATH, MEET_HISTORY_PATH, MEET_LIST_FALLBACK_PATH,
-    MEET_LIST_PATH, MEET_SUBMIT_PATH, MODULE_MEET, MODULE_VIDEO, ONLINE_BASE, ONLINE_REFERER,
-    ONLINE_SERVICE_BASE, PRELEARNING_NOTE_PATH, QUERY_COURSE_PATH, QUERY_STUY_INFO_PATH,
-    SAVE_INTERVAL_PATH, STUDY_BASE, STUDY_REFERER, STUONLINE_BASE, VIDEO_EXCEPTION_PATH,
-    VIDEO_LIST_PATH, VIDEO_MODULE_KEY_FALLBACK, XOR_KEY_COURSE, XOR_KEY_MEET, ZHS_USER_AGENT,
+    MEET_LIST_PATH, MEET_SUBMIT_PATH, MODULE_COURSE_LIST, MODULE_MEET, MODULE_VIDEO, ONLINE_BASE,
+    ONLINE_REFERER, ONLINE_SERVICE_BASE, ONLINE_SERVICE_REFERER, PRELEARNING_NOTE_PATH,
+    QUERY_COURSE_PATH, QUERY_STUY_INFO_PATH, SAVE_INTERVAL_PATH, STUDY_BASE, STUDY_REFERER,
+    STUONLINE_BASE, VIDEO_EXCEPTION_PATH, VIDEO_LIST_PATH, VIDEO_MODULE_KEY_FALLBACK,
+    XOR_KEY_COURSE, XOR_KEY_MEET, ZHS_USER_AGENT,
 };
 use super::{
     crypto::{self, ModuleKeyCache},
@@ -168,14 +169,26 @@ fn get_i64(item: &Value, keys: &[&str]) -> Option<i64> {
         .find_map(as_i64)
 }
 
-/// First present key with a non-empty string value.
+/// First present key with a non-empty value; numbers are rendered as text so
+/// numeric fields such as `courseType` keep working.
 fn get_str(item: &Value, keys: &[&str]) -> String {
     keys.iter()
         .filter_map(|key| item.get(*key))
-        .find_map(|value| value.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string()
+        .find_map(|value| match value {
+            Value::String(text) => Some(text.trim().to_string()),
+            Value::Number(_) => Some(value.to_string()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Parse a percentage that may be a number or a `"10.9%"` string.
+fn parse_percent(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.trim().trim_end_matches('%').trim().parse::<f64>().ok(),
+        _ => None,
+    }
 }
 
 /// First present key with a boolean value.
@@ -346,11 +359,28 @@ fn parse_course_list(value: &Value) -> Vec<ZhsCourse> {
     let data = value.get("data").unwrap_or(value);
     let items: &Vec<Value> = data
         .as_array()
-        .or_else(|| get_array(data, &["courseList", "shareCourseDtos", "list", "rows"]))
+        .or_else(|| {
+            get_array(
+                data,
+                &[
+                    "courseList",
+                    "courseOpenDtos",
+                    "shareCourseDtos",
+                    "list",
+                    "rows",
+                ],
+            )
+        })
         .or_else(|| {
             get_array(
                 reply_object(value),
-                &["courseList", "shareCourseDtos", "list", "rows"],
+                &[
+                    "courseList",
+                    "courseOpenDtos",
+                    "shareCourseDtos",
+                    "list",
+                    "rows",
+                ],
             )
         })
         .or_else(|| {
@@ -401,10 +431,7 @@ fn parse_course_list(value: &Value) -> Vec<ZhsCourse> {
                 progress: item
                     .get("progress")
                     .or_else(|| item.get("studyProgress"))
-                    .and_then(|v| {
-                        v.as_f64()
-                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-                    }),
+                    .and_then(parse_percent),
                 studied_lesson_count: get_u64(item, &["studiedLessonCount", "finishedLessonCount"])
                     .map(|n| n as usize),
                 total_lesson_count: get_u64(item, &["totalLessonCount", "lessonCount"])
@@ -416,6 +443,27 @@ fn parse_course_list(value: &Value) -> Vec<ZhsCourse> {
 }
 
 static EMPTY_ARRAY: Vec<Value> = Vec::new();
+
+/// `totalCount` of the measured `queryShareCourseInfo` response.
+fn parse_course_list_total(value: &Value) -> Option<u64> {
+    value
+        .pointer("/result/totalCount")
+        .or_else(|| value.get("totalCount"))
+        .or_else(|| value.get("total"))
+        .and_then(Value::as_u64)
+}
+
+/// Payload of one measured shared-course list page.
+///
+/// Field names are `pageNo`/`pageSize` (not `pageNum`), and there is **no**
+/// `dateFormate` inside the plaintext.
+fn course_list_payload(page_no: u64, page_size: u64) -> Value {
+    json!({
+        "status": 0,
+        "pageNo": page_no,
+        "pageSize": page_size,
+    })
+}
 
 /// Parse the `videolist` chapter tree.
 fn parse_chapters(data: &Value) -> Result<Vec<super::models::ZhsChapter>> {
@@ -874,52 +922,47 @@ impl ZhsClient {
 
     /// Shared-course list for the current account.
     ///
-    /// **Risk / unverified:** this endpoint (host, path, payload and response
-    /// shape) is the one part of the protocol that was never captured from a live
-    /// session. Both POST and GET are attempted with a best-effort payload and
-    /// the response parser accepts several envelopes; a failure here is expected
-    /// sometimes, which is why [`Self::resolve_course`] accepts a study-page URL
-    /// or `recruitAndCourseId` secret instead. When the first live capture
-    /// exists, replace the guessed fields with the observed ones.
+    /// Measured 2026-11-08:
+    /// `POST onlineservice-api/.../queryShareCourseInfo` with
+    /// `secretStr=AES(module 13, {"status":0,"pageNo":N,"pageSize":M})&date=<ms>`;
+    /// the response is `{"result":{"totalCount":N,"courseOpenDtos":[...]},"code":200}`.
+    /// Pages are fetched until `totalCount` is reached.
     pub async fn list_courses(&self) -> Result<Vec<ZhsCourse>> {
-        let school_id = self.user_from_cookie().ok().and_then(|user| user.school_id);
-        let mut payload = json!({
-            "status": 0,
-            "pageNum": 1,
-            "pageSize": 50,
-        });
-        if let Some(school_id) = school_id {
-            payload["schoolId"] = json!(school_id);
-        }
+        const PAGE_SIZE: u64 = 50;
+        let mut courses = Vec::new();
+        let mut total_count = None;
 
-        let post_result = self
-            .post_secret(
-                &self.endpoints.online_service,
-                COURSE_LIST_PATH,
-                MODULE_VIDEO,
-                &payload,
-                STUDY_REFERER,
-            )
-            .await;
-        let value = match post_result {
-            Ok(value) => value,
-            Err(post_error) => {
-                log::debug!("course-list POST failed ({post_error:#}); trying GET");
-                self.get_secret(
+        for page_no in 1..=20u64 {
+            let payload = course_list_payload(page_no, PAGE_SIZE);
+            let value = self
+                .post_secret_dated(
                     &self.endpoints.online_service,
                     COURSE_LIST_PATH,
-                    MODULE_VIDEO,
+                    MODULE_COURSE_LIST,
                     &payload,
-                    STUDY_REFERER,
+                    ONLINE_SERVICE_REFERER,
                 )
                 .await
                 .with_context(
                     || "知到课程列表接口不可用；请改用学习页 URL 或 recruitAndCourseId 指定课程",
-                )?
-            }
-        };
+                )?;
 
-        let courses = parse_course_list(&value);
+            if total_count.is_none() {
+                total_count = parse_course_list_total(&value);
+            }
+            let page = parse_course_list(&value);
+            let fetched = page.len();
+            courses.extend(page);
+            let total = total_count.unwrap_or(courses.len() as u64);
+            if fetched == 0
+                || courses.len() as u64 >= total
+                || fetched < PAGE_SIZE as usize
+                || page_no == 20
+            {
+                break;
+            }
+        }
+
         if courses.is_empty() {
             bail!(
                 "知到课程列表返回为空或格式未知；请改用学习页 URL 或 recruitAndCourseId 指定课程"
@@ -1476,6 +1519,43 @@ impl ZhsClient {
             ("secretStr", secret.as_str()),
             ("dateFormate", date_formate.as_str()),
         ]);
+        let url = format!("{base}{path}");
+        let response = self
+            .http
+            .post(&url)
+            .header(
+                CONTENT_TYPE,
+                "application/x-www-form-urlencoded; charset=UTF-8",
+            )
+            .header(REFERER, referer)
+            .header(ORIGIN, origin_of(referer))
+            .header(USER_AGENT, ZHS_USER_AGENT)
+            .body(encoded)
+            .send()
+            .await
+            .map_err(strip_error_url)
+            .with_context(|| format!("request to {path} failed"))?;
+        self.read_json_response(path, response).await
+    }
+
+    /// POST a `secretStr` payload whose outer timestamp field is `date` and whose
+    /// plaintext is encrypted exactly as given.
+    ///
+    /// Measured 2026-11-08 on `queryShareCourseInfo`: the form is
+    /// `secretStr=<AES(module 13, payload)>&date=<unix millis>`, the plaintext has
+    /// **no** `dateFormate` and the timestamp field is `date` (not `dateFormate`).
+    async fn post_secret_dated(
+        &self,
+        base: &str,
+        path: &str,
+        module: u32,
+        payload: &Value,
+        referer: &str,
+    ) -> Result<Value> {
+        let key = self.module_key(module).await?;
+        let secret = crypto::encrypt_secret_json(&key, payload)?;
+        let date = unix_millis().to_string();
+        let encoded = form_encode(&[("secretStr", secret.as_str()), ("date", date.as_str())]);
         let url = format!("{base}{path}");
         let response = self
             .http
@@ -2124,5 +2204,63 @@ mod tests {
         let sanitized = sanitize_text(&text, 10);
         assert_eq!(sanitized.chars().count(), 11);
         assert!(sanitized.ends_with('…'));
+    }
+
+    #[test]
+    fn course_list_contract_matches_the_measured_capture() {
+        // Measured 2026-11-08: module 13, `pageNo` (not `pageNum`), and the
+        // outer timestamp field is `date` — no `dateFormate` in the plaintext.
+        assert_eq!(MODULE_COURSE_LIST, 13);
+        let payload = course_list_payload(1, 50);
+        assert_eq!(
+            payload,
+            serde_json::json!({"status": 0, "pageNo": 1, "pageSize": 50})
+        );
+        assert!(payload.get("dateFormate").is_none());
+        assert!(payload.get("pageNum").is_none());
+    }
+
+    #[test]
+    fn parses_measured_course_open_list() {
+        // Sanitized fixture of the live `queryShareCourseInfo` response shape.
+        let value = serde_json::json!({
+            "result": {
+                "totalCount": 1,
+                "courseOpenDtos": [{
+                    "courseId": 12_345_678,
+                    "courseName": "测试课程-综合版",
+                    "teacherName": "测试老师、另一位老师",
+                    "recruitId": 877_665,
+                    "secret": "0123456789abcdef0123456789abcdef",
+                    "classId": null,
+                    "progress": "42.5%",
+                    "courseType": 1,
+                    "schoolName": "测试大学",
+                    "courseStatus": 2,
+                    "status": 0,
+                    "termId": 26,
+                    "termName": null,
+                    "lessonId": null
+                }]
+            },
+            "code": 200,
+            "message": null
+        });
+        let courses = parse_course_list(&value);
+        assert_eq!(courses.len(), 1);
+        let course = &courses[0];
+        assert_eq!(course.recruit_id, 877_665);
+        assert_eq!(course.course_id, 12_345_678);
+        assert_eq!(course.name, "测试课程-综合版");
+        assert_eq!(course.teacher, "测试老师、另一位老师");
+        assert_eq!(
+            course.secret.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(course.progress, Some(42.5));
+        assert_eq!(course.course_type.as_deref(), Some("1"));
+        assert_eq!(course.class_id, None);
+        assert_eq!(course.status, Some(0));
+        assert_eq!(parse_course_list_total(&value), Some(1));
     }
 }

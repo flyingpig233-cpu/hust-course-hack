@@ -23,9 +23,12 @@ import {
   parseQuestionAnswer,
   parseRemaining,
   parseSectionRecord,
+  parseStudentCourses,
+  parseTextbookRows,
   parseWholepageItem,
   randomInt,
   RateLimiter,
+  UlearningClient,
 } from '../src/core/ul/client.ts';
 import { buildSectionPayload, planSections, runSectionWatch, type UlWatchClient } from '../src/core/ul/watch.ts';
 import { defaultUlWatchOptions, summarizeUlOutcomes } from '../src/core/ul/types.ts';
@@ -177,8 +180,10 @@ test('directory, record, page, answer and remaining parsers tolerate platform wr
   assert.deepEqual(parseQuestionAnswer({ correctAnswerList: ['D'] }), ['D']);
   assert.deepEqual(parseQuestionAnswer({ data: { correctAnswerList: ['A', 'C'] } }), ['A', 'C']);
   assert.equal(parseInitialize({ data: { studyStartTime: 1794062059 } }), 1794062059);
+  // `/remaining` returns days; the parser normalizes to seconds.
   assert.equal(parseRemaining({ data: { time: -1 } }).expired, true);
   assert.equal(parseRemaining({ data: { time: 3600 } }).expired, false);
+  assert.equal(parseRemaining({ data: { time: 2 } }).seconds, 2 * 86_400);
   assert.equal(parseBasicInformation({ data: { courseName: 'C', teacherName: 'T', locale: 'zh_CN' } }).name, 'C');
 });
 
@@ -455,11 +460,86 @@ test('random pacing stays inside the configured window and summaries count state
   assert.deepEqual(summary, { ok: 1, skipped: 2, failed: 1, cancelled: true, circuitBroken: false });
 });
 
+test('student course list and textbook mapping follow the live courseapi shape', async () => {
+  const students = parseStudentCourses({
+    courseList: [
+      { id: 165508, classId: 1019700, name: '测试课程A', teacherName: '张老师', learnProgress: '10.9%' },
+      { id: 0, name: 'invalid' },
+    ],
+  });
+  assert.deepEqual(students, [{
+    oc_id: 165508,
+    class_id: 1019700,
+    name: '测试课程A',
+    teacher: '张老师',
+    progress: 10.9,
+  }]);
+  assert.deepEqual(parseTextbookRows([{ courseId: 47353, name: '测试教材', limit: 1_945_641_786_000 }]), [{
+    textbook_id: 47353,
+    name: '测试教材',
+    limit: 1_945_641_786_000,
+  }]);
+
+  const urls: string[] = [];
+  const client = new UlearningClient({
+    async request(input) {
+      urls.push(input.url);
+      if (input.url.includes('/courses/students')) {
+        return {
+          status: 200,
+          text: JSON.stringify({
+            courseList: [{ id: 165508, classId: 1019700, name: '测试课程A', teacherName: '张老师' }],
+          }),
+        };
+      }
+      return {
+        status: 200,
+        text: JSON.stringify([{ courseId: 47353, name: '测试教材', limit: Date.now() + 1_000_000 }]),
+      };
+    },
+  });
+  const courses = await client.listCourses();
+  assert.equal(courses.length, 1);
+  assert.equal(courses[0].textbook_id, 47353);
+  assert.equal(courses[0].class_id, 1019700);
+  assert.equal(courses[0].oc_id, 165508);
+  assert.equal(courses[0].name, '测试课程A');
+  assert.equal(courses[0].teacher, '张老师');
+  assert.equal(courses[0].expired, false);
+  assert.match(urls[0], /courseapi\.ulearning\.cn\/courses\/students\?keyword=&publishStatus=1&type=1&pn=1&ps=15&lang=zh$/);
+  assert.match(urls[1], /courseapi\.ulearning\.cn\/textbook\/student\/165508\/list\?lang=zh$/);
+
+  const expiredClient = new UlearningClient({
+    async request(input) {
+      if (input.url.includes('/courses/students')) {
+        return { status: 200, text: JSON.stringify({ courseList: [{ id: 1, classId: 2, name: '过期课' }] }) };
+      }
+      return { status: 200, text: JSON.stringify([{ courseId: 3, name: '过期教材', limit: Date.now() - 1000 }]) };
+    },
+  });
+  const expired = await expiredClient.listCourses();
+  assert.equal(expired[0].expired, true);
+});
+
 test('bridge allowlist only accepts Ulearning API routes and methods', () => {
   assert.equal(allowedUlRequest({ url: 'https://api.ulearning.cn/course/stu/47353/directory?classId=1019700' }), true);
   assert.equal(allowedUlRequest({ url: 'https://api.ulearning.cn/studyrecord/item/2377981?courseType=4' }), true);
   assert.equal(allowedUlRequest({ url: 'https://api.ulearning.cn/questionAnswer/11?parentId=31' }), true);
   assert.equal(allowedUlRequest({ url: 'https://api.ulearning.cn/yws/api/personal/sync?courseType=4&platform=PC', method: 'POST', body: 'x' }), true);
+  assert.equal(allowedUlRequest({
+    url: 'https://courseapi.ulearning.cn/courses/students?keyword=&publishStatus=1&type=1&pn=1&ps=15&lang=zh',
+  }), true);
+  assert.equal(allowedUlRequest({
+    url: 'https://courseapi.ulearning.cn/textbook/student/165508/list?lang=zh',
+  }), true);
+  for (const input of [
+    { url: 'https://courseapi.ulearning.cn/courses/students', method: 'POST' as const, body: 'x' },
+    { url: 'https://courseapi.ulearning.cn/textbook/student/165508/list', method: 'POST' as const, body: 'x' },
+    { url: 'https://courseapi.ulearning.cn/textbook/student/abc/list' },
+    { url: 'https://courseapi.ulearning.cn/courses/165508' },
+  ]) {
+    assert.equal(allowedUlRequest(input), false);
+  }
   for (const input of [
     { url: 'https://evil.example/course/stu/1/directory' },
     { url: 'https://api.ulearning.cn/yws/api/personal/sync?courseType=4' },
@@ -573,4 +653,40 @@ test('compiled bridge injects both auth headers and rejects non-whitelisted requ
   await harness.send({ type: 'ul-request', id: 'four', url: 'https://api.ulearning.cn/course/stu/1/directory' });
   await tick();
   assert.equal(harness.calls.length, 1);
+});
+
+test('compiled bridge forwards courseapi list/textbook with courseweb AJAX headers', async () => {
+  const harness = bridgeHarness();
+  await harness.send({ type: 'ul-hello' });
+  await tick();
+  harness.replies.length = 0;
+
+  await harness.send({
+    type: 'ul-request',
+    id: 'list',
+    url: 'https://courseapi.ulearning.cn/courses/students?keyword=&publishStatus=1&type=1&pn=1&ps=15&lang=zh',
+  });
+  await tick();
+  assert.equal(harness.calls.length, 1);
+  assert.equal(harness.calls[0].init.headers.Authorization, token);
+  assert.equal(harness.calls[0].init.headers['UA-AUTHORIZATION'], token);
+  assert.equal(harness.calls[0].init.headers.version, '1');
+  assert.equal(harness.calls[0].init.headers['Content-Type'], 'application/json');
+  assert.match(harness.calls[0].init.headers.Accept, /application\/json/);
+  assert.equal(harness.replies.at(-1)?.data.type, 'ul-response');
+
+  await harness.send({
+    type: 'ul-request',
+    id: 'textbook',
+    url: 'https://courseapi.ulearning.cn/textbook/student/165508/list?lang=zh',
+  });
+  await tick();
+  assert.equal(harness.calls.length, 2);
+  assert.match(harness.calls[1].url, /textbook\/student\/165508\/list/);
+
+  await harness.send({ type: 'ul-request', id: 'unsupported', url: 'https://courseapi.ulearning.cn/courses/165508' });
+  await tick();
+  assert.equal(harness.calls.length, 2);
+  assert.ok(harness.replies.at(-1)?.data.error);
+  assert.ok(!JSON.stringify(harness.replies).includes(token));
 });

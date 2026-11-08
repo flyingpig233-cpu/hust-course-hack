@@ -54,6 +54,28 @@ impl UlCourse {
     }
 }
 
+/// One textbook (教材) entry mapped from an `ocId`.
+///
+/// The student course list only exposes the external `ocId`; the internal
+/// `textbookId` used by the player/API comes from
+/// `GET /textbook/student/{ocId}/list`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UlTextbook {
+    /// Internal course id (`courseId` in the textbook response = textbookId).
+    pub textbook_id: i64,
+    /// Textbook / course name.
+    pub name: String,
+    /// Validity limit as a Unix millisecond timestamp, when exposed.
+    pub limit_millis: Option<i64>,
+}
+
+impl UlTextbook {
+    /// Remaining validity in seconds relative to `now_millis`, if a limit exists.
+    pub fn remaining_secs(&self, now_millis: i64) -> Option<i64> {
+        self.limit_millis.map(|limit| (limit - now_millis) / 1000)
+    }
+}
+
 /// One chapter (讲).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UlChapter {

@@ -6,6 +6,7 @@
 // a Zhihuishu cookie. Parsing helpers are exported for the offline tests.
 import {
   MODULE_MEET,
+  MODULE_ONLINESERVICE,
   MODULE_VIDEO,
   ModuleKeyCache,
   XOR_KEY_COURSE,
@@ -136,6 +137,16 @@ function pickNum(record: Record<string, unknown>, keys: string[]): number | null
   return num(pick(record, keys));
 }
 
+/** Parse a progress value that may be a number or a platform percentage string. */
+function pickPercent(record: Record<string, unknown>, keys: string[]): number | null {
+  const value = pick(record, keys);
+  if (typeof value === 'string') {
+    const trimmed = value.trim().replace(/%$/, '');
+    return trimmed ? num(trimmed) : null;
+  }
+  return num(value);
+}
+
 function text(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -178,7 +189,7 @@ export function parseCourse(value: unknown): ZhsCourse | null {
     secret: textOrNull(pick(raw, ['recruitAndCourseId', 'secret', 'courseSecret'])),
     is_apply: pickNum(raw, ['isApply', 'is_apply']),
     course_type: textOrNull(pick(raw, ['courseType', 'course_type', 'type'])),
-    progress: pickNum(raw, ['progress', 'studyProgress', 'schedule']),
+    progress: pickPercent(raw, ['progress', 'studyProgress', 'schedule']),
     studied_lesson_count: pickNum(raw, ['studiedLessonCount', 'studiedCount']),
     total_lesson_count: pickNum(raw, ['totalLessonCount', 'lessonCount']),
     status: pickNum(raw, ['status', 'courseStatus']),
@@ -187,7 +198,13 @@ export function parseCourse(value: unknown): ZhsCourse | null {
 
 /** Find the course array inside the many shapes the platform returns. */
 function findArray(body: Record<string, unknown>, keys: string[]): unknown[] {
-  const containers = [body, asRecord(body.data), asRecord(body.rt), asRecord(asRecord(body.data).rt)];
+  const containers = [
+    body,
+    asRecord(body.data),
+    asRecord(body.rt),
+    asRecord(body.result),
+    asRecord(asRecord(body.data).rt),
+  ];
   for (const container of containers) {
     for (const key of keys) {
       const value = container[key];
@@ -199,7 +216,16 @@ function findArray(body: Record<string, unknown>, keys: string[]): unknown[] {
 
 /** Parse the shared-course list response. */
 export function parseCourseList(body: Record<string, unknown>): ZhsCourse[] {
-  const rows = findArray(body, ['courseList', 'shareCourseDtos', 'list', 'rows', 'records', 'courses', 'data']);
+  const rows = findArray(body, [
+    'courseOpenDtos',
+    'courseList',
+    'shareCourseDtos',
+    'list',
+    'rows',
+    'records',
+    'courses',
+    'data',
+  ]);
   const seen = new Set<number>();
   const courses: ZhsCourse[] = [];
   for (const row of rows) {
@@ -630,16 +656,23 @@ export class ZhsClient {
     };
   }
 
-  /** `queryShareCourseInfo`: the shared-course list (endpoint per plan §9). */
-  async listCourses(schoolId: number | null = null, signal?: AbortSignal): Promise<ZhsCourse[]> {
-    const body = await this.encrypted(
-      ZHS_ONLINESERVICE_ORIGIN,
-      '/gateway/t/v1/student/course/share/queryShareCourseInfo',
-      { status: 0, pageNum: 1, pageSize: 50, schoolId: schoolId ?? 0 },
-      MODULE_VIDEO,
-      'POST',
-      signal,
-    );
+  /**
+   * `queryShareCourseInfo`: the shared-course list.
+   *
+   * Live capture (2026-11-08): module **13** `secretStr` whose plaintext is
+   * exactly `{status:0,pageNo:1,pageSize:5}` (no injected `dateFormate`); the
+   * outer form field is `date=<ms>`. The reply is
+   * `{result:{totalCount,courseOpenDtos:[...]},code:200}`.
+   */
+  async listCourses(signal?: AbortSignal): Promise<ZhsCourse[]> {
+    const key = await this.key(MODULE_ONLINESERVICE);
+    const secretStr = await encryptSecret(key, JSON.stringify({ status: 0, pageNo: 1, pageSize: 5 }));
+    const form = new URLSearchParams({ secretStr, date: String(Date.now()) }).toString();
+    const body = await this.send({
+      url: `${ZHS_ONLINESERVICE_ORIGIN}/gateway/t/v1/student/course/share/queryShareCourseInfo`,
+      method: 'POST',
+      body: form,
+    }, 'queryShareCourseInfo', signal);
     const courses = parseCourseList(body);
     if (courses.length === 0) {
       throw new ZhsApiError('课程列表接口没有返回共享课；可粘贴学习页链接手动添加课程。', 'queryShareCourseInfo');

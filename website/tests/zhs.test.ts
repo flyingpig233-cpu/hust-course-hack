@@ -24,6 +24,7 @@ import {
   ZHS_CHANNEL,
   allowedZhsRequest,
   trustedSiteOrigin,
+  type ZhsHttpRequest,
 } from '../src/core/zhs/transport.ts';
 import { buildVideoReport, decodeCourseRef, parseCourseList, parseExceptionStatus, parseJsonp, parseMeetList, parseWatchHistory, RateLimiter, randomInt, ZhsClient } from '../src/core/zhs/client.ts';
 import { coverageTarget, planMeetMinutes, runMeetWatch, type MeetWatchClient } from '../src/core/zhs/meet.ts';
@@ -114,6 +115,66 @@ test('PKCS#1 v1.5 encryption and public-op unpadding interoperate with OpenSSL',
     assert.equal(await rsaPublicUnpad(publicKeyB64, blob), '{"cKey":"azp53h0kft7qi78q","module":11}');
     await assert.rejects(() => rsaPublicUnpad(publicKeyB64, Buffer.alloc(8).toString('base64')));
   })();
+});
+
+test('queryShareCourseInfo uses module 13, the date field and result.courseOpenDtos', async () => {
+  // Sanitized fixture shaped like the live capture (all ids/names replaced).
+  const fixture = {
+    result: {
+      totalCount: 2,
+      courseOpenDtos: [
+        {
+          courseId: 111,
+          courseName: '测试课程A',
+          teacherName: '张老师',
+          progress: '10.9%',
+          recruitId: 222,
+          secret: 'synthetic-secret',
+          classId: 333,
+          courseType: 1,
+          termName: '2026秋',
+        },
+        { courseId: 0, courseName: 'invalid-row-without-recruit' },
+      ],
+    },
+    code: 200,
+    message: null,
+  };
+  const cache = new ModuleKeyCache();
+  cache.set(13, 'module13-key-16b');
+  const requests: ZhsHttpRequest[] = [];
+  const client = new ZhsClient({
+    async request(input) {
+      requests.push(input);
+      return { status: 200, text: JSON.stringify(fixture) };
+    },
+  }, { moduleKeys: cache });
+  const courses = await client.listCourses();
+  assert.equal(courses.length, 1);
+  assert.equal(courses[0].name, '测试课程A');
+  assert.equal(courses[0].recruit_id, 222);
+  assert.equal(courses[0].course_id, 111);
+  assert.equal(courses[0].class_id, 333);
+  assert.equal(courses[0].teacher, '张老师');
+  assert.equal(courses[0].secret, 'synthetic-secret');
+  assert.equal(courses[0].progress, 10.9);
+  assert.equal(courses[0].course_type, '1');
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'POST');
+  assert.match(requests[0].url, /onlineservice-api\.zhihuishu\.com\/gateway\/t\/v1\/student\/course\/share\/queryShareCourseInfo$/);
+  const form = new URLSearchParams(requests[0].body ?? '');
+  assert.ok(form.get('date'));
+  assert.equal(form.has('dateFormate'), false);
+  assert.equal(
+    await decryptSecret('module13-key-16b', form.get('secretStr') ?? ''),
+    '{"status":0,"pageNo":1,"pageSize":5}',
+  );
+  assert.equal(allowedZhsRequest({
+    url: 'https://onlineservice-api.zhihuishu.com/gateway/t/v1/student/course/share/queryShareCourseInfo',
+    method: 'POST',
+    body: 'secretStr=x&date=1',
+  }), true);
 });
 
 test('video exception status treats rt.endTime without lock/abnormal as an abnormal lock', async () => {
