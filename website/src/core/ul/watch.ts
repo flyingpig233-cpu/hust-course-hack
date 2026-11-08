@@ -4,7 +4,7 @@
 // the service accepts it and answers `1` (stored) or `2` (anti-cheat stop).
 // The executor keeps dry-run default, paces reports, stops on `2`/first failure
 // and verifies the section record afterwards.
-import { RateLimiter, sleep } from './client.ts';
+import { RateLimiter } from './client.ts';
 import type {
   UlCourseDetail,
   UlPage,
@@ -241,11 +241,16 @@ export function buildSectionPayload(plan: UlSectionPlan, studyStartTime: number)
   };
 }
 
+/** Minimal pacing surface; `RateLimiter` satisfies it and tests can stub it. */
+export interface UlPacer {
+  wait(signal?: AbortSignal): Promise<number>;
+}
+
 export interface UlWatchHooks {
   progress?: (progress: UlProgress) => void;
   /** Called as each section reaches a terminal state (live UI rows). */
   outcome?: (outcome: UlSectionOutcome, index: number, total: number) => void;
-  limiter?: RateLimiter;
+  limiter?: UlPacer;
 }
 
 /** Execute one planned batch; returns one outcome per plan (plus early stop). */
@@ -327,6 +332,14 @@ export async function runSectionWatch(
     let result: { response: number | null; text: string } | null = null;
     let failure: string | null = null;
     for (let attempt = 0; attempt <= UL_SYNC_RETRIES; attempt += 1) {
+      // Pace *every* attempt, including retries: the platform measured a 502 ms
+      // gap when retries bypassed the limiter, violating the 3–5 s rule.
+      try {
+        await limiter.wait(signal);
+      } catch {
+        record({ label, state: 'cancelled', pages: plan.pages.length, response: null, message: '已取消' }, index);
+        return outcomes;
+      }
       try {
         result = await client.sync(payload, signal);
         if (result.response === 1) break;
@@ -340,7 +353,6 @@ export async function runSectionWatch(
         failure = error instanceof Error ? error.message : '上报请求失败';
         result = null;
       }
-      if (attempt < UL_SYNC_RETRIES) await sleep(500 * 2 ** attempt, signal).catch(() => undefined);
     }
 
     if (result?.response === 2) {
@@ -391,21 +403,27 @@ export async function runSectionWatch(
           continue;
         }
       } catch (error) {
-        signal.throwIfAborted();
-        message = `上报已提交，但复核失败：${error instanceof Error ? error.message : '请求失败'}`;
+        if (signal.aborted) {
+          record({ label, state: 'cancelled', pages: plan.pages.length, response: null, message: '已取消' }, index);
+          return outcomes;
+        }
+        // A failed verification is a failed section (e.g. a 401 on the read
+        // back); do not record it as ok and keep going by default.
+        const verifyMessage = `上报已提交，但复核失败：${error instanceof Error ? error.message : '请求失败'}`;
+        record({
+          label,
+          state: 'failed',
+          pages: plan.pages.length,
+          response: 1,
+          message: verifyMessage,
+        }, index);
+        emit({ stage: 'verify', done: index + 1, total, label, message: verifyMessage });
+        if (options.stop_on_error) return outcomes;
+        continue;
       }
     }
     record({ label, state: 'ok', pages: plan.pages.length, response: 1, message }, index);
     emit({ stage: 'verify', done: index + 1, total, label, message });
-
-    if (index + 1 < plans.length) {
-      try {
-        await limiter.wait(signal);
-      } catch {
-        record({ label, state: 'cancelled', pages: plan.pages.length, response: null, message: '已取消' }, index);
-        return outcomes;
-      }
-    }
   }
   return outcomes;
 }

@@ -315,11 +315,11 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
         </label>
         <label class="field">
           <span>最小间隔（毫秒）</span>
-          <input id="ul-delay-min" type="number" min="0" step="100" value="2000" />
+          <input id="ul-delay-min" type="number" min="0" step="100" value="3000" />
         </label>
         <label class="field">
           <span>最大间隔（毫秒）</span>
-          <input id="ul-delay-max" type="number" min="0" step="100" value="4000" />
+          <input id="ul-delay-max" type="number" min="0" step="100" value="5000" />
         </label>
         <label class="check switch-row">
           <input id="ul-watch-quizzes" type="checkbox" />

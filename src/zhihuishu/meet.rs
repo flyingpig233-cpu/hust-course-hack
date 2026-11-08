@@ -49,7 +49,9 @@ pub struct ZhsMeetWatchOptions {
 impl Default for ZhsMeetWatchOptions {
     fn default() -> Self {
         Self {
-            dry_run: false,
+            // Read-only by default: real attendance reporting must be requested
+            // explicitly by the CLI/GUI user.
+            dry_run: true,
             coverage_min: 0.90,
             coverage_max: 1.00,
             delay_min_ms: 2_000,
@@ -512,7 +514,7 @@ mod tests {
     #[test]
     fn defaults_match_the_plan() {
         let opts = ZhsMeetWatchOptions::default();
-        assert!(!opts.dry_run);
+        assert!(opts.dry_run, "core default must stay read-only");
         assert_eq!(opts.coverage_min, 0.90);
         assert_eq!(opts.coverage_max, 1.00);
         assert_eq!(opts.delay_min_ms, 2_000);

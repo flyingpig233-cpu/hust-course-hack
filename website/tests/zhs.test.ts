@@ -25,7 +25,7 @@ import {
   allowedZhsRequest,
   trustedSiteOrigin,
 } from '../src/core/zhs/transport.ts';
-import { buildVideoReport, decodeCourseRef, parseCourseList, parseExceptionStatus, parseJsonp, parseMeetList, parseWatchHistory, RateLimiter, randomInt } from '../src/core/zhs/client.ts';
+import { buildVideoReport, decodeCourseRef, parseCourseList, parseExceptionStatus, parseJsonp, parseMeetList, parseWatchHistory, RateLimiter, randomInt, ZhsClient } from '../src/core/zhs/client.ts';
 import { coverageTarget, planMeetMinutes, runMeetWatch, type MeetWatchClient } from '../src/core/zhs/meet.ts';
 import { planVideoTargets, runVideoWatch, type VideoWatchClient } from '../src/core/zhs/watch.ts';
 import { defaultMeetWatchOptions, defaultWatchOptions } from '../src/core/zhs/types.ts';
@@ -114,6 +114,46 @@ test('PKCS#1 v1.5 encryption and public-op unpadding interoperate with OpenSSL',
     assert.equal(await rsaPublicUnpad(publicKeyB64, blob), '{"cKey":"azp53h0kft7qi78q","module":11}');
     await assert.rejects(() => rsaPublicUnpad(publicKeyB64, Buffer.alloc(8).toString('base64')));
   })();
+});
+
+test('video exception status treats rt.endTime without lock/abnormal as an abnormal lock', async () => {
+  const cache = new ModuleKeyCache();
+  cache.set(11, VIDEO_MODULE_KEY_FALLBACK);
+  const urls: string[] = [];
+  const client = new ZhsClient({
+    async request(input) {
+      urls.push(input.url);
+      return { status: 200, text: JSON.stringify({ rt: { endTime: '2026-11-10 23:59:59', tipStr: '学习异常' } }) };
+    },
+  }, { moduleKeys: cache });
+  const status = await client.exceptionStatus(course);
+  assert.equal(status.abnormal, true);
+  assert.equal(status.lock, false);
+  assert.match(urls[0], /cheat\/exceptionActionDetail/);
+
+  const clean = new ZhsClient({
+    async request() { return { status: 200, text: JSON.stringify({ rt: { lock: false } }) }; },
+  }, { moduleKeys: cache });
+  const cleanStatus = await clean.exceptionStatus(course);
+  assert.equal(cleanStatus.abnormal, false);
+  assert.equal(cleanStatus.lock, false);
+});
+
+test('setIdentity drops the cached user so a reconnect uses the new account', () => {
+  const client = new ZhsClient({ async request() { throw new Error('unused'); } });
+  client.setIdentity({ platform: 'zhihuishu', uuid: 'AAAA1111', user_id: 111 });
+  client.setUser({ user_id: 111, uuid: 'AAAA1111', real_name: 'A', school_id: null, is_teacher: false });
+  assert.equal(client.uuid, 'AAAA1111');
+  assert.equal(client.userId, 111);
+
+  // Reconnect as another account: the cached user must not leak through.
+  client.setIdentity({ platform: 'zhihuishu', uuid: 'BBBB2222', user_id: 222 });
+  assert.equal(client.uuid, 'BBBB2222');
+  assert.equal(client.userId, 222);
+
+  client.setIdentity({ platform: 'zhihuishu', uuid: 'CCCC3333', user_id: null });
+  assert.equal(client.uuid, 'CCCC3333');
+  assert.equal(client.userId, null);
 });
 
 test('the shared public key and module-key cache are pinned to the protocol', async () => {

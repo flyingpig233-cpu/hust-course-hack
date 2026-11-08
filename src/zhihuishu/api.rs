@@ -257,6 +257,18 @@ fn unix_millis() -> u64 {
         .unwrap_or(0)
 }
 
+/// Drop the request URL from a transport error before it enters the error chain.
+///
+/// Zhihuishu `secretStr` GET URLs carry the encrypted signature (and the
+/// module-key handshake URL carries its RSA blob). Callers such as
+/// `watch::run_video_watch` and `meet::run_meet_watch` format the full chain with
+/// `{error:#}`, so a `reqwest::Error` source that keeps its URL would leak the
+/// signature into logs. `without_url` keeps the error type and wording while
+/// removing the URL.
+fn strip_error_url(error: reqwest::Error) -> reqwest::Error {
+    error.without_url()
+}
+
 /// Percent-encode a list of query/form pairs the way the site does.
 fn form_encode(pairs: &[(&str, &str)]) -> String {
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
@@ -1296,11 +1308,13 @@ impl ZhsClient {
             .header(USER_AGENT, ZHS_USER_AGENT)
             .send()
             .await
+            .map_err(strip_error_url)
             .context("failed to fetch the replay video list")?;
         let status = response.status();
         let text = response
             .text()
             .await
+            .map_err(strip_error_url)
             .context("failed to read the replay video list")?;
         if !status.is_success() {
             bail!("replay video list returned HTTP {status}");
@@ -1476,6 +1490,7 @@ impl ZhsClient {
             .body(encoded)
             .send()
             .await
+            .map_err(strip_error_url)
             .with_context(|| format!("request to {path} failed"))?;
         self.read_json_response(path, response).await
     }
@@ -1516,6 +1531,7 @@ impl ZhsClient {
             .header(USER_AGENT, ZHS_USER_AGENT)
             .send()
             .await
+            .map_err(strip_error_url)
             .with_context(|| format!("request to {path} failed"))?;
         self.read_json_response(path, response).await
     }
@@ -1541,6 +1557,7 @@ impl ZhsClient {
             .header(USER_AGENT, ZHS_USER_AGENT)
             .send()
             .await
+            .map_err(strip_error_url)
             .with_context(|| format!("request to {path} failed"))?;
         self.read_json_response(path, response).await
     }
@@ -1561,6 +1578,7 @@ impl ZhsClient {
             .body(body.to_string())
             .send()
             .await
+            .map_err(strip_error_url)
             .with_context(|| format!("request to {path} failed"))?;
         self.read_json_response(path, response).await
     }
@@ -1571,6 +1589,7 @@ impl ZhsClient {
         let text = response
             .text()
             .await
+            .map_err(strip_error_url)
             .with_context(|| format!("failed to read the response of {path}"))?;
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(ZhsError::new(

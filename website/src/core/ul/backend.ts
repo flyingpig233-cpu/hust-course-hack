@@ -93,8 +93,8 @@ async function watch(request: UlWatchRequest, signal: AbortSignal): Promise<UlWa
     dry_run: request.dryRun !== false,
     include_quizzes: request.includeQuizzes === true,
     max_sections: request.maxSections ?? null,
-    delay_min_ms: Math.max(0, request.delayMinMs ?? 2000),
-    delay_max_ms: Math.max(0, request.delayMaxMs ?? 4000),
+    delay_min_ms: Math.max(0, request.delayMinMs ?? 3000),
+    delay_max_ms: Math.max(0, request.delayMaxMs ?? 5000),
     verify: request.verify !== false,
     stop_on_error: request.stopOnError !== false,
   });

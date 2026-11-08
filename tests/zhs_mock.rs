@@ -26,7 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hust_course_hack::zhihuishu::{
-    VIDEO_MODULE_KEY_FALLBACK, ZhsClient, ZhsEndpoints, ZhsMeetWatchOptions, ZhsProgress,
+    VIDEO_MODULE_KEY_FALLBACK, ZhsClient, ZhsEndpoints, ZhsMeet, ZhsMeetWatchOptions, ZhsProgress,
     ZhsWatchOptions, ZhsWatchState, decrypt_module_key_blob, decrypt_secret, encrypt_secret,
     xor_decode, xor_encode,
 };
@@ -691,6 +691,17 @@ fn no_progress(_progress: ZhsProgress) -> bool {
     true
 }
 
+/// Options for tests that must actually submit.
+///
+/// The core default is now dry-run, so every real-submission flow has to opt in
+/// explicitly; keeping the live settings in one place makes that audit easy.
+fn real_video_options() -> ZhsWatchOptions {
+    ZhsWatchOptions {
+        dry_run: false,
+        ..ZhsWatchOptions::default()
+    }
+}
+
 // -------------------------------------------------------------------------
 // Video course flow
 // -------------------------------------------------------------------------
@@ -710,7 +721,7 @@ async fn video_flow_logs_in_lists_tree_and_completes_videos() {
     assert_eq!(detail.total_videos(), 2);
     assert_eq!(detail.completed_videos(), 0);
 
-    let options = ZhsWatchOptions::default();
+    let options = real_video_options();
     let targets = client.plan_videos(&detail, &options).await.expect("plan");
     assert_eq!(targets.len(), 2);
 
@@ -801,7 +812,7 @@ async fn video_flow_can_be_cancelled_between_videos() {
     let client = server.client();
     let course = resolve_mock_course(&client).await;
     let detail = client.course_detail(&course).await.expect("course detail");
-    let options = ZhsWatchOptions::default();
+    let options = real_video_options();
     let targets = client.plan_videos(&detail, &options).await.expect("plan");
 
     let cancel = |_progress: ZhsProgress| false;
@@ -863,7 +874,7 @@ async fn video_flow_surfaces_401_and_transport_failures() {
     server.configure(|state| state.save_ok = false);
     let course = resolve_mock_course(&client).await;
     let detail = client.course_detail(&course).await.expect("course detail");
-    let options = ZhsWatchOptions::default();
+    let options = real_video_options();
     let targets = client.plan_videos(&detail, &options).await.expect("plan");
     let outcomes = client
         .watch_videos(&targets, &options, &no_progress)
@@ -878,13 +889,69 @@ async fn video_flow_surfaces_401_and_transport_failures() {
 }
 
 #[tokio::test]
+async fn transport_errors_strip_signed_request_urls() {
+    // A dropped socket makes reqwest carry the request URL (which contains the
+    // encrypted `secretStr`/`uid` signature) into the error chain. Callers such
+    // as `run_meet_watch` print that chain with `{error:#}`, so the client must
+    // strip the URL before the error is surfaced.
+    let server = MockServer::start();
+    let client = server.client();
+    server.configure(|state| state.drop_connections = true);
+
+    // `login_user` goes through `get_secret`: the GET URL carries `secretStr`.
+    let error = client
+        .login_user()
+        .await
+        .expect_err("dropped socket must surface");
+    let text = format!("{error:#}").to_ascii_lowercase();
+    assert!(
+        !text.contains("secretstr"),
+        "error chain leaks secretStr: {text}"
+    );
+    assert!(
+        !text.contains("http://") && !text.contains("https://"),
+        "error chain leaks the request URL: {text}"
+    );
+    assert!(
+        !text.contains("uid="),
+        "error chain leaks the module-key blob: {text}"
+    );
+
+    // `meet_exception_status` goes through the live `get_live_secret` path and
+    // the `c/has` handshake; neither URL may leak either.
+    let meet = ZhsMeet {
+        recruit_id: MOCK_RECRUIT_ID,
+        course_id: MOCK_COURSE_ID,
+        live_id: MOCK_LIVE_ID,
+        ..ZhsMeet::default()
+    };
+    let error = client
+        .meet_exception_status(&meet)
+        .await
+        .expect_err("dropped socket must surface for live endpoints too");
+    let text = format!("{error:#}").to_ascii_lowercase();
+    assert!(
+        !text.contains("secretstr"),
+        "live error chain leaks secretStr: {text}"
+    );
+    assert!(
+        !text.contains("http://") && !text.contains("https://"),
+        "live error chain leaks the request URL: {text}"
+    );
+    assert!(
+        !text.contains("uid="),
+        "live error chain leaks the module-key blob: {text}"
+    );
+}
+
+#[tokio::test]
 async fn video_flow_trips_the_circuit_breaker_on_a_lock() {
     let server = MockServer::start();
     let client = server.client();
     server.configure(|state| state.video_lock = true);
     let course = resolve_mock_course(&client).await;
     let detail = client.course_detail(&course).await.expect("course detail");
-    let options = ZhsWatchOptions::default();
+    let options = real_video_options();
     let targets = client.plan_videos(&detail, &options).await.expect("plan");
 
     let outcomes = client
@@ -939,7 +1006,7 @@ async fn video_flow_handles_an_empty_course_tree() {
     assert_eq!(detail.total_videos(), 0);
     assert_eq!(detail.chapters.len(), 0);
 
-    let options = ZhsWatchOptions::default();
+    let options = real_video_options();
     let targets = client.plan_videos(&detail, &options).await.expect("plan");
     assert!(targets.is_empty());
     let outcomes = client

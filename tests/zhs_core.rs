@@ -212,13 +212,27 @@ fn module_key_cache_honours_ttl_and_modules() {
 #[test]
 fn meet_watch_options_defaults_match_the_plan() {
     let opts = ZhsMeetWatchOptions::default();
-    assert!(!opts.dry_run);
+    assert!(opts.dry_run, "core default must stay read-only");
     assert_eq!(opts.coverage_min, 0.90);
     assert_eq!(opts.coverage_max, 1.00);
     assert_eq!(opts.delay_min_ms, 2_000);
     assert_eq!(opts.delay_max_ms, 6_000);
     assert!(opts.circuit_breaker);
     assert_eq!(opts.check_every, 10);
+}
+
+#[test]
+fn video_watch_options_default_to_dry_run() {
+    let opts = ZhsWatchOptions::default();
+    assert!(opts.dry_run, "core default must stay read-only");
+    assert!(!opts.include_completed);
+    assert!(opts.max_videos.is_none());
+    assert!(opts.verify);
+    let live = ZhsWatchOptions {
+        dry_run: false,
+        ..ZhsWatchOptions::default()
+    };
+    assert!(!live.dry_run);
 }
 
 #[test]

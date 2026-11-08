@@ -267,11 +267,15 @@ export function parsePageContent(body: Record<string, unknown>): UlPageContent {
   const elements = asArray(pick(data, ['coursepageDTOList', 'coursepageList', 'elements']));
   const videos: UlVideo[] = [];
   const questions: UlQuestion[] = [];
-  let coursepageId: number | null = pickNum(data, ['coursepageDTOid', 'coursepageId']);
+  let coursepageId: number | null = null;
   for (const element of elements) {
     const raw = asRecord(element);
-    coursepageId = coursepageId ?? pickNum(raw, ['coursepageDTOid', 'coursepageId', 'id']);
     const type = pickNum(raw, ['type']) ?? 0;
+    // The exercise component is the type=6 element; the first element is often a
+    // title/text block and must not become `coursepageId`.
+    if (type === 6 && coursepageId === null) {
+      coursepageId = pickNum(raw, ['coursepageDTOid', 'coursepageId', 'id']);
+    }
     const videoId = pickNum(raw, ['resourceid', 'resourceId', 'videoid', 'videoId']);
     const duration = pickNum(raw, ['videoLength', 'videoSec', 'duration']);
     if (type === 4 || (videoId !== null && duration !== null)) {
@@ -288,6 +292,7 @@ export function parsePageContent(body: Record<string, unknown>): UlPageContent {
       });
     }
   }
+  coursepageId = coursepageId ?? pickNum(data, ['coursepageDTOid', 'coursepageId']);
   return { content_type: contentType, coursepage_id: coursepageId, videos, questions };
 }
 
@@ -315,7 +320,7 @@ export interface UlClientOptions {
 export class UlearningClient {
   private readonly transport: UlTransport;
   private readonly warn: (message: string) => void;
-  private readonly limiter = new RateLimiter(2000, 4000);
+  private readonly limiter = new RateLimiter(3000, 5000);
   private readonly answers = new Map<number, string[]>();
 
   constructor(transport: UlTransport, options: UlClientOptions = {}) {

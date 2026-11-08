@@ -151,7 +151,8 @@ test('directory, record, page, answer and remaining parsers tolerate platform wr
     },
   });
   assert.equal(videoPage.content_type, 6);
-  assert.equal(videoPage.coursepage_id, 777);
+  // `coursepageId` belongs to the exercise component (type=6); a video page has none.
+  assert.equal(videoPage.coursepage_id, null);
   assert.deepEqual(videoPage.videos, [{ video_id: 1563126, duration_secs: 1326 }]);
   assert.deepEqual(videoPage.questions, []);
   const quizPage = parsePageContent({
@@ -161,6 +162,18 @@ test('directory, record, page, answer and remaining parsers tolerate platform wr
     },
   });
   assert.deepEqual(quizPage.questions, [{ question_id: 11, score: 5, answers: [] }]);
+  // A title/text block comes first; the practice component id must win.
+  const mixedQuizPage = parsePageContent({
+    data: {
+      contentType: 7,
+      coursepageDTOList: [
+        { type: 1, id: 100, title: '章节练习' },
+        { type: 6, coursepageDTOid: 200, questionDTOList: [{ questionid: 12, score: 5 }] },
+      ],
+    },
+  });
+  assert.equal(mixedQuizPage.coursepage_id, 200);
+  assert.deepEqual(mixedQuizPage.questions.map((question) => question.question_id), [12]);
   assert.deepEqual(parseQuestionAnswer({ correctAnswerList: ['D'] }), ['D']);
   assert.deepEqual(parseQuestionAnswer({ data: { correctAnswerList: ['A', 'C'] } }), ['A', 'C']);
   assert.equal(parseInitialize({ data: { studyStartTime: 1794062059 } }), 1794062059);
@@ -343,6 +356,88 @@ test('real executor initializes, submits, verifies and stops immediately on resp
   });
   assert.equal(verifyOutcomes[0].state, 'failed');
   assert.match(verifyOutcomes[0].message, /completion_status=0/);
+});
+
+test('every sync attempt is paced, including retries, and defaults are 3–5 s', async () => {
+  assert.equal(defaultUlWatchOptions().delay_min_ms, 3000);
+  assert.equal(defaultUlWatchOptions().delay_max_ms, 5000);
+
+  const events: string[] = [];
+  const pacer = {
+    async wait() {
+      events.push('wait');
+      return 0;
+    },
+  };
+  let attempts = 0;
+  const client = watchClient({
+    async sync() {
+      events.push('sync');
+      attempts += 1;
+      return attempts === 1 ? { response: 0, text: '0' } : { response: 1, text: '1' };
+    },
+    async sectionRecord() {
+      events.push('verify');
+      return { completion_status: 1 };
+    },
+  });
+  const outcomes = await runSectionWatch(
+    client,
+    [completePlan()],
+    defaultUlWatchOptions({ dry_run: false, delay_min_ms: 10, delay_max_ms: 10 }),
+    new AbortController().signal,
+    { limiter: pacer },
+  );
+  assert.equal(outcomes[0].state, 'ok');
+  assert.equal(attempts, 2);
+  assert.deepEqual(events, ['wait', 'sync', 'wait', 'sync', 'verify']);
+
+  // With the real limiter, the retry gap must respect the configured minimum.
+  const times: number[] = [];
+  let realAttempts = 0;
+  const realClient = watchClient({
+    async sync() {
+      times.push(Date.now());
+      realAttempts += 1;
+      return realAttempts === 1 ? { response: 0, text: '0' } : { response: 1, text: '1' };
+    },
+  });
+  await runSectionWatch(
+    realClient,
+    [completePlan()],
+    defaultUlWatchOptions({ dry_run: false, delay_min_ms: 20, delay_max_ms: 20 }),
+    new AbortController().signal,
+    { limiter: new RateLimiter(20, 20) },
+  );
+  assert.equal(times.length, 2);
+  assert.ok(times[1] - times[0] >= 18, `retry gap ${times[1] - times[0]}ms below minimum`);
+});
+
+test('a verification error marks the section failed and stops on stop_on_error', async () => {
+  const calls: string[] = [];
+  const client = watchClient({
+    async sync() {
+      calls.push('sync');
+      return { response: 1, text: '1' };
+    },
+    async sectionRecord() {
+      calls.push('verify');
+      throw new Error('优学院接口返回 HTTP 401（studyrecord）');
+    },
+  });
+  const outcomes = await runSectionWatch(
+    client,
+    [completePlan(), completePlan(2)],
+    defaultUlWatchOptions({ dry_run: false, delay_min_ms: 0, delay_max_ms: 0, verify: true }),
+    new AbortController().signal,
+    { limiter: new RateLimiter(0, 0) },
+  );
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].state, 'failed');
+  assert.match(outcomes[0].message, /复核失败/);
+  assert.match(outcomes[0].message, /401/);
+  assert.equal(calls.filter((call) => call === 'sync').length, 1);
+  assert.equal(summarizeUlOutcomes(outcomes).failed, 1);
 });
 
 test('random pacing stays inside the configured window and summaries count states', () => {

@@ -321,7 +321,10 @@ pub struct ZhsWatchOptions {
 impl Default for ZhsWatchOptions {
     fn default() -> Self {
         Self {
-            dry_run: false,
+            // The core default is read-only; callers must opt in to real
+            // submissions. This keeps CLI/GUI dry-run-by-default even if a
+            // future call site forgets to pass the flag through.
+            dry_run: true,
             include_completed: false,
             max_videos: None,
             verify: true,
@@ -536,4 +539,62 @@ pub struct ZhsMeetOutcome {
     pub state: ZhsWatchState,
     /// Human-readable message.
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watch_options_default_to_read_only() {
+        let opts = ZhsWatchOptions::default();
+        assert!(opts.dry_run, "core default must never submit for real");
+        assert!(!opts.include_completed);
+        assert!(opts.max_videos.is_none());
+        assert!(opts.verify);
+        // Opting in is explicit.
+        let live = ZhsWatchOptions {
+            dry_run: false,
+            ..ZhsWatchOptions::default()
+        };
+        assert!(!live.dry_run);
+    }
+
+    #[test]
+    fn course_label_and_secret_round_trip() {
+        let course = ZhsCourse {
+            recruit_id: 463_667,
+            course_id: 1_000_011_214,
+            name: "军事理论".to_string(),
+            ..ZhsCourse::default()
+        };
+        assert_eq!(course.label(), "军事理论");
+        assert_eq!(course.course_secret(), "4e5e5a5e435e4859454a585959445b425c");
+        let unsupported = ZhsCourse {
+            course_type: Some("POLYMAS".to_string()),
+            ..course
+        };
+        assert!(unsupported.is_polymas());
+    }
+
+    #[test]
+    fn skip_reason_ignores_completed_unless_requested() {
+        let target = ZhsVideoTarget {
+            recruit_id: 1,
+            course_id: 2,
+            chapter_id: 3,
+            lesson_id: 4,
+            lesson_video_id: 5,
+            video_id: 6,
+            video_sec: 7,
+            completed: true,
+            label: "x".to_string(),
+        };
+        assert!(target.skip_reason(&ZhsWatchOptions::default()).is_some());
+        let include_completed = ZhsWatchOptions {
+            include_completed: true,
+            ..ZhsWatchOptions::default()
+        };
+        assert!(target.skip_reason(&include_completed).is_none());
+    }
 }

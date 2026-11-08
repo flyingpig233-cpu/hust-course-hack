@@ -535,6 +535,8 @@ export class ZhsClient {
   /** Adopt the identity reported by the bridge handshake. */
   setIdentity(identity: ZhsIdentity): void {
     this.identity = identity;
+    // A re-connect may be a different account; never keep the previous user.
+    this.user = null;
   }
 
   /** Adopt the authenticated user (also used to fill `uuid`/`userId`). */
@@ -786,12 +788,7 @@ export class ZhsClient {
       'GET',
       signal,
     );
-    const data = asRecord(pick(body, ['rt', 'data', 'result']) ?? body);
-    return {
-      lock: boolOrNull(pick(data, ['lock'])) === true,
-      abnormal: boolOrNull(pick(data, ['abnormal', 'isAbnormal'])) === true,
-      message: text(pick(data, ['tipStr', 'message', 'msg'])).trim(),
-    };
+    return parseExceptionStatus(body);
   }
 
   /**

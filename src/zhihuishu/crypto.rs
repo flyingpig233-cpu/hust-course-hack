@@ -375,11 +375,13 @@ pub async fn fetch_module_key(
         .header(reqwest::header::USER_AGENT, ZHS_USER_AGENT)
         .send()
         .await
+        .map_err(|error| error.without_url())
         .with_context(|| format!("module-key request failed for module {module}"))?;
     let status = response.status();
     let text = response
         .text()
         .await
+        .map_err(|error| error.without_url())
         .context("failed to read module-key response")?;
     if !status.is_success() {
         bail!("module-key endpoint returned HTTP {status}");
