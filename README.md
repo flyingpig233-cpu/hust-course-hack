@@ -449,6 +449,7 @@ cargo run -- --cookies $zhs zhs check --course "..."
 - 见面课考勤：`getWatchHistory` 查已看分钟，`setWatchHistorySecret` 逐分钟上报；
 - 平台有独立行为分析（`cheat/exceptionActionDetail`）：秒刷属高风险形态，本工具默认 dry-run、限速、随机覆盖率与熔断；请自行评估账号风险；
 - 课程列表接口（`queryShareCourseInfo`）已于 2026-11-08 用真实账号抓包确认（加密模块 13、`pageNo` 分页）；失败时仍可用学习页 URL/`recruitAndCourseId` 兜底；见面课列表响应字段也可能随平台调整。
+- **见面课列表接口**（`online.zhihuishu.com/onlineSchool/json/teachMeeting/listTeachMeetingStu`）在 2026-11-08 的 API 会话下返回 HTTP 400（疑似平台侧限制/改版）；`zhs check` 会把它降级为警告并继续输出视频课风控，单场见面课仍可用 `zhs meet watch --meeting <id>`；列表可稍后重试或在知到网页查看。
 
 ## 优学院（U学）视频与章节练习秒刷
 

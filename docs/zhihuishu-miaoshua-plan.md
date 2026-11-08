@@ -503,7 +503,7 @@ GET /app-commserv-live/gateway/t/v1/chect/exceptionActionDetail -> {"rt":{"lock"
 ### C.3 已知限制 / 未验证项
 
 1. **课程列表接口**（`queryShareCourseInfo`）已于 2026-11-08 用真实账号抓包确认并修正实现（加密模块 13、`pageNo` 分页、`result.courseOpenDtos` 解析）；失败时 CLI/GUI/website 仍支持用学习页 URL / `recruitAndCourseId` 兜底。
-2. **见面课列表响应字段**未真实抓包：顶层 `maps` 结构由 userscript 于 2026-11-07 登录态抓包确认，解析器保留多别名；真实字段变化时应收紧而不是继续加别名。
+2. **见面课列表接口**：`online.zhihuishu.com/onlineSchool/json/teachMeeting/listTeachMeetingStu` 在 2026-11-08 的 API 会话下返回 HTTP 400（疑似平台侧限制/改版）；`zhs check` 已降级为警告，单场见面课仍可用 `zhs meet watch --meeting <id>`。响应字段仍以 `maps` + 多别名为准，真实抓包后应收紧。
 3. **真实写请求**本轮未再次发送：视频 `saveDatabaseIntervalTimeV2`、见面课 `setWatchHistorySecret` 的线上可行性来自 2026-11-07 调研实测（提交成功、`watchState` 2→1、`rt` 增加分钟）；本轮实现用离线 mock 验证请求构造与流程。首次真实使用建议先 `--dry-run` 再单条/单场验证。
 4. **网站版桥接**：从 `onlineweb.zhihuishu.com` 跨子域请求 `studyservice-api`/`appcomm-live-api` 的 CORS 未真机验证；被拦截时会显示明确错误。
 5. **GUI 知到登录**未用真实账号在 Tauri 窗口验证（需人工在登录窗口输入）；代码路径与 HUST 共用同一套 spawn_blocking/临时目录约束。
