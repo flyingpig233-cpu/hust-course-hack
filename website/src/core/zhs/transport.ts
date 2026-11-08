@@ -63,6 +63,7 @@ const ROUTES: RouteRule[] = [
   { origin: ZHS_APPLIVE_ORIGIN, method: 'GET', path: /^\/app-commserv-live\/gateway\/t\/v1\/pc\/live\/(getWatchHistory|setWatchHistorySecret)$/ },
   { origin: ZHS_APPLIVE_ORIGIN, method: 'GET', path: /^\/app-commserv-live\/gateway\/t\/v1\/chect\/exceptionActionDetail$/ },
   { origin: ZHS_ONLINE_ORIGIN, method: 'POST', path: /^\/onlineSchool\/json\/teachMeeting\/listTeachMeetingStu$/ },
+  { origin: ZHS_STUONLINE_ORIGIN, method: 'POST', path: /^\/stuonline\/json\/teachMeeting\/listTeachMeetingStu$/ },
   { origin: ZHS_STUONLINE_ORIGIN, method: 'POST', path: /^\/stuonline\/teachMeeting\/listTeachMeetingStu$/ },
   { origin: ZHS_IM_ORIGIN, method: 'GET', path: /^\/livehome\/getVideosByLiveId$/ },
 ];

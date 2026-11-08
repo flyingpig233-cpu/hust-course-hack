@@ -1224,47 +1224,61 @@ impl ZhsClient {
 
     /// Meet course (见面课) list of one shared course.
     ///
-    /// Verified by the userscript on a live account: the student portal serves
-    /// the list from `online.zhihuishu.com/onlineSchool/...` with the plain form
-    /// fields `recruitId`, `page.pageNo` and `page.pageSize`. The legacy
-    /// `stuonline` endpoint is tried when the primary host fails.
-    ///
-    /// **Risk / unverified:** only the request side is verified; the response
-    /// field names are not captured yet. `parse_meets` therefore accepts several
-    /// aliases and enveloped shapes and must be tightened after the first live
-    /// capture. Entries without a `liveId` are dropped, and replay-only filtering
-    /// is left to the caller through [`ZhsMeet::has_replay`].
+    /// Verified live on 2026-11-08: the student portal serves the list from
+    /// `stuonline.zhihuishu.com/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss`
+    /// with the form fields `recruitId`, `page.pageNo`, `page.pageSize` and an
+    /// `X-Requested-With: XMLHttpRequest` header. The response is a JSON object
+    /// whose `maps` array holds the sessions and whose `mapCount` is the total.
+    /// The legacy `online.zhihuishu.com/onlineSchool/...` host is kept as a
+    /// fallback. Entries without a `liveId` are dropped, and replay-only
+    /// filtering is left to the caller through [`ZhsMeet::has_replay`].
     pub async fn meet_list(&self, course: &ZhsCourse) -> Result<Vec<ZhsMeet>> {
-        let body = form_encode(&[
-            ("recruitId", course.recruit_id.to_string().as_str()),
-            ("page.pageNo", "0"),
-            ("page.pageSize", "50"),
-        ]);
-        let primary = self
-            .post_form(
-                &self.endpoints.online,
-                MEET_LIST_PATH,
-                &body,
-                ONLINE_REFERER,
-            )
-            .await;
-        let value = match primary {
-            Ok(value) => value,
-            Err(primary_error) => {
-                log::debug!(
-                    "meet-list primary endpoint failed ({primary_error:#}); trying stuonline"
-                );
-                self.post_form(
-                    &self.endpoints.stuonline,
-                    MEET_LIST_FALLBACK_PATH,
-                    &body,
-                    ONLINE_REFERER,
-                )
-                .await
-                .with_context(|| format!("failed to list meet courses of {}", course.label()))?
+        let referer = format!(
+            "https://stuonline.zhihuishu.com/stuonline/teachMeeting/stuListV2?recruitId={}",
+            course.recruit_id
+        );
+        let recruit_id = course.recruit_id.to_string();
+        let mut meets = Vec::new();
+        let mut page: u32 = 0;
+        let mut total: u64 = u64::MAX;
+        loop {
+            let page_no = page.to_string();
+            let body = form_encode(&[
+                ("recruitId", recruit_id.as_str()),
+                ("page.pageNo", page_no.as_str()),
+                ("page.pageSize", "10"),
+            ]);
+            let primary = self
+                .post_form(&self.endpoints.stuonline, MEET_LIST_PATH, &body, &referer)
+                .await;
+            let value = match primary {
+                Ok(value) => value,
+                Err(primary_error) => {
+                    log::debug!(
+                        "meet-list primary endpoint failed ({primary_error:#}); trying the online fallback"
+                    );
+                    self.post_form(
+                        &self.endpoints.online,
+                        MEET_LIST_FALLBACK_PATH,
+                        &body,
+                        ONLINE_REFERER,
+                    )
+                    .await
+                    .with_context(|| format!("failed to list meet courses of {}", course.label()))?
+                }
+            };
+            if let Some(count) = value.get("mapCount").and_then(Value::as_u64) {
+                total = count;
             }
-        };
-        Ok(parse_meets(&value, course))
+            let page_meets = parse_meets(&value, course);
+            let empty = page_meets.is_empty();
+            meets.extend(page_meets);
+            if empty || meets.len() as u64 >= total || page >= 20 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(meets)
     }
 
     /// Replay length in seconds of one meet course.
@@ -1655,6 +1669,7 @@ impl ZhsClient {
             .header(REFERER, referer)
             .header(ORIGIN, origin_of(referer))
             .header(USER_AGENT, ZHS_USER_AGENT)
+            .header("X-Requested-With", "XMLHttpRequest")
             .body(body.to_string())
             .send()
             .await

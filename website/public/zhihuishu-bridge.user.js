@@ -25,6 +25,7 @@
 	var ZHS_STUDYSERVICE_ORIGIN = "https://studyservice-api.zhihuishu.com";
 	var ZHS_ONLINESERVICE_ORIGIN = "https://onlineservice-api.zhihuishu.com";
 	var ZHS_APPLIVE_ORIGIN = "https://appcomm-live-api.zhihuishu.com";
+	var ZHS_STUONLINE_ORIGIN = "https://stuonline.zhihuishu.com";
 	var ROUTES = [
 		{
 			origin: ZHS_STUDYSERVICE_ORIGIN,
@@ -67,7 +68,12 @@
 			path: /^\/onlineSchool\/json\/teachMeeting\/listTeachMeetingStu$/
 		},
 		{
-			origin: "https://stuonline.zhihuishu.com",
+			origin: ZHS_STUONLINE_ORIGIN,
+			method: "POST",
+			path: /^\/stuonline\/json\/teachMeeting\/listTeachMeetingStu$/
+		},
+		{
+			origin: ZHS_STUONLINE_ORIGIN,
 			method: "POST",
 			path: /^\/stuonline\/teachMeeting\/listTeachMeetingStu$/
 		},

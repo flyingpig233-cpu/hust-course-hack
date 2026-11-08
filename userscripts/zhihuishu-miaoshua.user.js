@@ -62,8 +62,8 @@
   // the `stuonline` variant is the path used by the Rust client. Only the
   // console debug helper uses it (the panel works on the current replay page).
   const MEET_LIST_URLS = [
+    'https://stuonline.zhihuishu.com/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss',
     'https://online.zhihuishu.com/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss',
-    'https://stuonline.zhihuishu.com/stuonline/teachMeeting/listTeachMeetingStu?examV2=ss',
   ];
 
   // Safety rails: same defaults as the plan / Rust client.
@@ -1066,7 +1066,7 @@
     const body = new URLSearchParams({
       recruitId: String(recruitId),
       'page.pageNo': '0',
-      'page.pageSize': '50',
+      'page.pageSize': '10',
     });
     let lastError = null;
     for (const url of MEET_LIST_URLS) {
