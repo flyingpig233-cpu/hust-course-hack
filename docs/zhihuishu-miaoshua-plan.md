@@ -188,7 +188,7 @@ zhs_cancel_job                          # 复用现有 AppState::begin_job/cance
 - 复用 `reqwest` + `cookie_store`（同 `SmartCourseClient` 做法）；错误归一化 `ZhsError { code, message, endpoint }`；
 - 接口封装：
   - `login_user`：`GET studyservice-api/gateway/t/v1/login/getLoginUserInfo`（模块 11）
-  - `list_courses`：**待首项确认** `onlineservice-api.../student/course/share/queryShareCourseInfo`；失败时 CLI 兜底"粘贴学习页 URL/`recruitAndCourseId`"（见待确认 §9）
+  - `list_courses`：`POST onlineservice-api.../student/course/share/queryShareCourseInfo`（2026-11-08 实测：加密模块 13、payload `{"status":0,"pageNo":N,"pageSize":50}`、外层 `secretStr&date`、响应 `result.courseOpenDtos`）；失败时 CLI 兜底"粘贴学习页 URL/`recruitAndCourseId`"（见待确认 §9）
   - `course_detail`：`queryCourse`（拿 recruitId/courseId/classId/isApply）+ `videolist`（章节/节/小节/videoId/videoSec/isStudiedLesson）
   - `prelearning_note`：拿 `studiedLessonDto.id`（即 noteId）
   - `query_stuy_info`：`{lessonIds, lessonVideoIds, recruitId}` → `data.lv[id] = {studyTotalTime, watchState}`
@@ -502,7 +502,7 @@ GET /app-commserv-live/gateway/t/v1/chect/exceptionActionDetail -> {"rt":{"lock"
 
 ### C.3 已知限制 / 未验证项
 
-1. **课程列表接口**（`queryShareCourseInfo`）仍未用真实抓包确认：`ZhsClient` 为 best-effort（POST/GET 双尝试 + 宽松解析），失败时 CLI/GUI/website 均支持用学习页 URL / `recruitAndCourseId` 兜底。
+1. **课程列表接口**（`queryShareCourseInfo`）已于 2026-11-08 用真实账号抓包确认并修正实现（加密模块 13、`pageNo` 分页、`result.courseOpenDtos` 解析）；失败时 CLI/GUI/website 仍支持用学习页 URL / `recruitAndCourseId` 兜底。
 2. **见面课列表响应字段**未真实抓包：顶层 `maps` 结构由 userscript 于 2026-11-07 登录态抓包确认，解析器保留多别名；真实字段变化时应收紧而不是继续加别名。
 3. **真实写请求**本轮未再次发送：视频 `saveDatabaseIntervalTimeV2`、见面课 `setWatchHistorySecret` 的线上可行性来自 2026-11-07 调研实测（提交成功、`watchState` 2→1、`rt` 增加分钟）；本轮实现用离线 mock 验证请求构造与流程。首次真实使用建议先 `--dry-run` 再单条/单场验证。
 4. **网站版桥接**：从 `onlineweb.zhihuishu.com` 跨子域请求 `studyservice-api`/`appcomm-live-api` 的 CORS 未真机验证；被拦截时会显示明确错误。
