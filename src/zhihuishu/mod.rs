@@ -18,6 +18,7 @@
 
 pub mod api;
 pub mod crypto;
+pub mod exam;
 pub mod meet;
 pub mod models;
 pub mod watch;
@@ -26,6 +27,12 @@ pub use api::{ZhsClient, ZhsEndpoints, ZhsError, parse_course_reference};
 pub use crypto::{
     ModuleKey, ModuleKeyCache, crypto_self_check, decrypt_module_key_blob, decrypt_secret,
     encrypt_secret, fetch_module_key, hms, parse_hms, watch_points, xor_decode, xor_encode,
+};
+pub use exam::{
+    DEFAULT_ANSWER_BANK_JSON, DEFAULT_ANSWER_BANK_PATH, ZhsAnswerBank, ZhsAnswerSource,
+    ZhsBankEntry, ZhsExamClient, ZhsExamContext, ZhsExamOption, ZhsExamPaper, ZhsExamPart,
+    ZhsExamPlan, ZhsExamQuestion, ZhsFinalExam, ZhsHomework, ZhsQuestionPlan, ZhsSubmitResult,
+    ZhsSubmittedAnswer, parse_ai_analysis, plan_exam,
 };
 pub use meet::{ZhsMeetWatchOptions, plan_meet_minutes, run_meet_watch};
 pub use models::{
@@ -66,6 +73,17 @@ pub const MODULE_MEET: u32 = 9;
 /// Shared-course list module id (measured 2026-11-08: `queryShareCourseInfo`
 /// encrypts with the runtime module-13 key, not module 11).
 pub const MODULE_COURSE_LIST: u32 = 13;
+
+/// Homework / exam module id (measured 2026-11-09: the exam APIs encrypt with
+/// the runtime module-3 key).
+pub const MODULE_EXAM: u32 = 3;
+
+/// Main exam-engine API base (`studentExam`).
+pub const EXAM_API_BASE: &str = "https://studentexam-api.zhihuishu.com/studentExam/gateway/t/v1";
+
+/// Taurus exam-engine API base, used by the final-exam list.
+pub const TAURUS_EXAM_API_BASE: &str =
+    "https://taurusexam-api.zhihuishu.com/taurusExam/gateway/t/v1";
 
 /// XOR key for the video `sdsew` report.
 pub const XOR_KEY_VIDEO: &str = "zzpttjd";

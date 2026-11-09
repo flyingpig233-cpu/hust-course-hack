@@ -782,6 +782,17 @@ impl ZhsClient {
         &self.endpoints
     }
 
+    /// Shared HTTP client (used by the exam sub-client, which adds its own API
+    /// base and module-3 `secretStr` wrapper but reuses the same cookie jar).
+    pub(crate) fn http(&self) -> &Client {
+        &self.http
+    }
+
+    /// School id from the `CASLOGC` cookie, when it carries one.
+    pub(crate) fn school_id(&self) -> Option<u64> {
+        self.user_from_cookie().ok().and_then(|user| user.school_id)
+    }
+
     /// Load cookies from a browser-exported Netscape `cookies.txt` file.
     pub fn from_cookie_file(path: impl AsRef<Path>) -> Result<Self> {
         Self::from_cookie_file_with_endpoints(path, ZhsEndpoints::default())
@@ -1478,7 +1489,7 @@ impl ZhsClient {
 
     /// Current AES key of a module, fetched at runtime (video module has an
     /// embedded fallback for offline use).
-    async fn module_key(&self, module: u32) -> Result<String> {
+    pub(crate) async fn module_key(&self, module: u32) -> Result<String> {
         if let Some(key) = self.keys.get(module) {
             return Ok(key);
         }
@@ -1679,7 +1690,11 @@ impl ZhsClient {
     }
 
     /// Read a JSON response and normalize platform errors.
-    async fn read_json_response(&self, path: &str, response: reqwest::Response) -> Result<Value> {
+    pub(crate) async fn read_json_response(
+        &self,
+        path: &str,
+        response: reqwest::Response,
+    ) -> Result<Value> {
         let status = response.status();
         let text = response
             .text()

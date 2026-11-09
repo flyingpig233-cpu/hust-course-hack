@@ -10,8 +10,10 @@ use hust_course_hack::{
     },
     watch_target,
     zhihuishu::{
-        ZhsClient, ZhsCourseDetail, ZhsExceptionStatus, ZhsMeet, ZhsMeetWatchOptions, ZhsProgress,
-        ZhsVideoTarget, ZhsWatchOptions, ZhsWatchState, hms, watch::build_video_payload,
+        DEFAULT_ANSWER_BANK_PATH, ZhsAnswerBank, ZhsClient, ZhsCourse, ZhsCourseDetail,
+        ZhsExamClient, ZhsExamPaper, ZhsExceptionStatus, ZhsFinalExam, ZhsHomework, ZhsMeet,
+        ZhsMeetWatchOptions, ZhsProgress, ZhsSubmittedAnswer, ZhsVideoTarget, ZhsWatchOptions,
+        ZhsWatchState, hms, plan_exam, watch::build_video_payload,
     },
 };
 use serde::Serialize;
@@ -178,6 +180,67 @@ enum ZhsCommand {
     Meet {
         #[command(subcommand)]
         command: ZhsMeetCommand,
+    },
+    /// List homework / unit tests / final exams of one course.
+    Exams {
+        /// Course reference: study-page URL, recruitAndCourseId secret,
+        /// recruitId;courseId, or courseId.
+        #[arg(long)]
+        course: String,
+        /// Show submitted exams instead of unsubmitted ones.
+        #[arg(long)]
+        submitted: bool,
+    },
+    /// Inspect, answer or bank one exam.
+    Exam {
+        #[command(subcommand)]
+        command: ZhsExamCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ZhsExamCommand {
+    /// Print the paper questions and options (no answers are returned by the API).
+    Show {
+        /// Course reference.
+        #[arg(long)]
+        course: String,
+        /// examId or stuExamId.
+        #[arg(long)]
+        exam: String,
+        /// Also print the submitted answers/scores of this paper.
+        #[arg(long)]
+        submitted: bool,
+    },
+    /// Plan answers from the answer bank; submit only with --yes and a complete plan.
+    Answer {
+        /// Course reference.
+        #[arg(long)]
+        course: String,
+        /// examId or stuExamId.
+        #[arg(long)]
+        exam: String,
+        /// Print the plan and the answers that would be saved; send nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Save and submit for real (requires a complete answer plan).
+        #[arg(long)]
+        yes: bool,
+        /// Answer-bank file (defaults to test-data/zhihuishu-answer-bank.json).
+        #[arg(long)]
+        bank: Option<PathBuf>,
+    },
+    /// Show or grow the answer bank from submitted papers.
+    Bank {
+        /// Course reference.
+        #[arg(long)]
+        course: String,
+        /// Extract full-mark answers from submitted papers into the bank.
+        #[arg(long)]
+        from_submission: bool,
+        /// Answer-bank file (defaults to test-data/zhihuishu-answer-bank.json).
+        #[arg(long)]
+        bank: Option<PathBuf>,
     },
 }
 
@@ -884,6 +947,32 @@ async fn zhs(command: ZhsCommand, cookies: &Path) -> Result<i32> {
                 }
             }
         }
+        ZhsCommand::Exams { course, submitted } => {
+            let client = zhs_client(cookies)?;
+            zhs_exams(&client, &course, submitted).await
+        }
+        ZhsCommand::Exam { command } => {
+            let client = zhs_client(cookies)?;
+            match command {
+                ZhsExamCommand::Show {
+                    course,
+                    exam,
+                    submitted,
+                } => zhs_exam_show(&client, &course, &exam, submitted).await,
+                ZhsExamCommand::Answer {
+                    course,
+                    exam,
+                    dry_run,
+                    yes,
+                    bank,
+                } => zhs_exam_answer(&client, &course, &exam, dry_run, yes, bank).await,
+                ZhsExamCommand::Bank {
+                    course,
+                    from_submission,
+                    bank,
+                } => zhs_exam_bank(&client, &course, from_submission, bank).await,
+            }
+        }
     }
 }
 
@@ -1552,6 +1641,364 @@ fn parse_delay_ms(spec: &str) -> Result<(u64, u64)> {
         bail!("上报间隔下限不能大于上限：{spec}");
     }
     Ok((min, max))
+}
+
+// -------------------------------------------------------------------------
+// Zhihuishu homework / exams
+// -------------------------------------------------------------------------
+
+fn zhs_exam_client(client: &ZhsClient) -> ZhsExamClient {
+    ZhsExamClient::new(client.clone())
+}
+
+fn opt_text<T: ToString>(value: Option<T>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn homework_from_final(exam: ZhsFinalExam, course: &ZhsCourse) -> ZhsHomework {
+    ZhsHomework {
+        stu_exam_id: exam.stu_exam_id,
+        exam_id: exam.exam_id,
+        name: exam.name,
+        problem_num: exam.problem_num,
+        total_score: exam.total_score,
+        meet_course_type: None,
+        chapter_id: None,
+        course_id: course.course_id.to_string(),
+        recruit_id: course.recruit_id.to_string(),
+        ..ZhsHomework::default()
+    }
+}
+
+/// Find one homework/final entry by `examId` or `stuExamId`.
+async fn zhs_find_exam(
+    exams: &ZhsExamClient,
+    course: &ZhsCourse,
+    exam_id: &str,
+    submitted_first: bool,
+) -> Result<ZhsHomework> {
+    let order = if submitted_first {
+        [true, false]
+    } else {
+        [false, true]
+    };
+    for submitted in order {
+        let homeworks = exams
+            .list_homework(course.recruit_id, course.course_id, submitted)
+            .await?;
+        if let Some(homework) = homeworks
+            .into_iter()
+            .find(|homework| homework.exam_id == exam_id || homework.stu_exam_id == exam_id)
+        {
+            return Ok(homework);
+        }
+    }
+    let finals = exams
+        .list_final_exams(course.recruit_id, course.course_id)
+        .await?;
+    if let Some(final_exam) = finals
+        .into_iter()
+        .find(|exam| exam.exam_id == exam_id || exam.stu_exam_id == exam_id)
+    {
+        return Ok(homework_from_final(final_exam, course));
+    }
+    bail!("未找到 examId/stuExamId 为 {exam_id} 的作业或考试");
+}
+
+async fn zhs_exams(client: &ZhsClient, reference: &str, submitted: bool) -> Result<i32> {
+    let course = client.resolve_course(reference).await?;
+    let exams = zhs_exam_client(client);
+    println!(
+        "课程：{}（recruitId={}，courseId={}）",
+        course.label(),
+        course.recruit_id,
+        course.course_id
+    );
+    let homeworks = exams
+        .list_homework(course.recruit_id, course.course_id, submitted)
+        .await?;
+    println!(
+        "{}的作业/测验：",
+        if submitted { "已提交" } else { "未提交" }
+    );
+    if homeworks.is_empty() {
+        println!("  （无）");
+    } else {
+        for homework in &homeworks {
+            println!(
+                "  {} | examId={} | stuExamId={} | {} 题 | 总分 {} | 次数 {} | 得分 {}",
+                homework.name,
+                homework.exam_id,
+                homework.stu_exam_id,
+                opt_text(homework.problem_num),
+                opt_text(homework.total_score),
+                opt_text(homework.back_num),
+                opt_text(homework.score),
+            );
+        }
+    }
+
+    let finals = exams
+        .list_final_exams(course.recruit_id, course.course_id)
+        .await?;
+    if finals.is_empty() {
+        println!("期末考试：（无）");
+    } else {
+        println!("期末考试（注意：通常仅 1 次机会，不建议自动提交）：");
+        for exam in &finals {
+            println!(
+                "  {} | examId={} | stuExamId={} | {} 题 | 总分 {} | 限时 {} 分钟 | 剩余次数 {}",
+                exam.name,
+                exam.exam_id,
+                exam.stu_exam_id,
+                opt_text(exam.problem_num),
+                opt_text(exam.total_score),
+                opt_text(exam.limit_time),
+                opt_text(exam.remain_count),
+            );
+        }
+    }
+    Ok(0)
+}
+
+fn option_contents(paper: &ZhsExamPaper, answer: &ZhsSubmittedAnswer) -> String {
+    let mut contents = Vec::new();
+    for option_id in &answer.option_ids {
+        for question in paper.questions() {
+            if let Some(option) = question
+                .options
+                .iter()
+                .find(|option| &option.id == option_id)
+            {
+                contents.push(option.content.clone());
+                break;
+            }
+        }
+    }
+    if contents.is_empty() {
+        answer.option_ids.join(",")
+    } else {
+        contents.join(" / ")
+    }
+}
+
+async fn zhs_exam_show(
+    client: &ZhsClient,
+    reference: &str,
+    exam_id: &str,
+    submitted: bool,
+) -> Result<i32> {
+    let course = client.resolve_course(reference).await?;
+    let exams = zhs_exam_client(client);
+    let homework = zhs_find_exam(&exams, &course, exam_id, submitted).await?;
+    let paper = match exams.paper(&homework).await {
+        Ok(paper) => paper,
+        Err(error) => {
+            bail!(
+                "读取试卷失败：{error:#}\n未开始答题的试卷需要 openExam 才能读取题目（会开始计时），请使用 `zhs exam answer` 读取并作答。"
+            );
+        }
+    };
+    println!(
+        "试卷：{}（{} 题，总分 {}）",
+        paper.exam_name,
+        paper.question_count(),
+        paper.total_score
+    );
+    for (index, question) in paper.questions().enumerate() {
+        println!("{}. [{}] {}", index + 1, question.kind_name, question.stem);
+        for (option_index, option) in question.options.iter().enumerate() {
+            let letter = char::from(b'A' + option_index as u8);
+            println!("   {letter}. {}", option.content);
+        }
+    }
+    if submitted {
+        let answers = exams.submitted_answers(&homework, &paper).await?;
+        if answers.is_empty() {
+            println!("已提交答案：（无）");
+        } else {
+            println!("已提交答案：");
+            for answer in &answers {
+                println!(
+                    "  {} -> {}（得分 {}）",
+                    answer.question_id,
+                    option_contents(&paper, answer),
+                    answer.score
+                );
+            }
+        }
+    }
+    Ok(0)
+}
+
+async fn zhs_exam_answer(
+    client: &ZhsClient,
+    reference: &str,
+    exam_id: &str,
+    dry_run: bool,
+    yes: bool,
+    bank: Option<PathBuf>,
+) -> Result<i32> {
+    let course = client.resolve_course(reference).await?;
+    let exams = zhs_exam_client(client);
+    let homework = zhs_find_exam(&exams, &course, exam_id, false).await?;
+    if homework.score.is_none() {
+        println!("提示：未提交的试卷需要先进入答题（openExam）才能读取题目，进入后计时开始。");
+    }
+    let paper = exams.paper_for_answering(&homework).await?;
+    let context = exams.context_for(&homework).await?;
+    let bank_path = bank.unwrap_or_else(|| PathBuf::from(DEFAULT_ANSWER_BANK_PATH));
+    let bank = ZhsAnswerBank::load_or_builtin(&bank_path)?;
+    let plan = plan_exam(&paper, &context, &bank);
+    println!(
+        "试卷：{}（{} 题，答案库 {} 条）",
+        paper.exam_name,
+        paper.question_count(),
+        bank.len()
+    );
+    for question in &plan.questions {
+        println!(
+            "  {} [{}] {} -> {}（{}）",
+            question.question.id,
+            question.question.kind_name,
+            truncate_text(&question.question.stem, 40),
+            question.option_contents.join(" / "),
+            question.source.label()
+        );
+    }
+    if plan.unresolved.is_empty() {
+        println!("全部 {} 题已命中答案库。", plan.questions.len());
+    } else {
+        println!(
+            "未命中答案 {} 题：{}",
+            plan.unresolved.len(),
+            plan.unresolved.join(",")
+        );
+    }
+
+    if dry_run || !yes {
+        println!("dry-run：未保存、未提交。补齐答案库后加 --yes 真实执行。");
+        return Ok(0);
+    }
+    if !plan.is_complete() {
+        bail!(
+            "答案计划不完整（未命中 {} 题），拒绝真实提交；请先补齐答案库",
+            plan.unresolved.len()
+        );
+    }
+    let prompt = format!(
+        "将保存 {} 题并提交试卷「{}」（若为期末考试通常只有 1 次机会）。",
+        plan.questions.len(),
+        paper.exam_name
+    );
+    if !confirm_real_run(&prompt, yes)? {
+        println!("已取消。");
+        return Ok(0);
+    }
+    for (index, question) in plan.questions.iter().enumerate() {
+        let saved = exams
+            .save_answer(&homework, &question.question, &question.option_ids)
+            .await?;
+        if !saved {
+            bail!(
+                "保存第 {} 题失败（questionId={}），已中止",
+                index + 1,
+                question.question.id
+            );
+        }
+        println!(
+            "已保存 {}/{}：{}",
+            index + 1,
+            plan.questions.len(),
+            question.question.id
+        );
+        if index + 1 < plan.questions.len() {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+    }
+    let result = exams.submit(&homework).await?;
+    println!(
+        "提交成功：{}，得分 {}",
+        result.message,
+        opt_text(result.score)
+    );
+    Ok(0)
+}
+
+async fn zhs_exam_bank(
+    client: &ZhsClient,
+    reference: &str,
+    from_submission: bool,
+    bank: Option<PathBuf>,
+) -> Result<i32> {
+    let bank_path = bank.unwrap_or_else(|| PathBuf::from(DEFAULT_ANSWER_BANK_PATH));
+    let mut bank = ZhsAnswerBank::load_or_builtin(&bank_path)?;
+    if !from_submission {
+        println!("答案库：{} 条（{}）", bank.len(), bank_path.display());
+        return Ok(0);
+    }
+    let course = client.resolve_course(reference).await?;
+    let exams = zhs_exam_client(client);
+    let homeworks = exams
+        .list_homework(course.recruit_id, course.course_id, true)
+        .await?;
+    if homeworks.is_empty() {
+        println!("没有已提交的作业/测验，答案库未变化。");
+        return Ok(1);
+    }
+    let mut scanned = 0usize;
+    let mut recorded = 0usize;
+    for homework in &homeworks {
+        let paper = match exams.paper(homework).await {
+            Ok(paper) => paper,
+            Err(error) => {
+                eprintln!("跳过「{}」：读取试卷失败：{error:#}", homework.name);
+                continue;
+            }
+        };
+        let answers = match exams.submitted_answers(homework, &paper).await {
+            Ok(answers) => answers,
+            Err(error) => {
+                eprintln!("跳过「{}」：读取已作答答案失败：{error:#}", homework.name);
+                continue;
+            }
+        };
+        scanned += 1;
+        let recorded_now = bank.record_submitted(&paper, &answers, unix_seconds());
+        recorded += recorded_now;
+        println!(
+            "{}：{} 题，其中满分题 {} 道记入答案库",
+            homework.name,
+            paper.question_count(),
+            recorded_now
+        );
+    }
+    let now = unix_seconds();
+    bank.generated_at_unix = now;
+    bank.save(&bank_path)?;
+    println!(
+        "已扫描 {scanned} 份已提交试卷，记录/更新 {recorded} 题；答案库共 {} 条，已写入 {}",
+        bank.len(),
+        bank_path.display()
+    );
+    Ok(0)
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    let mut out: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 /// Build the Ulearning client from the global `--cookies` file.
