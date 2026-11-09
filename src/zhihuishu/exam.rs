@@ -40,8 +40,14 @@ const HOMEWORK_PATH: &str = "student/getStudentHomework";
 const FINAL_EXAM_PATH: &str = "student/getStudentFinalExam";
 /// Exam paper (questions + options only, no answers).
 const LOOK_HOMEWORK_PATH: &str = "student/lookHomework";
-/// Start/enter an exam attempt and return its paper (needed before answering).
-const OPEN_EXAM_PATH: &str = "student/openExam";
+/// Enter a homework/unit-test attempt and return its paper (`openHomework`).
+const OPEN_HOMEWORK_PATH: &str = "student/doHomework";
+/// Enter an exam attempt (taurus engine) and return its paper.
+///
+/// The page's `openExam` helper calls **`student/doExam` on the taurus engine**
+/// (`taurusexam-api…/taurusExam/gateway/t/v1/student/doExam`); the main engine
+/// exposes the same path for non-taurus exams.
+const OPEN_EXAM_PATH: &str = "student/doExam";
 /// Submitted answers of one paper.
 const ANSWER_INFO_PATH: &str = "answer/getStuAnswerInfo";
 /// Per-question scores of one submitted paper.
@@ -607,6 +613,11 @@ pub fn parse_ai_analysis(text: &str, question: &ZhsExamQuestion) -> Option<Vec<S
 
     let mut positive: Vec<char> = Vec::new();
     for (letter, index) in letters_with_context(text) {
+        // "不正确"/"不符合" also contains the substring "正确"; skip any letter
+        // whose context is explicitly negative before checking positives.
+        if has_negative_context(text, index) {
+            continue;
+        }
         if has_positive_context(text, index) {
             push_unique(&mut positive, letter);
         }
@@ -654,6 +665,19 @@ fn normalize_content(text: &str) -> String {
 /// Bank/reference key: HTML tags removed, then the shared stem normalizer.
 fn normalize_stem_text(text: &str) -> String {
     crate::answers::normalize_stem(&strip_html_tags(text))
+}
+
+/// Whether an error is the platform's anti-cheat / slider-verification prompt.
+fn needs_human_verification(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<super::ZhsError>()
+            .is_some_and(|error| {
+                error.code == -12
+                    || error.message.contains("滑块")
+                    || error.message.contains("验证")
+            })
+    })
 }
 
 /// Strip HTML tags (`<p>`, `<br/>`, `<span style=…>`) from exam stems/options.
@@ -758,22 +782,57 @@ fn marker_letters(text: &str) -> Vec<char> {
     Vec::new()
 }
 
-/// Last resort: locate exactly one option content near a positive marker.
+/// Last resort: locate an option content in the text right after a positive marker.
+///
+/// The search starts **after** the marker itself so the words "正确答案" do not
+/// match an option literally named 正确 (judgement questions).
 fn content_fallback(text: &str, question: &ZhsExamQuestion) -> Option<Vec<String>> {
-    let normalized_text = normalize_content(text);
-    let matched: Vec<&ZhsExamOption> = question
-        .options
-        .iter()
-        .filter(|option| {
-            let content = normalize_content(&option.content);
-            !content.is_empty() && normalized_text.contains(&content)
-        })
-        .collect();
-    if matched.len() == 1 {
-        Some(vec![matched[0].content.clone()])
-    } else {
-        None
+    const MARKERS: [&str; 7] = [
+        "正确答案",
+        "答案为",
+        "答案是",
+        "答案：",
+        "故选",
+        "应选",
+        "综上",
+    ];
+    for marker in MARKERS {
+        let Some(position) = text.find(marker) else {
+            continue;
+        };
+        let tail = &text[position + marker.len()..];
+        let all: Vec<&ZhsExamOption> = question
+            .options
+            .iter()
+            .filter(|option| {
+                let content = option.content.trim();
+                !content.is_empty() && tail.contains(content)
+            })
+            .collect();
+        // Drop option contents that are substrings of other matched contents.
+        let matched: Vec<&ZhsExamOption> = all
+            .iter()
+            .copied()
+            .filter(|option| {
+                !all.iter().any(|other| {
+                    other.content.trim() != option.content.trim()
+                        && other.content.contains(option.content.trim())
+                })
+            })
+            .collect();
+        if matched.len() == 1 {
+            return Some(vec![matched[0].content.clone()]);
+        }
+        if question.is_multiple() && !matched.is_empty() {
+            return Some(
+                matched
+                    .iter()
+                    .map(|option| option.content.clone())
+                    .collect(),
+            );
+        }
     }
+    None
 }
 
 /// Zhihuishu exam client: same session and module-key plumbing as [`ZhsClient`],
@@ -992,22 +1051,58 @@ impl ZhsExamClient {
         match self.paper(homework).await {
             Ok(paper) => Ok(paper),
             Err(look_error) => {
-                log::debug!("lookHomework failed ({look_error:#}); entering the exam via openExam");
-                self.open_exam(homework).await
+                log::debug!("lookHomework failed ({look_error:#}); trying openHomework/openExam");
+                match self.open_homework(homework).await {
+                    Ok(paper) => Ok(paper),
+                    Err(homework_error) => {
+                        if needs_human_verification(&homework_error) {
+                            return Err(homework_error).context(
+                                "平台要求滑块/人工验证：请在图形界面完成验证后重试；本次未提交任何答案",
+                            );
+                        }
+                        log::debug!("openHomework failed ({homework_error:#}); trying openExam");
+                        self.open_exam(homework).await
+                    }
+                }
             }
         }
     }
 
-    /// Enter an exam attempt and return its paper (`student/openExam`).
+    /// Enter a homework/unit-test attempt and return its paper
+    /// (`student/doHomework`, main engine).
+    ///
+    /// Measured payload: `{recruitId, examId, studentExamId, schoolId, courseId}`
+    /// (no `deviceId`), response `rt.examBase.workExamParts`.
+    pub async fn open_homework(&self, homework: &ZhsHomework) -> Result<ZhsExamPaper> {
+        let context = self.context_for(homework).await?;
+        let value = self
+            .post_at(&self.base, OPEN_HOMEWORK_PATH, &context.paper_payload())
+            .await
+            .with_context(|| format!("进入作业 {} 失败", homework.label()))?;
+        parse_paper(&value)
+    }
+
+    /// Enter an exam attempt and return its paper (`student/doExam`).
     ///
     /// Measured request: `{recruitId, examId, studentExamId, schoolId, courseId,
     /// deviceId}`; response `rt.examBase.workExamParts` like `lookHomework`.
+    /// The page calls it through the taurus engine first; non-taurus exams use
+    /// the main engine, so a failure on taurus retries the main base.
     pub async fn open_exam(&self, homework: &ZhsHomework) -> Result<ZhsExamPaper> {
         let context = self.context_for(homework).await?;
-        let value = self
-            .post_at(&self.base, OPEN_EXAM_PATH, &context.open_exam_payload())
+        let payload = context.open_exam_payload();
+        let value = match self
+            .post_at(&self.taurus_base, OPEN_EXAM_PATH, &payload)
             .await
-            .with_context(|| format!("进入试卷 {} 失败", homework.label()))?;
+        {
+            Ok(value) => value,
+            Err(taurus_error) => {
+                log::debug!("taurus doExam failed ({taurus_error:#}); trying the main engine");
+                self.post_at(&self.base, OPEN_EXAM_PATH, &payload)
+                    .await
+                    .with_context(|| format!("进入试卷 {} 失败", homework.label()))?
+            }
+        };
         parse_paper(&value)
     }
 
@@ -1598,6 +1693,81 @@ mod tests {
         assert_eq!(
             parse_ai_analysis("故选A、C，B项错误。", &multiple),
             Some(vec!["独立权".to_string(), "内政不受干涉".to_string()])
+        );
+    }
+
+    #[test]
+    fn bank_records_realistic_ai_analysis_texts() {
+        let paper = paper_fixture();
+        let mut texts = HashMap::new();
+        texts.insert(
+            "1001".to_string(),
+            "解析：A项错误，B项排除，C项不符合题意。D项符合材料，因此正确答案是D。".to_string(),
+        );
+        texts.insert(
+            "1002".to_string(),
+            "正确答案：A、C。B项不正确，排除B。".to_string(),
+        );
+        let mut bank = ZhsAnswerBank::builtin();
+        let recorded = bank.record_ai_analysis(&paper, &texts, 1);
+        assert_eq!(recorded, 2, "entries = {:?}", bank.entries);
+        let single = bank
+            .entries
+            .iter()
+            .find(|e| e.stem == single_question().stem)
+            .unwrap();
+        assert_eq!(single.answers, vec!["蒙古帝国"]);
+        assert_eq!(single.source, "ai_analysis");
+        let multiple = bank
+            .entries
+            .iter()
+            .find(|e| e.stem == multiple_question().stem)
+            .unwrap();
+        assert_eq!(multiple.answers, vec!["独立权", "内政不受干涉"]);
+    }
+
+    #[test]
+    fn bank_skips_ambiguous_and_negative_only_ai_texts() {
+        let paper = paper_fixture();
+        let mut texts = HashMap::new();
+        texts.insert(
+            "1001".to_string(),
+            "A项错误，B项排除，C项不符合，D项也不正确，无法确定。".to_string(),
+        );
+        texts.insert(
+            "1002".to_string(),
+            "可能选A，也可能选B，需要结合更多材料。".to_string(),
+        );
+        let mut bank = ZhsAnswerBank::builtin();
+        let recorded = bank.record_ai_analysis(&paper, &texts, 1);
+        assert_eq!(recorded, 0);
+        assert!(
+            bank.entries.is_empty(),
+            "ambiguous text must not become an answer"
+        );
+    }
+
+    #[test]
+    fn ai_analysis_handles_judgement_content_fallback() {
+        let judge = question(
+            3,
+            "判断题",
+            "测试判断题干（ ）。",
+            vec![option("1", "正确"), option("2", "错误")],
+        );
+        assert_eq!(
+            parse_ai_analysis("正确答案是：错误", &judge),
+            Some(vec!["错误".to_string()])
+        );
+        assert_eq!(
+            parse_ai_analysis("正确答案是：正确", &judge),
+            Some(vec!["正确".to_string()])
+        );
+        assert_eq!(parse_ai_analysis("无法判断题干对错", &judge), None);
+        // A/B refer to the current option order: B (= 错误) is correct here.
+        assert_eq!(
+            parse_ai_analysis("A项错误，B项正确", &judge),
+            Some(vec!["错误".to_string()])
         );
     }
 

@@ -13,11 +13,13 @@ use hust_course_hack::{
         DEFAULT_ANSWER_BANK_PATH, ZhsAnswerBank, ZhsClient, ZhsCourse, ZhsCourseDetail,
         ZhsExamClient, ZhsExamPaper, ZhsExceptionStatus, ZhsFinalExam, ZhsHomework, ZhsMeet,
         ZhsMeetWatchOptions, ZhsProgress, ZhsSubmittedAnswer, ZhsVideoTarget, ZhsWatchOptions,
-        ZhsWatchState, hms, plan_exam, watch::build_video_payload,
+        ZhsWatchState, hms, parse_ai_analysis, plan_exam, watch::build_video_payload,
     },
 };
+use rand::Rng;
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     io::{BufRead, IsTerminal, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -230,7 +232,27 @@ enum ZhsExamCommand {
         #[arg(long)]
         bank: Option<PathBuf>,
     },
-    /// Show or grow the answer bank from submitted papers.
+    /// Run a real attempt (openExam -> save -> submit); this starts the timer and
+    /// consumes one attempt. Finals are refused.
+    Attempt {
+        /// Course reference.
+        #[arg(long)]
+        course: String,
+        /// examId or stuExamId (must not be a final exam).
+        #[arg(long)]
+        exam: String,
+        /// Answer unresolved questions with the first option (one option for
+        /// multiple choice). This is the "low-score harvest" path.
+        #[arg(long)]
+        pick_first: bool,
+        /// Required: really start the attempt, save answers and submit.
+        #[arg(long)]
+        yes: bool,
+        /// Answer-bank file (defaults to test-data/zhihuishu-answer-bank.json).
+        #[arg(long)]
+        bank: Option<PathBuf>,
+    },
+    /// Show or grow the answer bank from submitted papers or saved AI-analysis text.
     Bank {
         /// Course reference.
         #[arg(long)]
@@ -238,6 +260,17 @@ enum ZhsExamCommand {
         /// Extract full-mark answers from submitted papers into the bank.
         #[arg(long)]
         from_submission: bool,
+        /// Import AI-analysis text for one paper: a JSON object
+        /// `{questionId: text}` or a directory with one `<questionId>.txt` file
+        /// per question.
+        #[arg(long, requires = "exam", conflicts_with = "from_submission")]
+        from_ai: Option<PathBuf>,
+        /// Exam whose paper the AI texts belong to (required with --from-ai).
+        #[arg(long)]
+        exam: Option<String>,
+        /// Print what would be imported without writing the bank.
+        #[arg(long)]
+        dry_run: bool,
         /// Answer-bank file (defaults to test-data/zhihuishu-answer-bank.json).
         #[arg(long)]
         bank: Option<PathBuf>,
@@ -966,11 +999,42 @@ async fn zhs(command: ZhsCommand, cookies: &Path) -> Result<i32> {
                     yes,
                     bank,
                 } => zhs_exam_answer(&client, &course, &exam, dry_run, yes, bank).await,
+                ZhsExamCommand::Attempt {
+                    course,
+                    exam,
+                    pick_first,
+                    yes,
+                    bank,
+                } => {
+                    if !yes {
+                        bail!(
+                            "attempt 会开启/继续一次答题（开始计时并消耗一次机会），必须显式加 --yes；仅出计划请用 `zhs exam answer --dry-run`"
+                        );
+                    }
+                    zhs_exam_attempt(&client, &course, &exam, pick_first, bank).await
+                }
                 ZhsExamCommand::Bank {
                     course,
                     from_submission,
+                    from_ai,
+                    exam,
+                    dry_run,
                     bank,
-                } => zhs_exam_bank(&client, &course, from_submission, bank).await,
+                } => {
+                    if let Some(source) = from_ai {
+                        zhs_exam_bank_from_ai(
+                            &client,
+                            &course,
+                            &source,
+                            exam.as_deref(),
+                            dry_run,
+                            bank,
+                        )
+                        .await
+                    } else {
+                        zhs_exam_bank(&client, &course, from_submission, bank).await
+                    }
+                }
             }
         }
     }
@@ -1797,7 +1861,7 @@ async fn zhs_exam_show(
         Ok(paper) => paper,
         Err(error) => {
             bail!(
-                "读取试卷失败：{error:#}\n未开始答题的试卷需要 openExam 才能读取题目（会开始计时），请使用 `zhs exam answer` 读取并作答。"
+                "读取试卷失败：{error:#}\n未开始答题的试卷需要 openHomework/openExam 才能读取题目（会开始计时），请使用 `zhs exam answer` 读取并作答。"
             );
         }
     };
@@ -1845,7 +1909,9 @@ async fn zhs_exam_answer(
     let exams = zhs_exam_client(client);
     let homework = zhs_find_exam(&exams, &course, exam_id, false).await?;
     if homework.score.is_none() {
-        println!("提示：未提交的试卷需要先进入答题（openExam）才能读取题目，进入后计时开始。");
+        println!(
+            "提示：未提交的试卷需要先进入答题（openHomework/openExam）才能读取题目，进入后计时开始。"
+        );
     }
     let paper = exams.paper_for_answering(&homework).await?;
     let context = exams.context_for(&homework).await?;
@@ -1925,6 +1991,280 @@ async fn zhs_exam_answer(
         opt_text(result.score)
     );
     Ok(0)
+}
+
+/// Run a real attempt: enter the paper, answer (bank first, `--pick-first`
+/// otherwise), save with pacing, submit, then print score + per-question result.
+async fn zhs_exam_attempt(
+    client: &ZhsClient,
+    reference: &str,
+    exam_id: &str,
+    pick_first: bool,
+    bank: Option<PathBuf>,
+) -> Result<i32> {
+    let course = client.resolve_course(reference).await?;
+    let exams = zhs_exam_client(client);
+
+    // Finals are never allowed here: usually one attempt only.
+    let finals = exams
+        .list_final_exams(course.recruit_id, course.course_id)
+        .await
+        .unwrap_or_default();
+    if finals
+        .iter()
+        .any(|exam| exam.exam_id == exam_id || exam.stu_exam_id == exam_id)
+    {
+        bail!("期末考试禁止使用 attempt（通常只有 1 次机会）；如需查看请用 `zhs exam show`");
+    }
+
+    let homework = zhs_find_exam(&exams, &course, exam_id, false).await?;
+    println!(
+        "警告：即将进入答题（openHomework/openExam 会开始计时并消耗一次机会）；请确认这确实是一次可重做的单元测试。"
+    );
+    if let Some(back_num) = homework.back_num {
+        println!("列表中的剩余次数 backNum={back_num}");
+    }
+    let paper = exams.paper_for_answering(&homework).await?;
+    let context = exams.context_for(&homework).await?;
+    let bank_path = bank.unwrap_or_else(|| PathBuf::from(DEFAULT_ANSWER_BANK_PATH));
+    let bank = ZhsAnswerBank::load_or_builtin(&bank_path)?;
+    let plan = plan_exam(&paper, &context, &bank);
+    println!(
+        "试卷：{}（{} 题；银行命中 {}/{}）",
+        paper.exam_name,
+        paper.question_count(),
+        plan.questions.len(),
+        paper.question_count()
+    );
+
+    let mut answers = Vec::with_capacity(paper.question_count());
+    for question in paper.questions() {
+        if let Some(planned) = plan
+            .questions
+            .iter()
+            .find(|planned| planned.question.id == question.id)
+        {
+            answers.push((question, planned.option_ids.clone(), true));
+        } else if pick_first {
+            let Some(first) = question.options.first() else {
+                bail!("题目 {} 没有选项，无法 pick-first", question.id);
+            };
+            answers.push((question, vec![first.id.clone()], false));
+        } else {
+            bail!(
+                "题目 {} 在答案库中没有答案；可加 --pick-first 做一次低分采集，或先用 `zhs exam bank --from-ai` 补库",
+                question.id
+            );
+        }
+    }
+    let from_bank = answers
+        .iter()
+        .filter(|(_, _, from_bank)| *from_bank)
+        .count();
+    println!(
+        "将保存 {} 题（银行 {}，pick-first {}），每题间隔 1–3 秒。",
+        answers.len(),
+        from_bank,
+        answers.len() - from_bank
+    );
+
+    let mut rng = rand::thread_rng();
+    for (index, (question, option_ids, from_bank)) in answers.iter().enumerate() {
+        if index > 0 {
+            let delay_ms = rng.gen_range(1_000..=3_000u64);
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+        let saved = exams.save_answer(&homework, question, option_ids).await?;
+        if !saved {
+            bail!(
+                "保存第 {} 题失败（questionId={}），已中止",
+                index + 1,
+                question.id
+            );
+        }
+        println!(
+            "已保存 {}/{}：{}（{}）",
+            index + 1,
+            answers.len(),
+            question.id,
+            if *from_bank { "银行" } else { "pick-first" }
+        );
+    }
+
+    let result = exams.submit(&homework).await?;
+    println!(
+        "提交成功：{}，平台返回得分 {}",
+        result.message,
+        opt_text(result.score)
+    );
+
+    match exams.submitted_answers(&homework, &paper).await {
+        Ok(submitted) => {
+            let mut correct = 0usize;
+            println!("逐题结果：");
+            for (index, question) in paper.questions().enumerate() {
+                let Some(answer) = submitted
+                    .iter()
+                    .find(|answer| answer.question_id == question.id)
+                else {
+                    println!("  {}. 无逐题结果", index + 1);
+                    continue;
+                };
+                let is_correct = answer.score + 0.001 >= question.score as f64;
+                if is_correct {
+                    correct += 1;
+                }
+                println!(
+                    "  {}. [{}] {} 得分 {}/{} -> {}",
+                    index + 1,
+                    if is_correct { "正确" } else { "错误" },
+                    truncate_text(&question.stem, 32),
+                    answer.score,
+                    question.score,
+                    option_contents(&paper, answer)
+                );
+            }
+            println!("正确 {correct}/{} 题", paper.question_count());
+        }
+        Err(error) => eprintln!("提交后读取逐题结果失败：{error:#}"),
+    }
+
+    // Attempt counters after the run (best score / remaining attempts).
+    for submitted in [false, true] {
+        match exams
+            .list_homework(course.recruit_id, course.course_id, submitted)
+            .await
+        {
+            Ok(homeworks) => {
+                if let Some(updated) = homeworks
+                    .iter()
+                    .find(|homework| homework.exam_id == exam_id || homework.stu_exam_id == exam_id)
+                {
+                    println!(
+                        "列表（{}）：state={} score={} achieveCount={} backNum={}",
+                        if submitted { "已提交" } else { "未提交" },
+                        opt_text(updated.state),
+                        opt_text(updated.score),
+                        opt_text(updated.achieve_count),
+                        opt_text(updated.back_num),
+                    );
+                }
+            }
+            Err(error) => eprintln!("读取作业列表失败：{error:#}"),
+        }
+    }
+    Ok(0)
+}
+
+/// Import AI-analysis text (`--from-ai`) into the answer bank.
+async fn zhs_exam_bank_from_ai(
+    client: &ZhsClient,
+    reference: &str,
+    source: &Path,
+    exam_id: Option<&str>,
+    dry_run: bool,
+    bank: Option<PathBuf>,
+) -> Result<i32> {
+    let exam_id = exam_id.context("--from-ai 需要同时提供 --exam 指定试卷")?;
+    let texts = load_ai_text_map(source)?;
+    if texts.is_empty() {
+        bail!("AI 解析来源为空：{}", source.display());
+    }
+    let course = client.resolve_course(reference).await?;
+    let exams = zhs_exam_client(client);
+    let homework = zhs_find_exam(&exams, &course, exam_id, true).await?;
+    let paper = exams.paper(&homework).await.with_context(|| {
+        format!("读取试卷 {exam_id} 失败；--from-ai 需要已提交试卷（check 页可读）")
+    })?;
+    let bank_path = bank.unwrap_or_else(|| PathBuf::from(DEFAULT_ANSWER_BANK_PATH));
+    let mut bank = ZhsAnswerBank::load_or_builtin(&bank_path)?;
+
+    let mut parsed = 0usize;
+    let mut skipped: Vec<String> = Vec::new();
+    for (question_id, text) in &texts {
+        match paper
+            .questions()
+            .find(|question| &question.id == question_id)
+        {
+            Some(question) => {
+                if parse_ai_analysis(text, question).is_some() {
+                    parsed += 1;
+                } else {
+                    skipped.push(format!("{question_id}: 解析模糊/无法确定"));
+                }
+            }
+            None => skipped.push(format!("{question_id}: 试卷中无此题")),
+        }
+    }
+    let recorded = bank.record_ai_analysis(&paper, &texts, unix_seconds());
+    println!(
+        "AI 文本 {} 条：匹配试卷 {} 条，已记录 {} 条，跳过 {} 条",
+        texts.len(),
+        parsed,
+        recorded,
+        skipped.len()
+    );
+    for item in &skipped {
+        println!("  跳过 {item}");
+    }
+    if recorded < parsed {
+        println!(
+            "  注意：{} 条未覆盖已有“已提交满分”答案（保持更可信来源）",
+            parsed - recorded
+        );
+    }
+    if dry_run {
+        println!("dry-run：未写入 {}", bank_path.display());
+        return Ok(0);
+    }
+    bank.generated_at_unix = unix_seconds();
+    bank.save(&bank_path)?;
+    println!("答案库共 {} 条，已写入 {}", bank.len(), bank_path.display());
+    Ok(0)
+}
+
+/// Load `--from-ai` input: a JSON object `{questionId: text}` or a directory of
+/// one `<questionId>.txt` (or other extension) file per question.
+fn load_ai_text_map(path: &Path) -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    if path.is_dir() {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(path)
+            .with_context(|| format!("failed to list {}", path.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.is_file())
+            .collect();
+        files.sort();
+        for file in files {
+            let Some(stem) = file.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("failed to read {}", file.display()))?;
+            map.insert(stem.to_string(), text);
+        }
+        return Ok(map);
+    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "{} must be a JSON object {{questionId: text}}",
+            path.display()
+        )
+    })?;
+    let object = value.as_object().with_context(|| {
+        format!(
+            "{} must be a JSON object {{questionId: text}}",
+            path.display()
+        )
+    })?;
+    for (question_id, text) in object {
+        let text = text
+            .as_str()
+            .with_context(|| format!("AI text for question {question_id} must be a string"))?;
+        map.insert(question_id.clone(), text.to_string());
+    }
+    Ok(map)
 }
 
 async fn zhs_exam_bank(
@@ -2657,5 +2997,142 @@ mod tests {
         assert_eq!(summary.aborted, 1);
         assert_eq!(summary.failed, 1);
         assert_eq!(summary.exit_code(), 1);
+    }
+
+    #[test]
+    fn parses_exam_attempt_flags() {
+        let cli = Cli::try_parse_from([
+            "hust-course-hack",
+            "zhs",
+            "exam",
+            "attempt",
+            "--course",
+            "463667;1000011214",
+            "--exam",
+            "ymEAlqzy",
+            "--pick-first",
+            "--yes",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Zhs {
+                command:
+                    ZhsCommand::Exam {
+                        command:
+                            ZhsExamCommand::Attempt {
+                                course,
+                                exam,
+                                pick_first,
+                                yes,
+                                bank,
+                            },
+                    },
+            } => {
+                assert_eq!(course, "463667;1000011214");
+                assert_eq!(exam, "ymEAlqzy");
+                assert!(pick_first);
+                assert!(yes);
+                assert!(bank.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_exam_bank_from_ai_flags() {
+        let cli = Cli::try_parse_from([
+            "hust-course-hack",
+            "zhs",
+            "exam",
+            "bank",
+            "--course",
+            "463667;1000011214",
+            "--from-ai",
+            "ai-map.json",
+            "--exam",
+            "ymEAlqzy",
+            "--dry-run",
+            "--bank",
+            "target/bank.json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Zhs {
+                command:
+                    ZhsCommand::Exam {
+                        command:
+                            ZhsExamCommand::Bank {
+                                from_ai,
+                                exam,
+                                dry_run,
+                                bank,
+                                ..
+                            },
+                    },
+            } => {
+                assert_eq!(from_ai.as_deref(), Some(Path::new("ai-map.json")));
+                assert_eq!(exam.as_deref(), Some("ymEAlqzy"));
+                assert!(dry_run);
+                assert_eq!(bank.as_deref(), Some(Path::new("target/bank.json")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        // `--from-ai` and `--from-submission` are mutually exclusive.
+        assert!(
+            Cli::try_parse_from([
+                "hust-course-hack",
+                "zhs",
+                "exam",
+                "bank",
+                "--course",
+                "c",
+                "--from-ai",
+                "ai.json",
+                "--exam",
+                "x",
+                "--from-submission",
+            ])
+            .is_err()
+        );
+
+        // `--from-ai` requires `--exam`.
+        assert!(
+            Cli::try_parse_from([
+                "hust-course-hack",
+                "zhs",
+                "exam",
+                "bank",
+                "--course",
+                "c",
+                "--from-ai",
+                "ai.json",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn loads_ai_text_map_from_json_and_directory() {
+        // Write under the workspace `target/` directory: the test environment may
+        // deny writes outside the checkout (including the system temp dir).
+        let base = PathBuf::from("target").join(format!("ai-map-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let json_path = base.join("map.json");
+        std::fs::write(&json_path, r#"{"q1":"text one","q2":"text two"}"#).unwrap();
+        let map = load_ai_text_map(&json_path).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["q1"], "text one");
+
+        let dir = base.join("texts");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("q9.txt"), "nine").unwrap();
+        let map = load_ai_text_map(&dir).unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["q9"], "nine");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

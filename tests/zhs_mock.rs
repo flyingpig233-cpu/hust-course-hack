@@ -116,8 +116,10 @@ pub struct MockState {
     pub replay_duration_secs: u64,
     /// Fail the `c/has` module-key handshake (video fallback / meet error tests).
     pub fail_module_key: bool,
-    /// Return an empty `rt` from `lookHomework` (forces the `openExam` fallback).
+    /// Return an empty `rt` from `lookHomework` (forces the openHomework/openExam fallback).
     pub fail_look_homework: bool,
+    /// Return the platform slider-verification error from `student/doHomework`.
+    pub homework_captcha: bool,
     /// Return a videolist with no chapters (empty-course boundary test).
     pub empty_video_tree: bool,
 }
@@ -138,6 +140,7 @@ impl Default for MockState {
             replay_duration_secs: 7_195,
             fail_module_key: false,
             fail_look_homework: false,
+            homework_captcha: false,
             empty_video_tree: false,
         }
     }
@@ -834,7 +837,28 @@ fn route(
         );
     }
 
-    if path.contains("/student/openExam") {
+    if path.contains("/student/doHomework") {
+        if state.homework_captcha {
+            return (
+                200,
+                "application/json".to_string(),
+                json!({
+                    "currentTime": 1_794_219_638_650u64,
+                    "code": -12,
+                    "msg": "弹出滑块验证",
+                    "rt": null,
+                })
+                .to_string(),
+            );
+        }
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(mock_paper_rt()),
+        );
+    }
+
+    if path.contains("/student/doExam") {
         return (
             200,
             "application/json".to_string(),
@@ -1895,7 +1919,7 @@ async fn exam_flow_lists_finals_and_grows_the_bank_from_submission() {
 }
 
 #[tokio::test]
-async fn exam_paper_falls_back_to_open_exam() {
+async fn exam_paper_falls_back_to_open_homework() {
     let server = MockServer::start();
     server.configure(|state| state.fail_look_homework = true);
     let client = server.client();
@@ -1908,9 +1932,9 @@ async fn exam_paper_falls_back_to_open_exam() {
     let paper = exams
         .paper_for_answering(&homeworks[0])
         .await
-        .expect("openExam fallback");
+        .expect("openHomework fallback");
     assert_eq!(paper.question_count(), 3);
-    let open = server.requests_for("/student/openExam");
+    let open = server.requests_for("/student/doHomework");
     assert_eq!(open.len(), 1);
     let secret = open[0].secret();
     assert_eq!(secret["recruitId"], "463667");
@@ -1918,4 +1942,31 @@ async fn exam_paper_falls_back_to_open_exam() {
     assert_eq!(secret["studentExamId"], "stu-EXAM1");
     assert_eq!(secret["schoolId"], "360");
     assert_eq!(secret["courseId"], "1000011214");
+}
+
+#[tokio::test]
+async fn exam_paper_reports_slider_captcha_without_trying_open_exam() {
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.fail_look_homework = true;
+        state.homework_captcha = true;
+    });
+    let client = server.client();
+    let exams = exam_client(&server, &client);
+
+    let homeworks = exams
+        .list_homework(MOCK_RECRUIT_ID, MOCK_COURSE_ID, false)
+        .await
+        .expect("homework list");
+    let error = exams
+        .paper_for_answering(&homeworks[0])
+        .await
+        .expect_err("slider captcha must abort instead of trying doExam");
+    let text = format!("{error:#}");
+    assert!(text.contains("滑块"), "error = {text}");
+    assert_eq!(
+        server.requests_for("/student/doExam").len(),
+        0,
+        "doExam must not be attempted when the platform asks for verification"
+    );
 }
