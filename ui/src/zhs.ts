@@ -8,10 +8,38 @@ import type {
   ZhsWatchState,
 } from "./types";
 
+/** Chinese label for a course kind (used by grouping and badges). */
+export function zhsCourseKindLabel(course: ZhsCourse): string {
+  switch (course.kind) {
+    case "shared":
+      return "共享课";
+    case "ai":
+      return "AI 智课";
+    case "school":
+      return "智慧课程";
+    default:
+      return "其他";
+  }
+}
+
+/** Stable UI/sidebar key for a course (non-shared sources may have no numeric ids). */
+export function zhsCourseKey(course: ZhsCourse): string {
+  if (course.kind === "shared") return String(course.courseId);
+  return (
+    course.externalId ??
+    `${course.kind}:${course.recruitId}:${course.courseId}`
+  );
+}
+
 /** Shortest human-readable course label. */
 export function zhsCourseLabel(course: ZhsCourse): string {
   const name = course.name.trim();
-  return name || `课程 ${course.courseId}（recruit ${course.recruitId}）`;
+  return (
+    name ||
+    `课程 ${course.courseId || course.externalId || course.recruitId}（${
+      course.kind === "shared" ? `recruit ${course.recruitId}` : "只读"
+    }）`
+  );
 }
 
 /** All videos of a lesson; lessons without small lessons expose their own id. */

@@ -13,6 +13,8 @@ import type {
 } from "../types";
 import {
   zhsCompletedVideos,
+  zhsCourseKey,
+  zhsCourseKindLabel,
   zhsCourseLabel,
   zhsLessonVideos,
   zhsTotalVideos,
@@ -53,14 +55,56 @@ export function renderZhsHome(
   handlers: ZhsHomeHandlers,
 ): void {
   main.onchange = null;
+  const kindOrder: Array<{ kind: ZhsCourse["kind"]; label: string }> = [
+    { kind: "shared", label: "共享课" },
+    { kind: "ai", label: "AI 智课" },
+    { kind: "school", label: "智慧课程" },
+    { kind: "other", label: "其他" },
+  ];
+  const sharedCount = courses.filter((course) => course.kind === "shared").length;
+  const grouped = kindOrder
+    .map((entry) => ({
+      ...entry,
+      items: courses.filter((course) => course.kind === entry.kind),
+    }))
+    .filter((group) => group.items.length > 0);
+  const cardFor = (course: ZhsCourse, index: number): string => {
+    const initial = [...course.name.trim()][0] ?? "课";
+    const percent =
+      course.progress === null ? null : Math.round(course.progress);
+    const readonly = course.kind !== "shared";
+    return `
+      <button class="course-card${readonly ? " is-readonly" : ""}" data-course-id="${esc(
+        zhsCourseKey(course),
+      )}" style="--delay:${index * 30}ms">
+        <div class="course-card-top">
+          <span class="course-avatar course-avatar-lg tone-${index % 5}">${esc(initial)}</span>
+          ${
+            readonly
+              ? `<span class="course-kind-badge">${esc(
+                  zhsCourseKindLabel(course),
+                )}</span>`
+              : `<span class="course-code">recruit ${esc(String(course.recruitId))}</span>`
+          }
+        </div>
+        <h3>${esc(zhsCourseLabel(course))}</h3>
+        <p class="course-card-meta">${esc(course.teacher || "知到课程")}${
+          percent === null ? "" : ` · 进度 ${percent}%`
+        }</p>
+        <span class="course-card-cta">${
+          readonly ? "查看信息" : "查看视频树"
+        } ${icon("chevron", 14)}</span>
+      </button>
+    `;
+  };
   main.innerHTML = `
     <section class="home-view">
       <header class="home-head">
         <div>
           <div class="eyebrow">已连接 知到（智慧树）</div>
-          <h1>选择一门共享课开始</h1>
+          <h1>选择课程开始</h1>
           <p class="home-sub">
-            当前账号共 ${courses.length} 门共享课 ·
+            当前账号共 ${courses.length} 门课程（共享课 ${sharedCount} 门）·
             ${esc(session.cookieSource)} · 会话包含 ${session.cookieCount} 项 Cookie
           </p>
         </div>
@@ -82,33 +126,25 @@ export function renderZhsHome(
       </div>
 
       ${
-        courses.length
-          ? `<div class="course-grid">${courses
-              .map((course, index) => {
-                const initial = [...course.name.trim()][0] ?? "课";
-                const percent =
-                  course.progress === null ? null : Math.round(course.progress);
-                return `
-                  <button class="course-card" data-course-id="${esc(
-                    String(course.courseId),
-                  )}" style="--delay:${index * 30}ms">
-                    <div class="course-card-top">
-                      <span class="course-avatar course-avatar-lg tone-${index % 5}">${esc(initial)}</span>
-                      <span class="course-code">recruit ${esc(String(course.recruitId))}</span>
-                    </div>
-                    <h3>${esc(zhsCourseLabel(course))}</h3>
-                    <p class="course-card-meta">${esc(course.teacher || "知到共享课")}${
-                      percent === null ? "" : ` · 进度 ${percent}%`
-                    }</p>
-                    <span class="course-card-cta">查看视频树 ${icon("chevron", 14)}</span>
-                  </button>
-                `;
-              })
-              .join("")}</div>`
+        grouped.length
+          ? grouped
+              .map(
+                (group) => `
+            <section class="course-section">
+              <div class="course-section-head">
+                <h2>${esc(group.label)}</h2>
+                <span class="count-pill">${group.items.length}</span>
+              </div>
+              <div class="course-grid">${group.items
+                .map((course, index) => cardFor(course, index))
+                .join("")}</div>
+            </section>`,
+              )
+              .join("")
           : `<div class="empty-panel">
               <div class="empty-icon">${icon("folder", 26)}</div>
-              <h2>没有解析到共享课</h2>
-              <p>知到课程列表接口未返回数据，可稍后刷新，或粘贴学习页链接手动添加。polymas / 翻转课暂不支持。</p>
+              <h2>没有解析到课程</h2>
+              <p>知到课程列表接口未返回数据，可稍后刷新，或粘贴学习页链接手动添加共享课。</p>
               <button class="btn" data-refresh>${icon("refresh", 15)} 刷新课程列表</button>
             </div>`
       }
@@ -116,8 +152,8 @@ export function renderZhsHome(
       <div class="tip-grid">
         <div class="tip-card">
           <span class="tip-index">01</span>
-          <h4>仅支持共享课</h4>
-          <p>知到共享课使用 <code>studyvideoh5</code>；polymas、翻转课和智能课不会出现在这里。</p>
+          <h4>共享课支持秒刷</h4>
+          <p>共享课使用 <code>studyvideoh5</code>，支持视频/见面课/作业考试；AI 智课、智慧课程与其他来源仅支持列表查看。</p>
         </div>
         <div class="tip-card">
           <span class="tip-index">02</span>
@@ -150,6 +186,42 @@ export function renderZhsHome(
     }
     const card = target.closest<HTMLElement>("[data-course-id]");
     if (card) handlers.onSelect(card.dataset.courseId ?? "");
+  };
+}
+
+/** Read-only info panel for course kinds whose platform protocol is not wired yet. */
+export function renderZhsUnsupportedCourse(
+  main: HTMLElement,
+  course: ZhsCourse,
+  onBack: () => void,
+): void {
+  main.onchange = null;
+  main.onclick = null;
+  const kind = zhsCourseKindLabel(course);
+  main.innerHTML = `
+    <div class="course-view">
+      <header class="course-head">
+        <div class="course-head-copy">
+          <div class="eyebrow">知到 · ${esc(kind)} · 只读</div>
+          <h1>${esc(zhsCourseLabel(course))}</h1>
+          <p class="course-sub">${esc(course.teacher || "教师未知")} · ${esc(kind)}</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-ghost" data-back>${icon("chevron", 15)} 返回课程列表</button>
+        </div>
+      </header>
+      <div class="inline-notice notice-warn">${icon("alert", 14)} <span>该课程类型暂不支持秒刷/作业，仅支持列表查看。</span></div>
+      <div class="stat-strip">
+        <div class="stat-card"><span class="stat-label">课程</span><strong>${esc(zhsCourseLabel(course))}</strong></div>
+        <div class="stat-card"><span class="stat-label">教师</span><strong>${esc(course.teacher || "未知")}</strong></div>
+        <div class="stat-card"><span class="stat-label">类型</span><strong>${esc(kind)}</strong></div>
+        <div class="stat-card"><span class="stat-label">访问</span><strong>只读</strong></div>
+      </div>
+      <p class="exam-hint">后续会按平台协议逐步支持；当前不会向该课程发送任何请求。</p>
+    </div>
+  `;
+  main.onclick = (event) => {
+    if ((event.target as HTMLElement).closest("[data-back]")) onBack();
   };
 }
 

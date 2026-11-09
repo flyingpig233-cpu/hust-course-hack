@@ -522,6 +522,8 @@ function summarize(
 
 const zhsCourses: ZhsCourse[] = [
   {
+    kind: "shared",
+    externalId: null,
     recruitId: 463667,
     courseId: 1000011214,
     classId: 3001,
@@ -537,6 +539,8 @@ const zhsCourses: ZhsCourse[] = [
     status: 1,
   },
   {
+    kind: "shared",
+    externalId: null,
     recruitId: 500001,
     courseId: 1000022233,
     classId: 3002,
@@ -551,7 +555,63 @@ const zhsCourses: ZhsCourse[] = [
     totalLessonCount: 3,
     status: 1,
   },
+  {
+    // AI 智课: listed for discovery, read-only in the GUI.
+    kind: "ai",
+    externalId: "ai-demo-calculus-2026",
+    recruitId: 0,
+    courseId: 200001,
+    classId: null,
+    schoolId: 360,
+    name: "微积分（B）2026级",
+    teacher: "王老师",
+    secret: null,
+    isApply: 0,
+    courseType: "AI",
+    progress: 12,
+    studiedLessonCount: 1,
+    totalLessonCount: 8,
+    status: 1,
+  },
+  {
+    // POLYMAS 智能体课: opaque external id, no shared-course protocol.
+    kind: "other",
+    externalId: "polymas-demo-critical-thinking",
+    recruitId: 0,
+    courseId: 0,
+    classId: null,
+    schoolId: 360,
+    name: "大学生批判性思维",
+    teacher: "李老师",
+    secret: null,
+    isApply: 0,
+    courseType: "polymas",
+    progress: null,
+    studiedLessonCount: null,
+    totalLessonCount: null,
+    status: 1,
+  },
 ];
+
+function zhsDemoKindLabel(course: ZhsCourse): string {
+  switch (course.kind) {
+    case "ai":
+      return "AI 智课";
+    case "school":
+      return "智慧课程";
+    case "other":
+      return "其他";
+    default:
+      return "共享课";
+  }
+}
+
+function zhsDemoCourseKey(course: ZhsCourse): string {
+  return course.kind === "shared"
+    ? String(course.courseId)
+    : (course.externalId ??
+        `${course.kind}:${course.recruitId}:${course.courseId}`);
+}
 
 function zhsVideo(
   videoId: number,
@@ -742,9 +802,11 @@ function requireZhsSession(): void {
 function zhsCourse(ref: string): ZhsCourse {
   const match = zhsCourses.find(
     (course) =>
+      zhsDemoCourseKey(course) === ref ||
       String(course.courseId) === ref ||
       String(course.recruitId) === ref ||
-      course.name === ref,
+      course.name === ref ||
+      (course.externalId !== null && course.externalId === ref),
   );
   if (match) return match;
   const numbers = (ref.match(/\d{4,}/g) ?? []).map(Number);
@@ -1541,6 +1603,11 @@ export const mockApi = {
   async zhsCourseDetail(courseId: string): Promise<ZhsCourseDetail> {
     requireZhsSession();
     const course = zhsCourse(courseId);
+    if (course.kind !== "shared") {
+      throw new Error(
+        `${zhsDemoKindLabel(course)}暂不支持秒刷与详情，仅支持列表查看`,
+      );
+    }
     const detail = zhsDetailFor(course);
     const total = Math.max(1, detail.chapters.reduce(
       (sum, chapter) => sum + chapter.lessons.length,
@@ -1578,6 +1645,11 @@ export const mockApi = {
     }
     cancelled = false;
     const course = zhsCourse(request.course);
+    if (course.kind !== "shared") {
+      throw new Error(
+        `${zhsDemoKindLabel(course)}暂不支持秒刷与详情，仅支持列表查看`,
+      );
+    }
     const detail = zhsDetailFor(course);
     const all = detail.chapters.flatMap((chapter) =>
       chapter.lessons.flatMap((lesson) =>

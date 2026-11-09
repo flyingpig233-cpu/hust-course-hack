@@ -3379,3 +3379,56 @@ details[open] > .tree-summary > .tree-chevron {
   border-color: #f3d9b5;
   background: #fffdf8;
 }
+
+/* Zhihuishu course kinds -------------------------------------------------- */
+
+.sidebar-group-label {
+  margin: 10px 4px 4px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.course-section {
+  margin-bottom: 22px;
+}
+
+.course-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.course-section-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.course-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.course-card.is-readonly {
+  cursor: pointer;
+}
+
+.course-card.is-readonly .course-kind-badge {
+  border-color: var(--line-strong);
+  color: var(--ink-2);
+}
+
+.course-card.is-readonly:hover .course-card-cta {
+  color: var(--ink-2);
+}

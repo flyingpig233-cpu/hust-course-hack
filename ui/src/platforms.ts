@@ -136,7 +136,7 @@ const ZHIHUISHU: PlatformMeta = {
     "日志与界面不展示 Cookie、签名或 secretStr。",
     "完成结果以服务端 <code>watchState</code> / 观看历史为准。",
   ],
-  courseListLabel: "共享课",
+  courseListLabel: "课程",
   idleHint: "登录知到账号开始",
   connectedToast: "已连接知到账号",
 };
