@@ -810,6 +810,47 @@ async fn video_flow_logs_in_lists_tree_and_completes_videos() {
 }
 
 #[tokio::test]
+async fn course_detail_with_states_uses_watch_state_for_completion() {
+    let server = MockServer::start();
+    let client = server.client();
+    let course = resolve_mock_course(&client).await;
+
+    // `videolist` reports both videos as unfinished (`isStudiedLesson: 0`), so
+    // the raw tree is stale; `queryStuyInfo` is the authoritative record.
+    server.configure(|state| state.video_watch_state = 1);
+    let detail = client
+        .course_detail_with_states(&course)
+        .await
+        .expect("detail with states");
+    assert_eq!(detail.total_videos(), 2);
+    assert_eq!(detail.completed_videos(), 2);
+    assert!(
+        detail.chapters[0].lessons[0]
+            .videos
+            .iter()
+            .all(|video| video.is_studied == Some(1))
+    );
+
+    // One batched query for the whole tree, carrying both ids and one
+    // de-duplicated lesson id.
+    let queries = server.requests_for("/learning/queryStuyInfo");
+    assert_eq!(queries.len(), 1, "the completion refresh must batch");
+    let secret = queries[0].secret();
+    assert_eq!(secret["recruitId"], MOCK_RECRUIT_ID);
+    assert_eq!(secret["lessonVideoIds"].as_array().map(Vec::len), Some(2));
+    assert_eq!(secret["lessonIds"].as_array().map(Vec::len), Some(1));
+
+    // An in-progress video must override a stale `isStudiedLesson=1` as well,
+    // so the completion count follows the platform record in both directions.
+    server.configure(|state| state.video_watch_state = 2);
+    let detail = client
+        .course_detail_with_states(&course)
+        .await
+        .expect("detail with states");
+    assert_eq!(detail.completed_videos(), 0);
+}
+
+#[tokio::test]
 async fn video_flow_can_be_cancelled_between_videos() {
     let server = MockServer::start();
     let client = server.client();

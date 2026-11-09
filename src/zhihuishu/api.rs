@@ -63,6 +63,12 @@ const ZHS_COOKIE_HOSTS: [&str; 11] = [
     "https://onlineweb.zhihuishu.com/",
 ];
 
+/// Videos per `queryStuyInfo` batch when refreshing completion state.
+///
+/// The video tree of a shared course can be large, and `queryStuyInfo` takes
+/// the ids as JSON arrays; chunking keeps the encrypted body comfortably small.
+const WATCH_STATE_BATCH: usize = 100;
+
 /// Normalized Zhihuishu API error.
 ///
 /// `endpoint` is the path only; it never contains cookies or `secretStr`
@@ -463,6 +469,47 @@ fn course_list_payload(page_no: u64, page_size: u64) -> Value {
         "pageNo": page_no,
         "pageSize": page_size,
     })
+}
+
+/// Map one `queryStuyInfo.watchState` value to the `is_studied` flag.
+///
+/// `1` is finished; `0`/`2` and any other code are not. `None` (the platform
+/// did not report the video) keeps the previously parsed flag untouched.
+fn watch_state_flag(watch_state: Option<i64>) -> Option<i64> {
+    match watch_state {
+        Some(1) => Some(1),
+        Some(_) => Some(0),
+        None => None,
+    }
+}
+
+/// Overwrite `is_studied` on every video from `watchState` and return the
+/// corrected completed-video count.
+fn apply_watch_states(detail: &mut ZhsCourseDetail, states: &HashMap<u64, ZhsVideoStudy>) -> usize {
+    for chapter in &mut detail.chapters {
+        for lesson in &mut chapter.lessons {
+            // Lessons without small lessons expose their own id as
+            // `lessonVideoId`; `all_videos` synthesizes from these fields.
+            if lesson.videos.is_empty() {
+                if let Some(flag) = states
+                    .get(&lesson.lesson_id)
+                    .and_then(|study| watch_state_flag(study.watch_state))
+                {
+                    lesson.is_studied = Some(flag);
+                }
+                continue;
+            }
+            for video in &mut lesson.videos {
+                if let Some(flag) = states
+                    .get(&video.lesson_video_id)
+                    .and_then(|study| watch_state_flag(study.watch_state))
+                {
+                    video.is_studied = Some(flag);
+                }
+            }
+        }
+    }
+    detail.completed_videos()
 }
 
 /// Parse the `videolist` chapter tree.
@@ -1033,6 +1080,53 @@ impl ZhsClient {
         let data = value.get("data").unwrap_or(&value);
         let chapters = parse_chapters(data)?;
         Ok(ZhsCourseDetail { course, chapters })
+    }
+
+    /// Fetch the chapter tree and correct every video's completion flag from
+    /// `queryStuyInfo.watchState`.
+    ///
+    /// `videolist`'s `isStudiedLesson` flag is **not** refreshed after a report
+    /// (a finished course can still show `0`), so it cannot drive the GUI
+    /// completion count or the watch plan. `watchState == 1` is the
+    /// authoritative record. The state query is best effort: when it fails the
+    /// raw tree is still returned, because the per-video `prelearningNote`
+    /// check in [`crate::zhihuishu::watch`] remains the final guard before any
+    /// report.
+    pub async fn course_detail_with_states(&self, course: &ZhsCourse) -> Result<ZhsCourseDetail> {
+        let mut detail = self.course_detail(course).await?;
+        if let Err(error) = self.refresh_watch_states(&mut detail).await {
+            log::warn!(
+                "queryStuyInfo completion refresh failed for {}: {error:#}",
+                detail.course.label()
+            );
+        }
+        Ok(detail)
+    }
+
+    /// Re-read `watchState` for every video of `detail` and overwrite
+    /// `is_studied` with it. Returns the corrected completed-video count.
+    pub async fn refresh_watch_states(&self, detail: &mut ZhsCourseDetail) -> Result<usize> {
+        let pairs = detail.lesson_video_pairs();
+        if pairs.is_empty() {
+            return Ok(0);
+        }
+        let mut states: HashMap<u64, ZhsVideoStudy> = HashMap::with_capacity(pairs.len());
+        for chunk in pairs.chunks(WATCH_STATE_BATCH) {
+            let mut lesson_ids: Vec<u64> = Vec::with_capacity(chunk.len());
+            let mut lesson_video_ids: Vec<u64> = Vec::with_capacity(chunk.len());
+            for (lesson_id, lesson_video_id) in chunk {
+                if !lesson_ids.contains(lesson_id) {
+                    lesson_ids.push(*lesson_id);
+                }
+                lesson_video_ids.push(*lesson_video_id);
+            }
+            let batch = self
+                .query_stuy_info(detail.course.recruit_id, &lesson_ids, &lesson_video_ids)
+                .await
+                .context("queryStuyInfo completion refresh failed")?;
+            states.extend(batch);
+        }
+        Ok(apply_watch_states(detail, &states))
     }
 
     /// Best-effort shared-course metadata (`isApply`, `classId`, name).
@@ -2046,6 +2140,76 @@ mod tests {
         let synthetic = chapters[0].lessons[1].all_videos();
         assert_eq!(synthetic.len(), 1);
         assert_eq!(synthetic[0].video_id, 74150643);
+    }
+
+    #[test]
+    fn watch_state_overrides_stale_is_studied_flags() {
+        let json = serde_json::json!({
+            "videoChapterDtos": [{
+                "id": 1,
+                "name": "第一章",
+                "videoLessons": [{
+                    "id": 1000337356,
+                    "name": "第一节",
+                    "isStudiedLesson": 0,
+                    "videoSmallLessons": [{
+                        "id": 1000244477,
+                        "videoId": 71192505,
+                        "videoSec": 826,
+                        "isStudiedLesson": 0
+                    }, {
+                        "id": 1000244476,
+                        "videoId": 74150643,
+                        "videoSec": 492,
+                        "isStudiedLesson": 1
+                    }]
+                }, {
+                    "id": 1000337351,
+                    "name": "纯视频节",
+                    "videoId": 70622143,
+                    "videoSec": 468,
+                    "isStudiedLesson": 0
+                }]
+            }]
+        });
+        let chapters = parse_chapters(&json).unwrap();
+        let mut detail = ZhsCourseDetail {
+            course: course_from_ids(463667, 1000011214, None),
+            chapters,
+        };
+        // The stale `videolist` flags: one finished, one unfinished, one lesson
+        // without small lessons.
+        assert_eq!(detail.completed_videos(), 1);
+        assert_eq!(detail.lesson_video_pairs().len(), 3);
+
+        let mut states = HashMap::new();
+        for (video_id, watch_state) in [(1000244477u64, 1i64), (1000244476, 2), (1000337351, 1)] {
+            states.insert(
+                video_id,
+                ZhsVideoStudy {
+                    video_id,
+                    watch_state: Some(watch_state),
+                    study_total_time: Some(100),
+                },
+            );
+        }
+        // watchState is authoritative in both directions: finished videos are
+        // marked, the in-progress one overrides a stale `isStudiedLesson=1`.
+        let completed = apply_watch_states(&mut detail, &states);
+        assert_eq!(completed, 2);
+        assert_eq!(detail.chapters[0].lessons[0].videos[0].is_studied, Some(1));
+        assert_eq!(detail.chapters[0].lessons[0].videos[1].is_studied, Some(0));
+        assert_eq!(detail.chapters[0].lessons[1].is_studied, Some(1));
+
+        // A video missing from the reply keeps the parsed flag.
+        let mut partial = states;
+        partial.remove(&1000244476);
+        let mut detail = ZhsCourseDetail {
+            course: course_from_ids(463667, 1000011214, None),
+            chapters: parse_chapters(&json).unwrap(),
+        };
+        apply_watch_states(&mut detail, &partial);
+        assert_eq!(detail.chapters[0].lessons[0].videos[1].is_studied, Some(1));
     }
 
     #[test]

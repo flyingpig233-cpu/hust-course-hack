@@ -190,6 +190,24 @@ impl ZhsCourseDetail {
             .filter(|v| v.is_studied.unwrap_or(0) != 0)
             .count()
     }
+
+    /// `(lessonId, lessonVideoId)` of every playable video, in platform order.
+    ///
+    /// `queryStuyInfo` takes both ids and keys its reply by `lessonVideoId`, so
+    /// this is the batch shape the completion refresh needs. Lessons without
+    /// small lessons expose their own id as `lessonVideoId`.
+    pub fn lesson_video_pairs(&self) -> Vec<(u64, u64)> {
+        self.chapters
+            .iter()
+            .flat_map(|chapter| &chapter.lessons)
+            .flat_map(|lesson| {
+                lesson
+                    .all_videos()
+                    .into_iter()
+                    .map(|video| (lesson.lesson_id, video.lesson_video_id))
+            })
+            .collect()
+    }
 }
 
 /// Anti-cheat / exception status returned by the `exceptionActionDetail`
