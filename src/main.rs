@@ -11,9 +11,10 @@ use hust_course_hack::{
     watch_target,
     zhihuishu::{
         DEFAULT_ANSWER_BANK_PATH, ZhsAnswerBank, ZhsClient, ZhsCourse, ZhsCourseDetail,
-        ZhsExamClient, ZhsExamPaper, ZhsExceptionStatus, ZhsFinalExam, ZhsHomework, ZhsMeet,
-        ZhsMeetWatchOptions, ZhsProgress, ZhsSubmittedAnswer, ZhsVideoTarget, ZhsWatchOptions,
-        ZhsWatchState, hms, parse_ai_analysis, plan_exam, watch::build_video_payload,
+        ZhsCourseKind, ZhsExamClient, ZhsExamPaper, ZhsExceptionStatus, ZhsFinalExam, ZhsHomework,
+        ZhsMeet, ZhsMeetWatchOptions, ZhsProgress, ZhsSubmittedAnswer, ZhsVideoTarget,
+        ZhsWatchOptions, ZhsWatchState, hms, parse_ai_analysis, plan_exam,
+        watch::build_video_payload,
     },
 };
 use rand::Rng;
@@ -141,6 +142,12 @@ enum ZhsCommand {
     /// List the shared courses of the current account.
     List {
         /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List all known course types (shared, AI, in-school, other).
+    Courses {
+        /// Emit JSON instead of grouped text.
         #[arg(long)]
         json: bool,
     },
@@ -923,6 +930,10 @@ async fn zhs(command: ZhsCommand, cookies: &Path) -> Result<i32> {
             let client = zhs_client(cookies)?;
             zhs_list(&client, json).await
         }
+        ZhsCommand::Courses { json } => {
+            let client = zhs_client(cookies)?;
+            zhs_courses(&client, json).await
+        }
         ZhsCommand::Tree { course } => {
             let client = zhs_client(cookies)?;
             zhs_tree(&client, &course).await
@@ -1078,6 +1089,76 @@ async fn zhs_list(client: &ZhsClient, json: bool) -> Result<i32> {
         );
     }
     println!("\n共 {} 门知到共享课", courses.len());
+    Ok(0)
+}
+
+async fn zhs_courses(client: &ZhsClient, json: bool) -> Result<i32> {
+    let courses = client.list_all_courses().await;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&courses)?);
+        return Ok(0);
+    }
+    if courses.is_empty() {
+        eprintln!("没有找到知到课程；请确认账号已选课且 Cookie 未过期");
+        return Ok(0);
+    }
+
+    let kinds = [
+        ZhsCourseKind::Shared,
+        ZhsCourseKind::Ai,
+        ZhsCourseKind::School,
+        ZhsCourseKind::Other,
+    ];
+    let count = |kind: ZhsCourseKind| courses.iter().filter(|course| course.kind == kind).count();
+    println!(
+        "共 {} 门知到课程（共享课 {} / AI 智课 {} / 智慧课程 {} / 其他 {}）",
+        courses.len(),
+        count(ZhsCourseKind::Shared),
+        count(ZhsCourseKind::Ai),
+        count(ZhsCourseKind::School),
+        count(ZhsCourseKind::Other),
+    );
+    for kind in kinds {
+        let mut group = courses
+            .iter()
+            .filter(|course| course.kind == kind)
+            .peekable();
+        println!("\n{}（{} 门）：", kind.label(), count(kind));
+        if group.peek().is_none() {
+            println!("  （无）");
+            continue;
+        }
+        for course in group {
+            let ids = if let Some(external_id) = course.external_id.as_deref() {
+                format!("courseId={external_id}")
+            } else if course.recruit_id != 0 {
+                format!(
+                    "courseId={} recruitId={}",
+                    course.course_id, course.recruit_id
+                )
+            } else {
+                format!(
+                    "courseId={} classId={}",
+                    course.course_id,
+                    opt_text(course.class_id)
+                )
+            };
+            let teacher = if course.teacher.trim().is_empty() {
+                "-"
+            } else {
+                course.teacher.trim()
+            };
+            let course_type = course.course_type.as_deref().unwrap_or("-");
+            let progress = course
+                .progress
+                .map(|value| format!(" progress={value:.0}%"))
+                .unwrap_or_default();
+            println!(
+                "  {ids} name={} teacher={teacher} type={course_type}{progress}",
+                course.name
+            );
+        }
+    }
     Ok(0)
 }
 

@@ -24,9 +24,44 @@ pub struct ZhsUser {
     pub is_teacher: bool,
 }
 
+/// Where a Zhihuishu course came from.
+///
+/// `Shared` is the historical 共享课 list (`queryShareCourseInfo`), which is the
+/// only kind the video/meet/exam protocols currently support. The other kinds
+/// are listed for discovery and are marked as unsupported until their own
+/// protocol is captured.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZhsCourseKind {
+    /// 共享课 (`queryShareCourseInfo`).
+    #[default]
+    Shared,
+    /// AI 智课 / 智慧课程 (`queryStudentAICourseList`).
+    Ai,
+    /// 校内智慧课程 (`queryStudentSchoolCourseList`).
+    School,
+    /// 微课 / 翻转课 / 兴趣课 / B2C 等其他来源.
+    Other,
+}
+
+impl ZhsCourseKind {
+    /// Chinese label used by the CLI and the GUI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Shared => "共享课",
+            Self::Ai => "AI 智课",
+            Self::School => "智慧课程",
+            Self::Other => "其他",
+        }
+    }
+}
+
 /// A shared course (共享课) the student is enrolled in.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ZhsCourse {
+    /// Which list endpoint produced this course (defaults to 共享课 for old data).
+    #[serde(default)]
+    pub kind: ZhsCourseKind,
     /// Recruit id (`recruitId`), the enrollment id used by every video API.
     pub recruit_id: u64,
     /// Course id (`courseId`).
@@ -42,6 +77,10 @@ pub struct ZhsCourse {
     /// `recruitAndCourseId` secret from a study page URL, when the course was
     /// resolved from a URL instead of the course list.
     pub secret: Option<String>,
+    /// Opaque platform course id for sources whose ids are not numeric
+    /// (POLYMAS 智能体课, e.g. 大学生批判性思维). `course_id` stays `0` for these.
+    #[serde(default)]
+    pub external_id: Option<String>,
     /// Whether the course must be applied to (`isApply`).
     pub is_apply: Option<i64>,
     /// Course type reported by the platform (polymas courses are unsupported).
@@ -593,6 +632,24 @@ mod tests {
             ..course
         };
         assert!(unsupported.is_polymas());
+    }
+
+    #[test]
+    fn course_kind_defaults_to_shared_for_old_payloads() {
+        let course = ZhsCourse {
+            recruit_id: 1,
+            course_id: 2,
+            ..ZhsCourse::default()
+        };
+        assert_eq!(course.kind, ZhsCourseKind::Shared);
+        let mut value = serde_json::to_value(&course).unwrap();
+        assert_eq!(value["kind"], "shared");
+        value.as_object_mut().unwrap().remove("kind");
+        let parsed: ZhsCourse = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.kind, ZhsCourseKind::Shared);
+        assert_eq!(ZhsCourseKind::Ai.label(), "AI 智课");
+        assert_eq!(ZhsCourseKind::School.label(), "智慧课程");
+        assert_eq!(ZhsCourseKind::Other.label(), "其他");
     }
 
     #[test]

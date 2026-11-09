@@ -36,9 +36,10 @@ pub use exam::{
 };
 pub use meet::{ZhsMeetWatchOptions, plan_meet_minutes, run_meet_watch};
 pub use models::{
-    ZhsChapter, ZhsCourse, ZhsCourseDetail, ZhsExceptionStatus, ZhsLesson, ZhsMeet, ZhsMeetOutcome,
-    ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote, ZhsProgress, ZhsProgressStage, ZhsUser,
-    ZhsVideo, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
+    ZhsChapter, ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus, ZhsLesson, ZhsMeet,
+    ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote, ZhsProgress,
+    ZhsProgressStage, ZhsUser, ZhsVideo, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions,
+    ZhsWatchOutcome, ZhsWatchState,
 };
 pub use watch::{plan_videos, run_video_watch};
 
@@ -168,6 +169,32 @@ pub const MEET_LIST_FALLBACK_PATH: &str =
     "/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss";
 /// Shared-course list (verified live on 2026-11-08).
 pub const COURSE_LIST_PATH: &str = "/gateway/t/v1/student/course/share/queryShareCourseInfo";
+/// AI 智课 / 智慧课程 list (verified live on 2026-11-09; AES module **13**,
+/// plaintext `{"status":3}`, outer `date` field).
+pub const AI_COURSE_LIST_PATH: &str = "/gateway/t/v1/student/queryStudentAICourseList";
+/// Micro / flipped-course list (module 13; plaintext `{"pageNo":1,"pageSize":5}`).
+pub const MICRO_COURSE_LIST_PATH: &str = "/gateway/t/v1/student/course/share/queryMicroCourseInfo";
+/// Elective-course list (module 13; plaintext `{"schoolId":...}`).
+pub const SELECT_COURSE_LIST_PATH: &str =
+    "/gateway/t/v1/student/course/share/querySelectCourseInfo";
+/// In-school smart-course list (plain GET on `school-platform`).
+pub const SCHOOL_COURSE_LIST_PATH: &str = "/spCourse/queryStudentSchoolCourseList";
+/// Online (hike) course list (best effort; empty for the measured account).
+pub const HIKE_COURSE_LIST_PATH: &str = "/gateway/t/v1/student/online/course/getCourseList";
+/// B2C course list (plain form POST; empty for the measured account).
+pub const B2C_COURSE_LIST_PATH: &str = "/b2cpush/courseDetail/query2CCourseList";
+/// POLYMAS 智能体课 list (plain JSON POST; captured 2026-11-08, returns
+/// 大学生批判性思维 for the account).
+pub const POLYMAS_COURSE_LIST_PATH: &str =
+    "/student-course/student/index/teacherQueryStudentCourse";
+/// `cloudapi.polymas.com` host (POLYMAS 智能体课).
+pub const POLYMAS_BASE: &str = "https://cloudapi.polymas.com";
+/// `school-platform` host (in-school smart courses).
+pub const SCHOOL_PLATFORM_BASE: &str = "https://school-platform.zhihuishu.com";
+/// `hike-teaching-api` host (online course list).
+pub const HIKE_TEACHING_BASE: &str = "https://hike-teaching-api.zhihuishu.com";
+/// `b2cpush` host (B2C course list).
+pub const B2C_BASE: &str = "https://b2cpush.zhihuishu.com";
 /// Shared-course metadata (best effort; used for `isApply`/`classId`).
 pub const QUERY_COURSE_PATH: &str = "/gateway/t/v1/learning/queryCourse";
 /// Replay duration fallback (JSONP, live page endpoint).
