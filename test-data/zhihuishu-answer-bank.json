@@ -1,7 +1,332 @@
 {
   "version": 1,
   "platform": "zhihuishu",
-  "generated_at_unix": 0,
-  "source": "submitted papers (full marks) + saved AI-analysis texts; grown locally by `zhs exam bank --from-submission`",
-  "entries": []
+  "generated_at_unix": 1791000000,
+  "source": "military-theory unit tests (submitted papers + AI analysis)",
+  "entries": [
+    {
+      "key": "下列关于与我国陆地接壤周边国家说法正确的有",
+      "stem": "下列关于与我国陆地接壤周边国家，说法正确的有：（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "总数为14个",
+        "未与我国解决陆地边界划分的国家只剩2个"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "下列国家既是我国的陆上邻国又是海上邻国的是",
+      "stem": "下列国家既是我国的陆上邻国又是海上邻国的是：（ ）",
+      "question_type": "single",
+      "answers": [
+        "越南"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "世界新军事革命是以重塑军事体系为主要目标",
+      "stem": "世界新军事革命是以重塑军事体系为主要目标。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "对"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "中国国防的主体是",
+      "stem": "中国国防的主体是？（ ）",
+      "question_type": "single",
+      "answers": [
+        "国家，包括全体国民"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "中国国防的历史充分证明了国家民族独立兴旺发展必须有强大的国防",
+      "stem": "中国国防的历史充分证明了国家民族独立、兴旺发展，必须有强大的国防。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "对"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "中国战略地理的特点是既是一个陆上大国又是一个是一个陆海兼备的大国",
+      "stem": "中国战略地理的特点是：既是一个陆上大国，又是一个（ ）,是一个陆海兼备的大国。",
+      "question_type": "single",
+      "answers": [
+        "海洋大国"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "中国武装力量整体是指什么",
+      "stem": "中国武装力量整体是指什么?（ ）",
+      "question_type": "single",
+      "answers": [
+        "中国人民解放军、中国人民武装警察部队和民兵"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "中美对抗将在短期内决定胜负",
+      "stem": "中美对抗将在短期内决定胜负。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "错"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "以下不是信息化战争的基本特征的是哪一项",
+      "stem": "以下不是信息化战争的基本特征的是哪一项？（ ）",
+      "question_type": "single",
+      "answers": [
+        "火力压制"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "依据联合国海洋法公约一个远洋小岛最大可拥有的领海面积可达多平方公里",
+      "stem": "依据联合国海洋法公约，一个远洋小岛最大可拥有的领海面积可达（ ）多平方公里。",
+      "question_type": "single",
+      "answers": [
+        "1500"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "克劳塞维茨提出的战争目的是什么",
+      "stem": "克劳塞维茨提出的战争目的是什么？（ ）",
+      "question_type": "single",
+      "answers": [
+        "消灭敌人，保存自己"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "克劳塞维茨的攻势防御思想是指",
+      "stem": "克劳塞维茨的“攻势防御”思想是指:（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "要用巧妙的的打击构成防御的盾牌",
+        "要把进攻和防御紧密结合"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "公元13世纪上半叶征服基辅罗斯的游牧帝国是",
+      "stem": "公元13世纪上半叶征服基辅罗斯的游牧帝国是（ ）。",
+      "question_type": "single",
+      "answers": [
+        "蒙古帝国"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "公民在国防动员中应尽的责任和义务不包含",
+      "stem": "公民在国防动员中应尽的责任和义务不包含：（ ）",
+      "question_type": "single",
+      "answers": [
+        "捐钱献物"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "关于信息化战争中信息的作用以下哪些说法是正确的",
+      "stem": "关于信息化战争中信息的作用，以下哪些说法是正确的？（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "信息是决定战争胜负的关键因素",
+        "信息是构建信息化战争体系的主要要素",
+        "信息是信息时代战争的根本标志"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "关于备战思想以下哪些说法是正确的",
+      "stem": "关于备战思想以下哪些说法是正确的？（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "做好打的准备才有可能不打",
+        "通过备战可以展示国家实力，威慑潜在对手",
+        "备战思想是避免战争的重要手段"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "关于新军事革命下列说法错误的是",
+      "stem": "关于新军事革命，下列说法错误的是：（ ）",
+      "question_type": "single",
+      "answers": [
+        "新军事革命的只是武器装备信息化"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "国防动员的基本内容包括什么",
+      "stem": "国防动员的基本内容包括什么？（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "政治动员",
+        "武装力量动员",
+        "人民防空动员",
+        "经济动员"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "太空安全对下列哪些领域有影响",
+      "stem": "太空安全对下列哪些领域有影响？（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "文化",
+        "军事",
+        "政治",
+        "科技",
+        "经济"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "如果将来日本军事上强大了有可能会将矛头指向美国",
+      "stem": "如果将来日本军事上强大了,有可能会将矛头指向美国。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "对"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "孙子兵法的作者是谁",
+      "stem": "孙子兵法的作者是谁？（ ）",
+      "question_type": "single",
+      "answers": [
+        "孙武"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "当公民发现有人实施危害国防利益的行为时应当如何处理",
+      "stem": "当公民发现有人实施危害国防利益的行为时，应当如何处理？（ ）",
+      "question_type": "single",
+      "answers": [
+        "予以制止，进行检举"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "影响中日关系的主要因素",
+      "stem": "影响中日关系的主要因素（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "历史问题",
+        "台湾问题",
+        "美日联盟问题"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "我国安全面临的威胁有哪些",
+      "stem": "我国安全面临的威胁有哪些？（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "恐怖主义",
+        "国家分裂",
+        "领海争端",
+        "集团对抗",
+        "中印边境领土争端"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "我武装警察部队人数最多的部队是海警部队",
+      "stem": "我武装警察部队人数最多的部队是海警部队。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "错"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "战争论提出的最精彩的思想有",
+      "stem": "《战争论》提出的最精彩的思想有：（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "战争是政治的继续",
+        "进攻顶点",
+        "打敌重心"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "战争论被评价为",
+      "stem": "战争论被评价为:（ ）",
+      "question_type": "single",
+      "answers": [
+        "全面研究军事学术的最佳理论著作"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "新中国成立后的国防建设步入了一个新的征程这一征程的特点是",
+      "stem": "新中国成立后的国防建设步入了一个新的征程，这一征程的特点是？（ ）",
+      "question_type": "single",
+      "answers": [
+        "振兴发展"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "新时代人民解放军的使命",
+      "stem": "新时代人民解放军的使命：（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "为维护国家海外利益提供战略支撑",
+        "为捍卫国家主权、统一、领土完整提供战略支撑",
+        "为促进世界和平与发展提供战略支撑",
+        "为巩固党的领导和社会主义制度提供战略支撑"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    },
+    {
+      "key": "瑞士1815年宣布中立以来已经200多年没有战争但现在每年仍投入国防费用这一举措已经完全没有必要",
+      "stem": "瑞士1815年宣布中立以来，已经200多年没有战争，但现在每年仍投入国防费用，这一举措已经完全没有必要。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "错"
+      ],
+      "source": "ai_analysis",
+      "updated_at_unix": 1791000000
+    }
+  ]
 }
