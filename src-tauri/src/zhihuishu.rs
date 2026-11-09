@@ -18,6 +18,8 @@ use tauri::{AppHandle, Emitter, State};
 pub const ZHS_WATCH_JOB: &str = "zhs-watch";
 /// Job id for the meet replay queue.
 pub const ZHS_MEET_JOB: &str = "zhs-meet-watch";
+/// Job id used while the course tree and its completion state are loaded.
+pub const ZHS_LOAD_JOB: &str = "zhs-load";
 
 // ---- Requests --------------------------------------------------------------
 
@@ -240,10 +242,20 @@ impl From<ZhsChapter> for ZhsChapterDto {
 pub struct ZhsCourseDetailDto {
     pub course: ZhsCourseDto,
     pub chapters: Vec<ZhsChapterDto>,
+    /// Total playable videos (small lessons) in the tree.
+    pub total_videos: usize,
+    /// Videos the platform records as finished (`watchState == 1`).
+    ///
+    /// This is computed from a fresh `queryStuyInfo` read, not from the
+    /// `videolist` `isStudiedLesson` flag, which the platform does not refresh
+    /// after a completion report.
+    pub completed_videos: usize,
 }
 
 impl From<ZhsCourseDetail> for ZhsCourseDetailDto {
     fn from(detail: ZhsCourseDetail) -> Self {
+        let total_videos = detail.total_videos();
+        let completed_videos = detail.completed_videos();
         Self {
             course: detail.course.into(),
             chapters: detail
@@ -251,6 +263,8 @@ impl From<ZhsCourseDetail> for ZhsCourseDetailDto {
                 .into_iter()
                 .map(ZhsChapterDto::from)
                 .collect(),
+            total_videos,
+            completed_videos,
         }
     }
 }
@@ -443,17 +457,44 @@ pub async fn zhs_add_course(
 }
 
 /// Chapter / lesson / video tree of one shared course.
+///
+/// `completedVideos` comes from a fresh `queryStuyInfo` read (`watchState == 1`)
+/// because the `videolist` `isStudiedLesson` flag stays stale after a report.
 #[tauri::command]
 pub async fn zhs_course_detail(
+    app: AppHandle,
     state: State<'_, AppState>,
     course_id: String,
 ) -> Result<ZhsCourseDetailDto, String> {
     let client = zhs_client(&state)?;
     let course = find_course(&state, &client, &course_id).await?;
+
+    emit(
+        &app,
+        JobProgress::ZhsStage {
+            job: ZHS_LOAD_JOB.to_string(),
+            stage: "loading".to_string(),
+            done: 0,
+            total: 1,
+            label: course.label(),
+            message: "抓取视频树并复核平台完成状态".to_string(),
+        },
+    );
     let detail = client
-        .course_detail(&course)
+        .course_detail_with_states(&course)
         .await
         .map_err(|error| format!("抓取知到视频树失败：{error:#}"))?;
+    emit(
+        &app,
+        JobProgress::ZhsStage {
+            job: ZHS_LOAD_JOB.to_string(),
+            stage: "loading".to_string(),
+            done: 1,
+            total: 1,
+            label: course.label(),
+            message: "完成状态已按 watchState 校正".to_string(),
+        },
+    );
     state.upsert_zhs_course(detail.course.clone());
     Ok(detail.into())
 }
@@ -479,10 +520,26 @@ pub async fn zhs_watch_videos(
             done: 0,
             total: 1,
             label: course.label(),
-            message: "抓取视频树".to_string(),
+            message: "抓取视频树并复核平台完成状态".to_string(),
         },
     );
-    let detail = client.course_detail(&course).await.map_err(job_error)?;
+    // Plan against `watchState`, otherwise a course that the platform already
+    // records as finished would still show every video as pending here.
+    let detail = client
+        .course_detail_with_states(&course)
+        .await
+        .map_err(job_error)?;
+    emit(
+        &app,
+        JobProgress::ZhsStage {
+            job: ZHS_WATCH_JOB.to_string(),
+            stage: "loading".to_string(),
+            done: 1,
+            total: 1,
+            label: course.label(),
+            message: "完成状态已按 watchState 校正".to_string(),
+        },
+    );
     let targets = client
         .plan_videos(&detail, &options)
         .await
