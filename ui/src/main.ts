@@ -58,6 +58,7 @@ import {
   openZhsMeetWatchModal,
   renderZhsMeet,
 } from "./views/zhs-meet";
+import { openZhsExamModal } from "./views/zhs-exam";
 import {
   zhsCompletedVideos,
   zhsCourseLabel,
@@ -708,6 +709,13 @@ function showZhsCourseView(): void {
         },
       }),
     onCheck: () => void checkZhsStatus(String(course.courseId)),
+    onExam: () =>
+      openZhsExamModal({
+        recruitId: course.recruitId,
+        courseId: course.courseId,
+        courseName: zhsCourseLabel(course),
+        onToast: (message, tone) => toast(message, tone),
+      }),
   });
 }
 

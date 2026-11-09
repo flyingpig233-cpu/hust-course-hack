@@ -31,12 +31,20 @@ import type {
   WatchSummary,
   ZhsCourse,
   ZhsCourseDetail,
+  ZhsExamList,
+  ZhsExamPaper,
+  ZhsExamPlan,
+  ZhsExamQuestion,
   ZhsExceptionStatus,
   ZhsMeet,
   ZhsMeetOutcome,
   ZhsMeetProgress,
   ZhsMeetWatchRequest,
   ZhsMeetWatchSummary,
+  ZhsAiEntry,
+  ZhsAnswerResult,
+  ZhsBankInfo,
+  ZhsRecordAiResult,
   ZhsVideo,
   ZhsVideoOutcome,
   ZhsWatchRequest,
@@ -935,6 +943,174 @@ function ulCheckFor(course: UlCourse): UlCheck {
   };
 }
 
+// ---- Zhihuishu homework / exam demo data ----------------------------------
+// Synthetic exam data. The demo backend never claims a real submission and the
+// final exam is list-only (same as the real backend).
+
+const zhsExamQuestions: ZhsExamQuestion[] = [
+  {
+    id: "demo-q-1",
+    stem: "中国国防的主体是（ ）。",
+    kindId: 1,
+    kindName: "单选题",
+    score: 10,
+    multiple: false,
+    options: [
+      { id: "demo-o-1a", content: "国家" },
+      { id: "demo-o-1b", content: "军队" },
+      { id: "demo-o-1c", content: "人民" },
+      { id: "demo-o-1d", content: "政府" },
+    ],
+  },
+  {
+    id: "demo-q-2",
+    stem: "现代国防的基本特征包括（ ）。",
+    kindId: 2,
+    kindName: "多选题",
+    score: 10,
+    multiple: true,
+    options: [
+      { id: "demo-o-2a", content: "国防力量的综合性" },
+      { id: "demo-o-2b", content: "国防手段的多样性" },
+      { id: "demo-o-2c", content: "国防建设的系统性" },
+      { id: "demo-o-2d", content: "国防斗争的威慑性" },
+    ],
+  },
+  {
+    id: "demo-q-3",
+    stem: "国防是国家生存与发展的安全保障。",
+    kindId: 3,
+    kindName: "判断题",
+    score: 10,
+    multiple: false,
+    options: [
+      { id: "demo-o-3a", content: "正确" },
+      { id: "demo-o-3b", content: "错误" },
+    ],
+  },
+];
+
+function zhsDemoPaper(examName: string, courseName: string): ZhsExamPaper {
+  return {
+    examName,
+    courseName,
+    totalScore: 100,
+    problemNum: zhsExamQuestions.length,
+    questionCount: zhsExamQuestions.length,
+    questions: clone(zhsExamQuestions),
+  };
+}
+
+function zhsDemoPlan(examName: string): ZhsExamPlan {
+  const paper = zhsDemoPaper(examName, "军事理论-综合版");
+  const resolved: ZhsExamPlan["questions"] = [
+    {
+      question: paper.questions[0],
+      optionIds: ["demo-o-1a"],
+      optionContents: ["国家"],
+      source: "submitted",
+    },
+    {
+      question: paper.questions[1],
+      optionIds: ["demo-o-2a", "demo-o-2c"],
+      optionContents: ["国防力量的综合性", "国防建设的系统性"],
+      source: "ai_analysis",
+    },
+  ];
+  return {
+    examId: "demo-exam-3",
+    examName: paper.examName,
+    totalScore: paper.totalScore,
+    questionCount: paper.questionCount,
+    resolved: resolved.length,
+    unresolved: [
+      {
+        questionId: paper.questions[2].id,
+        stem: paper.questions[2].stem,
+      },
+    ],
+    complete: false,
+    questions: resolved,
+  };
+}
+
+const zhsExamUnsubmitted: ZhsExamList = {
+  submitted: false,
+  homework: [
+    {
+      stuExamId: "demo-hw-2",
+      examId: "demo-exam-2",
+      name: "第二章单元测试",
+      state: 0,
+      achieve: null,
+      achieveCount: 0,
+      backNum: 2,
+      score: null,
+      problemNum: 10,
+      totalScore: 100,
+      meetCourseType: null,
+      chapterId: "1000116294",
+      isCheckAnswer: 1,
+      examUserName: "张教授",
+    },
+  ],
+  finals: [
+    {
+      stuExamId: "demo-final",
+      examId: "demo-final-exam",
+      name: "军事理论-综合版教程考试（期末）",
+      problemNum: 68,
+      totalScore: 100,
+      limitTime: 90,
+      remainCount: 1,
+      finalExam: true,
+    },
+  ],
+  finalsError: null,
+};
+
+const zhsExamSubmitted: ZhsExamList = {
+  submitted: true,
+  homework: [
+    {
+      stuExamId: "demo-hw-3",
+      examId: "demo-exam-3",
+      name: "第三章单元测试",
+      state: 1,
+      achieve: 100,
+      achieveCount: 1,
+      backNum: 2,
+      score: 100,
+      problemNum: 10,
+      totalScore: 100,
+      meetCourseType: null,
+      chapterId: "1000116294",
+      isCheckAnswer: 1,
+      examUserName: "张教授",
+    },
+    {
+      stuExamId: "demo-meet-quiz",
+      examId: "demo-exam-meet",
+      name: "见面课测验（从白马庙到星辰大海）",
+      state: 1,
+      achieve: 20,
+      achieveCount: 1,
+      backNum: 1,
+      score: 20,
+      problemNum: 5,
+      totalScore: 100,
+      meetCourseType: 1,
+      chapterId: null,
+      isCheckAnswer: 1,
+      examUserName: "李教授",
+    },
+  ],
+  finals: [],
+  finalsError: null,
+};
+
+let zhsDemoBankTotal = 3;
+let zhsDemoAiEntries = 1;
 export const mockApi = {
   async sessionInfo(): Promise<SessionInfo | null> {
     await sleep(120);
@@ -1652,6 +1828,140 @@ export const mockApi = {
     cancelled = true;
   },
 
+  // ---- Zhihuishu homework / exam demo backend ---------------------------
+  async zhsExamList(
+    recruitId: number,
+    courseId: number,
+    submitted: boolean,
+  ): Promise<ZhsExamList> {
+    requireZhsSession();
+    const course = zhsCourse(String(courseId));
+    if (course.recruitId !== recruitId) {
+      throw new Error("演示数据中没有该课程");
+    }
+    await sleep(220);
+    return clone(submitted ? zhsExamSubmitted : zhsExamUnsubmitted);
+  },
+
+  async zhsExamPaper(
+    _recruitId: number,
+    _courseId: number,
+    _examId: string,
+    submitted: boolean,
+  ): Promise<ZhsExamPaper> {
+    requireZhsSession();
+    await sleep(180);
+    if (!submitted) {
+      throw new Error(
+        "未开始的试卷无法只读预览（进入考试会开始计时，已阻止）；演示模式请使用「重做并提交」查看计划。",
+      );
+    }
+    return zhsDemoPaper("第三章单元测试", "军事理论-综合版");
+  },
+
+  async zhsExamPlan(
+    _recruitId: number,
+    _courseId: number,
+    examId: string,
+  ): Promise<ZhsExamPlan> {
+    requireZhsSession();
+    await sleep(220);
+    if (examId === "demo-final-exam") {
+      throw new Error(
+        "期末/教程考试只有 1 次机会，GUI 仅支持查看，不生成答题计划、不自动提交",
+      );
+    }
+    return zhsDemoPlan(
+      examId === "demo-exam-2" ? "第二章单元测试" : "第三章单元测试",
+    );
+  },
+
+  async zhsExamAnswer(
+    _recruitId: number,
+    _courseId: number,
+    examId: string,
+    dryRun: boolean,
+  ): Promise<ZhsAnswerResult> {
+    requireZhsSession();
+    if (examId === "demo-final-exam") {
+      throw new Error(
+        "期末/教程考试只有 1 次机会，GUI 不支持自动提交",
+      );
+    }
+    if (dryRun) {
+      const plan = zhsDemoPlan("第三章单元测试");
+      return {
+        dryRun: true,
+        plan,
+        submitted: false,
+        score: null,
+        totalScore: plan.totalScore,
+        correctCount: 0,
+        questionCount: plan.questionCount,
+        perQuestion: [],
+        message: "试运行：只生成答题计划，没有进入考试、保存或提交。",
+        recordedToBank: 0,
+      };
+    }
+    throw new Error(
+      "演示模式不会提交真实试卷；请连接真实知到账号并在确认后执行。",
+    );
+  },
+
+  async zhsExamBankInfo(): Promise<ZhsBankInfo> {
+    requireZhsSession();
+    await sleep(120);
+    return {
+      total: zhsDemoBankTotal,
+      submittedEntries: 2,
+      aiEntries: zhsDemoAiEntries,
+      updatedAtUnix: Math.floor(Date.now() / 1000) - 3600,
+      path: "（演示）应用数据目录/zhihuishu-answer-bank.json",
+    };
+  },
+
+  async zhsExamRecordAi(
+    _recruitId: number,
+    _courseId: number,
+    _examId: string,
+    entries: ZhsAiEntry[],
+  ): Promise<ZhsRecordAiResult> {
+    requireZhsSession();
+    const usable = entries.filter(
+      (entry) => typeof entry.text === "string" && entry.text.trim().length > 0,
+    );
+    if (usable.length === 0) {
+      throw new Error("没有可写入的 AI解析 文本");
+    }
+    await sleep(200);
+    zhsDemoBankTotal += usable.length;
+    zhsDemoAiEntries += usable.length;
+    const event = {
+      recorded: usable.length,
+      skipped: entries.length - usable.length,
+      bankTotal: zhsDemoBankTotal,
+    };
+    demoEmit("zhs-exam-ai", event);
+    return {
+      ...event,
+      skippedQuestionIds: [],
+      path: "（演示）应用数据目录/zhihuishu-answer-bank.json",
+    };
+  },
+
+  async zhsExamOpenCheckWindow(): Promise<void> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持打开采集窗口；可用「手动导入」体验答案库写入。",
+    );
+  },
+
+  async zhsExamOpenAttemptWindow(): Promise<void> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持打开网页作答窗口（滑块验证需要真实知到会话）；可用「看试卷 / 手动导入 / 题库统计」体验只读流程。",
+    );
+  },
   // ---- Ulearning (优学院) demo backend ----------------------------------
   // Like the Zhihuishu demo, every job below is dry-run only.
   async ulListCourses(): Promise<UlCourse[]> {

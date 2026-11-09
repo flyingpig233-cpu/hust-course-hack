@@ -336,6 +336,16 @@ export type JobProgress =
         | "circuit_broken";
       message: string | null;
       completionStatus: number | null;
+    }
+  // ---- Zhihuishu homework / exam job -----------------------------------
+  | {
+      kind: "zhsExamProgress";
+      /** `saving`, `submitting`, or `verifying`. */
+      stage: string;
+      done: number;
+      total: number;
+      label: string;
+      message: string;
     };
 
 // ---- Zhihuishu (知到) DTOs -------------------------------------------------
@@ -598,4 +608,156 @@ export interface UlWatchSummary {
   dryRun: boolean;
   outcomes: UlOutcome[];
   errors: string[];
+}
+
+// ---- Zhihuishu homework / exam DTOs ---------------------------------------
+// Mirrors `src-tauri/src/zhs_exam.rs`; camelCase over the IPC boundary. Correct
+// answers are represented by option **content**, never by ids (the platform
+// randomizes option order between attempts).
+
+export interface ZhsHomework {
+  stuExamId: string;
+  examId: string;
+  name: string;
+  state: number | null;
+  achieve: number | null;
+  achieveCount: number | null;
+  backNum: number | null;
+  score: number | null;
+  problemNum: number | null;
+  totalScore: number | null;
+  meetCourseType: number | null;
+  chapterId: string | null;
+  isCheckAnswer: number | null;
+  examUserName: string | null;
+}
+
+export interface ZhsFinalExam {
+  stuExamId: string;
+  examId: string;
+  name: string;
+  problemNum: number | null;
+  totalScore: number | null;
+  limitTime: number | null;
+  remainCount: number | null;
+  finalExam: boolean;
+}
+
+export interface ZhsExamList {
+  submitted: boolean;
+  homework: ZhsHomework[];
+  finals: ZhsFinalExam[];
+  finalsError: string | null;
+}
+
+export interface ZhsExamOption {
+  id: string;
+  content: string;
+}
+
+export interface ZhsExamQuestion {
+  id: string;
+  stem: string;
+  kindId: number;
+  kindName: string;
+  score: number;
+  multiple: boolean;
+  options: ZhsExamOption[];
+}
+
+export interface ZhsExamPaper {
+  examName: string;
+  courseName: string;
+  totalScore: number;
+  problemNum: number;
+  questionCount: number;
+  questions: ZhsExamQuestion[];
+}
+
+export type ZhsAnswerSource = "submitted" | "ai_analysis" | "bank";
+
+export interface ZhsPlanQuestion {
+  question: ZhsExamQuestion;
+  optionIds: string[];
+  optionContents: string[];
+  source: ZhsAnswerSource;
+}
+
+export interface ZhsUnresolved {
+  questionId: string;
+  stem: string;
+}
+
+export interface ZhsExamPlan {
+  examId: string;
+  examName: string;
+  totalScore: number;
+  questionCount: number;
+  resolved: number;
+  unresolved: ZhsUnresolved[];
+  complete: boolean;
+  questions: ZhsPlanQuestion[];
+}
+
+export interface ZhsQuestionResult {
+  questionId: string;
+  stem: string;
+  score: number;
+  fullScore: number;
+  correct: boolean;
+  selectedContents: string[];
+}
+
+export interface ZhsAnswerResult {
+  dryRun: boolean;
+  plan: ZhsExamPlan;
+  submitted: boolean;
+  score: number | null;
+  totalScore: number;
+  correctCount: number;
+  questionCount: number;
+  perQuestion: ZhsQuestionResult[];
+  message: string;
+  recordedToBank: number;
+}
+
+export interface ZhsBankInfo {
+  total: number;
+  submittedEntries: number;
+  aiEntries: number;
+  updatedAtUnix: number | null;
+  path: string;
+}
+
+export interface ZhsRecordAiResult {
+  recorded: number;
+  skipped: number;
+  /** Question ids whose AI panel text was missing/unmappable. */
+  skippedQuestionIds: string[];
+  bankTotal: number;
+  path: string;
+}
+
+/** Payload of the `zhs-exam-result` event (webview attempt finished). */
+export interface ZhsExamResultEvent {
+  submitted: boolean;
+  score: number | null;
+  totalScore: number;
+  correctCount: number;
+  questionCount: number;
+  recordedToBank: number;
+  message: string;
+}
+
+export interface ZhsAiEntry {
+  questionId?: string | null;
+  index?: number | null;
+  text: string;
+}
+
+/** Payload of the `zhs-exam-ai` event emitted after a harvest is persisted. */
+export interface ZhsExamAiEvent {
+  recorded: number;
+  skipped: number;
+  bankTotal: number;
 }

@@ -237,6 +237,7 @@ export interface ZhsCourseHandlers {
   onRefresh(): void;
   onMeet(): void;
   onWatch(): void;
+  onExam(): void;
   onCheck(): void;
 }
 
@@ -271,6 +272,7 @@ export function renderZhsCourse(
           <button class="icon-button" data-action="refresh" title="重新抓取" aria-label="重新抓取">${icon("refresh", 16)}</button>
           <button class="icon-button" data-action="check" title="检查风控状态" aria-label="检查风控状态">${icon("shield", 16)}</button>
           <button class="btn btn-ghost" data-action="meet">${icon("live", 15)} 见面课</button>
+          <button class="btn btn-ghost" data-action="exam">${icon("work", 15)} 作业/考试</button>
           <button class="btn btn-primary" data-action="watch">${icon("play", 15)} 秒刷本课视频</button>
         `,
       })}
@@ -329,6 +331,10 @@ export function renderZhsCourse(
     }
     if (target.closest("[data-action='meet']")) {
       handlers.onMeet();
+      return;
+    }
+    if (target.closest("[data-action='exam']")) {
+      handlers.onExam();
       return;
     }
     if (target.closest("[data-action='watch']")) handlers.onWatch();
