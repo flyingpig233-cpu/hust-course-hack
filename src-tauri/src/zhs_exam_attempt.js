@@ -117,7 +117,7 @@
       '<button id="__zhs_a_stop" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#374151;color:#fff">停止</button>' +
       '</div>' +
       '<div id="__zhs_a_log" style="opacity:.75;font-size:12px;max-height:180px;overflow:auto"></div>' +
-      '<div style="opacity:.6;margin-top:8px">若出现滑块验证，请先在窗口内手动完成。严格模式只在计划完整时提交；容错试做会把未解析题任选首项，用于先拿低分再采集 AI解析重做。</div>';
+      '<div style="opacity:.6;margin-top:8px">若出现滑块验证，请先在窗口内手动完成。严格模式只在计划完整时提交；容错试做会把未解析题任选首项先提交本次，之后可再用「网页重做」提交。</div>';
     document.documentElement.appendChild(overlay);
     statusNode = overlay.querySelector('#__zhs_a_status');
     logNode = overlay.querySelector('#__zhs_a_log');
@@ -465,7 +465,7 @@
             plan.total +
             ' 题，仍有 ' +
             unresolved.length +
-            ' 题没有答案。\n严格模式已隐藏。可点红色「容错试做」先提交低分，随后对这场采集 AI解析，再重做满分。',
+            ' 题没有答案。\n严格模式已隐藏。可点红色「容错试做」先提交本次；答案库更新后可「网页重做」再次提交。',
         );
         log(
           '未解析题目 id：' +
@@ -510,7 +510,7 @@
         '容错试做会把 ' +
           unresolvedCount +
           ' 道未解析题任选首项（多选只选一项），本次提交会得低分。\n' +
-          '目的：先让这场试卷变成「已提交」，之后才能采集 AI解析。\n\n' +
+          '目的：先让这场试卷变成「已提交」，之后可在「已提交」里点「网页重做」重新提交。\n\n' +
           '本次会真实提交并可能消耗一次尝试机会。确认开始？',
       );
       if (!ok) return;
@@ -682,7 +682,7 @@
             '（未解析 ' +
             fallbackCount +
             ' 题任选首项，会得低分）\n\n' +
-            '下一步：关闭本窗口 → 在作业列表「已提交」找到这场 → 点击「采集 AI解析」→ 采集完成后「网页重做」提交满分。',
+            '下一步：关闭本窗口 → 在作业列表「已提交」找到这场 → 点击「网页重做」并提交。',
         );
       } else {
         setStatus(

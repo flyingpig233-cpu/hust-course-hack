@@ -20,6 +20,15 @@ export interface ZhsExamModalOptions {
 type Tab = "pending" | "submitted";
 type View = "list" | "paper" | "import" | "bank";
 
+/**
+ * Maintainer escape hatch: 「采集 AI解析」 and 「手动导入」 populate the answer
+ * bank from real submissions; they are NOT end-user features. They are only
+ * shown when the app is opened with `#dev` (for example clicking the app title
+ * then appending `#dev` to the URL). Normal users only see list → 看试卷 →
+ * 网页作答/网页重做.
+ */
+const MAINTAINER_MODE = /^#\/?dev$/.test(window.location.hash);
+
 const STATE_TEXT: Record<number, string> = {
   0: "未提交",
   1: "已提交",
@@ -86,7 +95,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         </div>
       </div>
       <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 首次未解析试卷的正确顺序：<strong>网页作答</strong>（窗口内手动过滑块）→ 计划不完整时点红色 <strong>容错试做</strong>（未解析题任选首项，得低分）→ 提交后回到「已提交」点 <strong>采集 AI解析</strong> → 再 <strong>网页重做</strong> 提交满分。严格模式（计划完整）才会自动提交；期末仅列出、不自动提交。
+        ${icon("alert", 14)} <span>使用顺序：<strong>网页作答</strong>（窗口内手动完成滑块验证）→ 计划完整时直接自动提交；不完整时点红色 <strong>容错试做</strong>（未解析题任选首项，会得低分）→ 之后在「已提交」点 <strong>网页重做</strong> 重新作答并提交。严格模式（计划完整）才会自动提交；期末仅列出、不自动提交。</span>
       </div>
       <div id="zhs-exam-body" class="exam-body"></div>
     </div>
@@ -241,7 +250,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       `打开网页作答窗口：${homework.name}\n\n` +
         `1. 窗口会加载平台「作答」页；若出现滑块验证，请先在窗口内手动完成（只此一次）。\n` +
         `2. 完成后脚本会读取题目并向本地答案库请求计划，窗口内显示「已解析 X/Y 题」和未解析列表。\n` +
-        `3. 计划完整：点「开始自动作答（全解析）」严格提交；计划不完整：点红色「容错试做」（未解析题任选首项，会得低分）先提交，之后采集 AI解析再重做满分。\n\n` +
+        `3. 计划完整：点「开始自动作答（全解析）」严格提交；计划不完整：点红色「容错试做」（未解析题任选首项，会得低分）先提交，之后在「已提交」点「网页重做」重新提交。\n\n` +
         `真实提交可能消耗一次尝试机会。确认打开窗口？`,
     );
     if (!ok) return;
@@ -377,8 +386,8 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         const submittedPaper = isSubmitted(item);
         const isNext =
           tab === "submitted" && justSubmitted?.examId === item.examId;
-        const harvestPrimary = isNext && !justHarvested;
-        const retakePrimary = isNext && justHarvested;
+        const harvestPrimary = MAINTAINER_MODE && isNext && !justHarvested;
+        const retakePrimary = isNext && (!MAINTAINER_MODE || justHarvested);
         return `
         <article class="exam-card${isNext ? " is-next-step" : ""}">
           <div class="exam-card-main">
@@ -400,27 +409,28 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
                 ? `<button class="btn btn-sm btn-ghost" data-act="paper" data-id="${esc(
                     item.examId,
                   )}">${icon("document", 13)} 看试卷</button>
-                   <button class="btn btn-sm ${
-                     harvestPrimary ? "btn-primary" : ""
-                   }" data-act="harvest" data-id="${esc(item.examId)}">${icon(
-                     "spark",
-                     13,
-                   )} 采集 AI解析${harvestPrimary ? "（下一步）" : ""}</button>
-                   <button class="btn btn-sm btn-ghost" data-act="import" data-id="${esc(
-                     item.examId,
-                   )}">${icon("copy", 13)} 手动导入</button>
+                   ${
+                     MAINTAINER_MODE
+                       ? `<button class="btn btn-sm ${
+                           harvestPrimary ? "btn-primary" : ""
+                         }" data-act="harvest" data-id="${esc(item.examId)}">${icon(
+                           "spark",
+                           13,
+                         )} 采集 AI解析${harvestPrimary ? "（下一步）" : ""}</button>
+                          <button class="btn btn-sm btn-ghost" data-act="import" data-id="${esc(
+                            item.examId,
+                          )}">${icon("copy", 13)} 手动导入</button>`
+                       : ""
+                   }
                    <button class="btn btn-sm ${
                      retakePrimary ? "btn-primary" : "btn-ghost"
                    }" data-act="attempt" data-id="${esc(item.examId)}">${icon(
                      "play",
                      13,
-                   )} 网页重做${retakePrimary ? "（满分）" : ""}</button>`
+                   )} 网页重做</button>`
                 : `<button class="btn btn-sm btn-primary" data-act="attempt" data-id="${esc(
                     item.examId,
-                  )}">${icon("play", 13)} 网页作答（滑块）</button>
-                   <button class="btn btn-sm btn-ghost" data-act="harvest-hint" data-id="${esc(
-                     item.examId,
-                   )}">${icon("spark", 13)} 采集说明</button>`
+                  )}">${icon("play", 13)} 网页作答（滑块）</button>`
             }
           </div>
         </article>`;
@@ -477,9 +487,12 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
           .join("")}`
       : "";
 
+    // End users are guided to retake-and-submit only; the harvest step is a
+    // maintainer task (hidden behind `#dev`).
     const nextStepBanner =
       tab === "submitted" && justSubmitted
-        ? `
+        ? MAINTAINER_MODE
+          ? `
       <div class="exam-next-step">
         <div class="exam-next-step-main">
           <strong>「${esc(justSubmitted.name)}」已提交${
@@ -487,19 +500,29 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
           }。</strong>
           <p>${
             justHarvested
-              ? "下一步：点「网页重做（满分）」，窗口内会按答案库严格作答并提交满分；滑块验证仍需手动完成。"
-              : "下一步：点击「采集 AI解析」，窗口内自动采集解析文本并写入答案库；完成后回来点「网页重做（满分）」提交满分。"
+              ? "维护模式：点「网页重做」按答案库作答并提交。"
+              : "维护模式：先「采集 AI解析」写入答案库（仅维护者使用），完成后再「网页重做」。"
           }</p>
         </div>
         ${
           justHarvested
             ? `<button class="btn btn-primary" data-act="attempt" data-id="${esc(
                 justSubmitted.examId,
-              )}">${icon("play", 14)} 网页重做（满分）</button>`
+              )}">${icon("play", 14)} 网页重做</button>`
             : `<button class="btn btn-primary" data-act="harvest" data-id="${esc(
                 justSubmitted.examId,
               )}">${icon("spark", 14)} 采集 AI解析</button>`
         }
+      </div>`
+          : `
+      <div class="exam-next-step">
+        <div class="exam-next-step-main">
+          <strong>「${esc(justSubmitted.name)}」已提交。</strong>
+          <p>下一步：点「重做并提交」重新作答；窗口内仍需手动完成滑块验证。</p>
+        </div>
+        <button class="btn btn-primary" data-act="attempt" data-id="${esc(
+          justSubmitted.examId,
+        )}">${icon("play", 14)} 重做并提交</button>
       </div>`
         : "";
 
@@ -541,12 +564,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         view = "import";
         render();
       } else if (act === "attempt" && item) void openAttempt(item);
-      else if (act === "harvest-hint") {
-        notify(
-          "AI解析采集只对「已提交」的试卷有效：先通过「网页作答」提交一次（可得低分），再回到「已提交」采集解析。",
-          "info",
-        );
-      } else if (act === "final-hint") {
+      else if (act === "final-hint") {
         notify(
           "期末考试只有 1 次机会，GUI 仅列出、不自动提交，也不读取未提交试卷（读取会开始计时）。请在平台网页端自行参加。",
           "info",
@@ -685,30 +703,32 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
 
   // ---- live events ------------------------------------------------------
 
-  void onZhsExamAi((event) => {
-    if (closed) return;
-    notify(
-      `AI解析写入完成：记录 ${event.recorded} 题、跳过 ${event.skipped} 题；题库共 ${event.bankTotal} 条`,
-      "success",
-    );
-    bank = null;
-    pending = null;
-    submitted = null;
-    if (justSubmitted) {
-      justHarvested = true;
-      if (tab === "submitted") void loadList(true);
-    }
-    if (view === "bank") void loadBank();
-  })
-    .then((stop) => listeners.push(stop))
-    .catch(() => undefined);
+  if (MAINTAINER_MODE) {
+    void onZhsExamAi((event) => {
+      if (closed) return;
+      notify(
+        `AI解析写入完成：记录 ${event.recorded} 题、跳过 ${event.skipped} 题；题库共 ${event.bankTotal} 条`,
+        "success",
+      );
+      bank = null;
+      pending = null;
+      submitted = null;
+      if (justSubmitted) {
+        justHarvested = true;
+        if (tab === "submitted") void loadList(true);
+      }
+      if (view === "bank") void loadBank();
+    })
+      .then((stop) => listeners.push(stop))
+      .catch(() => undefined);
+  }
 
   void onZhsExamResult((event) => {
     if (closed) return;
     notify(
       event.score === null
         ? "网页作答已提交（成绩待平台刷新）"
-        : `网页作答已提交：${event.score} 分，正确 ${event.correctCount}/${event.questionCount} 题。下一步：采集 AI解析 → 网页重做满分`,
+        : `网页作答已提交：${event.score} 分，正确 ${event.correctCount}/${event.questionCount} 题。下一步：点「重做并提交」重新作答。`,
       event.correctCount === event.questionCount ? "success" : "info",
     );
     const homework = lastAttempt;
@@ -716,7 +736,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     pending = null;
     submitted = null;
     if (homework) {
-      // Mark the paper as submitted and make the harvest action prominent.
+      // Mark the paper as submitted and surface the retake-and-submit step.
       justSubmitted = homework;
       justHarvested = false;
       if (tab !== "submitted") {

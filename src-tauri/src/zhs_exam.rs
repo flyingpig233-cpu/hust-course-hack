@@ -654,6 +654,10 @@ pub fn zhs_exam_bank_info(app: AppHandle) -> Result<ZhsBankInfoDto, String> {
 }
 
 /// Persist AI-analysis texts harvested by the exam window (or pasted by hand).
+///
+/// Maintainer-only: the normal GUI never exposes this command (the harvest /
+/// manual-import UI is hidden behind the `#dev` URL hash). Kept registered so
+/// the maintainer can populate `test-data/zhihuishu-answer-bank.json`.
 #[tauri::command]
 pub async fn zhs_exam_record_ai(
     app: AppHandle,
@@ -728,8 +732,10 @@ pub async fn zhs_exam_record_ai(
 /// Open the isolated WebView2 window that harvests AI-analysis texts from the
 /// platform's "check submitted homework" page.
 ///
-/// The session cookies are injected into the window's own WebView2 profile
-/// before navigating to the exam page; they never cross the IPC boundary.
+/// Maintainer-only (hidden behind the `#dev` URL hash in the GUI): normal users
+/// only see list → 看试卷 → 网页作答/网页重做. The session cookies are injected
+/// into the window's own WebView2 profile before navigating to the exam page;
+/// they never cross the IPC boundary.
 #[tauri::command]
 pub async fn zhs_exam_open_check_window(
     app: AppHandle,
@@ -1140,7 +1146,28 @@ fn bank_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn load_bank(app: &AppHandle) -> Result<ZhsAnswerBank, String> {
     let path = bank_path(app)?;
-    ZhsAnswerBank::load_or_builtin(&path).map_err(|error| format!("读取答案库失败：{error:#}"))
+    let first_use = !path.exists();
+    let mut bank = ZhsAnswerBank::load_or_builtin(&path)
+        .map_err(|error| format!("读取答案库失败：{error:#}"))?;
+    // Seed the app-data bank from the compile-time bank on first use and merge
+    // entries added by later app updates, so end users never need a harvest step.
+    let builtin = ZhsAnswerBank::builtin();
+    let mut merged_any = false;
+    for entry in builtin.entries {
+        if !bank
+            .entries
+            .iter()
+            .any(|existing| existing.key == entry.key)
+        {
+            bank.entries.push(entry);
+            merged_any = true;
+        }
+    }
+    if first_use || merged_any {
+        bank.save(&path)
+            .map_err(|error| format!("写入答案库失败：{error:#}"))?;
+    }
+    Ok(bank)
 }
 
 fn save_bank(app: &AppHandle, bank: &ZhsAnswerBank) -> Result<(), String> {
