@@ -59,6 +59,7 @@ pub fn run() {
             zhs_exam::zhs_exam_open_attempt_window,
             zhs_exam::zhs_exam_webview_plan,
             zhs_exam::zhs_exam_webview_submitted,
+            zhs_exam::zhs_exam_js_error,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HUST Course Hack");

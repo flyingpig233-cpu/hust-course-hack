@@ -127,6 +127,38 @@
     }
   }
 
+  function hideLoadingPanel() {
+    try {
+      if (window.__ZHS_HIDE_LOADING__) window.__ZHS_HIDE_LOADING__();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function injectedCookieCount() {
+    var count = Number(window.__ZHS_INJECTED_COUNT__ || 0);
+    return Number.isFinite(count) ? count : 0;
+  }
+
+  /** No AI buttons / SPA crash: diagnostic panel instead of an empty window. */
+  function showCrashPanel(reason) {
+    var recent = '';
+    if (statusNode) recent = statusNode.textContent || '';
+    var detail =
+      reason +
+      '\n\n目标地址：' +
+      String(location.href) +
+      '\n已注入 Cookie ' +
+      injectedCookieCount() +
+      ' 条\n最近状态：' +
+      (recent || '（暂无）');
+    try {
+      if (window.__ZHS_SHOW_ERROR__) window.__ZHS_SHOW_ERROR__('未能读取试卷', detail);
+    } catch (e) {
+      setStatus('未能读取试卷：' + reason);
+    }
+  }
+
   // ---- DOM discovery -----------------------------------------------------
 
   var AI_TEXT = /^AI\s*解析/;
@@ -391,6 +423,9 @@
       setStatus(
         '未找到 AI解析 按钮。请确认已进入「查看已提交试卷」（checkHomework）页；也可关闭窗口后用「手动导入」。',
       );
+      showCrashPanel(
+        '页面已加载，但没有找到任何「AI解析」按钮（可能是 SPA 未渲染、会话失效或页面结构变化）。',
+      );
       H.running = false;
       return;
     }
@@ -492,13 +527,17 @@
 
   function boot() {
     if (!/checkHomework/i.test(String(location.hash || ''))) {
-      ensureOverlay();
-      setStatus('等待加载「查看已提交试卷」页…');
+      // `about:blank` while cookies are injected: keep the Rust loading panel.
       setTimeout(boot, 2500);
       return;
     }
     ensureOverlay();
-    setStatus('页面已就绪，4 秒后自动开始采集（也可手动点击“开始采集”）。');
+    hideLoadingPanel();
+    setStatus(
+      '已注入 Cookie ' +
+        injectedCookieCount() +
+        ' 条。页面已就绪，4 秒后自动开始采集（也可手动点击“开始采集”）。',
+    );
     setTimeout(function () {
       if (!H.running && !H.done) void run();
     }, 4000);
