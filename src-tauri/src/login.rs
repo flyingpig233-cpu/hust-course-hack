@@ -40,6 +40,16 @@ use url::Url;
 pub const LOGIN_LABEL: &str = "login";
 const LOGIN_DIR_PREFIX: &str = "hust-course-hack-login-";
 
+/// WebView2/Chromium args for the login and shared-profile exam windows.
+///
+/// The CAS chain (`onlineexamh5new → studentexam-api/gologin → passport`) is
+/// cross-site, so third-party cookie blocking is disabled explicitly (plus the
+/// wry defaults, which must be repeated when custom args are used). Windows-only
+/// setting; both windows that share the login profile use the same args, as
+/// WebView2 requires identical browser arguments for a shared user-data folder.
+pub(crate) const WEBVIEW2_EXAM_BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,ThirdPartyCookieBlocking";
+
 const HUST_ENTRY: &str = "https://smartcourse.hust.edu.cn/passport";
 const HUST_HOST: &str = "smartcourse.hust.edu.cn";
 
@@ -148,11 +158,13 @@ pub fn open_login_window(app: &AppHandle, platform: Platform) -> Result<(), Stri
     log::info!("opening {} login window", platform.label());
 
     let entry = Url::parse(config.entry).map_err(|error| format!("登录地址无效：{error}"))?;
+    log::info!("webview2 args: {WEBVIEW2_EXAM_BROWSER_ARGS}");
     let builder = WebviewWindowBuilder::new(app, LOGIN_LABEL, WebviewUrl::External(entry))
         .title(config.title)
         .inner_size(1000.0, 800.0)
         .min_inner_size(860.0, 620.0)
         .center()
+        .additional_browser_args(WEBVIEW2_EXAM_BROWSER_ARGS)
         .data_directory(data_dir.clone())
         .on_page_load(move |window, payload| {
             if payload.event() != PageLoadEvent::Finished {
@@ -450,11 +462,14 @@ fn is_login_url(url: &Url) -> bool {
 }
 
 /// Ask the login webview whether the exam list SPA rendered (`#examStateTabYsj`).
-fn login_window_exam_ready(window: &tauri::WebviewWindow) -> bool {
+/// Authenticated-content probe for the exam list SPA.
+///
+/// The SPA shell (`#examStateTabYsj`) can render even when the engine session is
+/// invalid, so the marker requires real list content (homework names/actions).
+fn login_window_authenticated_marker(window: &tauri::WebviewWindow) -> bool {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let script = "(function(){try{if(document.querySelector('#examStateTabYsj'))return 'ready';\
-        if(document.querySelector('[id*=\"examStateTab\"]'))return 'ready';\
-        return 'waiting';}catch(e){return 'error';}})();";
+    let script = "(function(){try{var t=(document.body&&document.body.innerText)||'';\
+        return /单元测试|见面课测验|题目数量|申请重做/.test(t)?'true':'false';}catch(e){return 'false';}})();";
     if window
         .eval_with_callback(script, move |value| {
             let _ = sender.send(value);
@@ -463,8 +478,11 @@ fn login_window_exam_ready(window: &tauri::WebviewWindow) -> bool {
     {
         return false;
     }
-    match receiver.recv_timeout(Duration::from_millis(600)) {
-        Ok(value) => value.contains("ready"),
+    match receiver.recv_timeout(Duration::from_millis(800)) {
+        Ok(value) => {
+            let value = value.trim().trim_matches('"').to_ascii_lowercase();
+            value == "true" || value == "1"
+        }
         Err(_) => false,
     }
 }
@@ -512,12 +530,102 @@ fn capture_sso_cookies(
     )
 }
 
+/// Red error panel inside the login window (the login window has no diagnostic
+/// bootstrap script, so this is built here).
+fn show_login_window_error(window: &tauri::WebviewWindow, title: &str, detail: &str) {
+    let Ok(title) = serde_json::to_string(title) else {
+        return;
+    };
+    let Ok(detail) = serde_json::to_string(detail) else {
+        return;
+    };
+    let script = format!(
+        "(function(){{var old=document.getElementById('__zhs_login_error');if(old)old.remove();\
+         var p=document.createElement('div');p.id='__zhs_login_error';\
+         p.setAttribute('style','position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.96);color:#e5e7eb;font:14px/1.7 \\\"Microsoft YaHei\\\",system-ui,sans-serif;padding:44px;box-sizing:border-box;overflow:auto');\
+         var h=document.createElement('h2');h.textContent={title};h.style.color='#fca5a5';h.style.margin='0 0 14px';\
+         var d=document.createElement('div');d.textContent={detail};d.style.whiteSpace='pre-wrap';d.style.fontSize='13px';\
+         p.appendChild(h);p.appendChild(d);document.documentElement.appendChild(p);}})();"
+    );
+    let _ = window.eval(script);
+}
+
+/// Poll the login webview until the exam list shows authenticated content.
+///
+/// Every poll is logged with the current URL and marker. Ready requires both a
+/// real content marker and the URL staying on the expected exam host for at
+/// least two consecutive seconds. Cookie presence and the SPA shell are not used
+/// as readiness signals.
+fn wait_for_authenticated_exam(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    expected_host: &str,
+    timeout: Duration,
+    best: &mut Vec<CookieRecord>,
+) -> bool {
+    let started = std::time::Instant::now();
+    let mut stable_since: Option<std::time::Instant> = None;
+    while started.elapsed() < timeout {
+        let (captured, _) = capture_sso_cookies(window, best);
+        *best = captured;
+        let current = window.url().ok();
+        let url_text = current
+            .as_ref()
+            .map(|url| url.to_string())
+            .unwrap_or_default();
+        let marker = login_window_authenticated_marker(window);
+        exam_log(
+            app,
+            format!(
+                "login SSO: url={url_text} marker={marker} (+{}ms)",
+                started.elapsed().as_millis()
+            ),
+        );
+        let on_exam_host = current
+            .as_ref()
+            .and_then(|url| url.host_str())
+            .is_some_and(|host| host.eq_ignore_ascii_case(expected_host));
+        if marker && on_exam_host {
+            let since = *stable_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() >= Duration::from_secs(2) {
+                exam_log(
+                    app,
+                    format!(
+                        "login SSO: authenticated exam list marker found (+{}ms)",
+                        started.elapsed().as_millis()
+                    ),
+                );
+                return true;
+            }
+        } else {
+            stable_since = None;
+        }
+        if current.as_ref().is_some_and(is_login_url) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    let current = window
+        .url()
+        .ok()
+        .map(|url| url.to_string())
+        .unwrap_or_default();
+    let marker = login_window_authenticated_marker(window);
+    exam_log(
+        app,
+        format!(
+            "login SSO: authenticated marker timeout; url={current} marker={marker} (+{}ms)",
+            started.elapsed().as_millis()
+        ),
+    );
+    false
+}
+
 /// Complete the exam-engine SSO during login.
 ///
-/// Navigates the login webview to the exam list, waits for the SPA tab or a
-/// passport/login redirect, captures all SSO-host cookies, and on a redirect
-/// keeps the window on the login page with a banner for one extra login before
-/// retrying. Returns the merged cookies and whether the engine session is ready.
+/// Navigates the login webview to the exam list and requires authenticated
+/// content. A passport/login redirect keeps the window there with a banner for
+/// one extra login (up to two rounds) before re-navigating and verifying again.
 fn complete_exam_sso(
     app: &AppHandle,
     base: Vec<CookieRecord>,
@@ -527,7 +635,8 @@ fn complete_exam_sso(
         return (base, false);
     };
     let started = std::time::Instant::now();
-    let (captured, mut has_jsession) = capture_sso_cookies(&window, &base);
+    let expected_host = exam_url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let (captured, _) = capture_sso_cookies(&window, &base);
     let mut best = captured;
     exam_log(
         app,
@@ -548,94 +657,120 @@ fn complete_exam_sso(
         ),
     );
 
-    // Phase 1: automatic SSO (the exam H5 usually renders within seconds).
-    let phase1_deadline = started + Duration::from_secs(45);
-    let mut login_seen = false;
-    while std::time::Instant::now() < phase1_deadline {
-        let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
-            return (best, false);
-        };
-        let (captured, jsession) = capture_sso_cookies(&window, &best);
-        best = captured;
-        has_jsession |= jsession;
-        let current = window.url().ok();
-        if current.as_ref().is_some_and(is_login_url) {
-            login_seen = true;
-            exam_log(
-                app,
-                format!(
-                    "login SSO: redirect to login (+{}ms): {}",
-                    started.elapsed().as_millis(),
-                    current.as_ref().map(|url| url.as_str()).unwrap_or_default()
-                ),
-            );
-            break;
-        }
-        if has_jsession || login_window_exam_ready(&window) {
-            let (captured, _) = capture_sso_cookies(&window, &best);
-            exam_log(
-                app,
-                format!(
-                    "login SSO: exam list ready (+{}ms, {} cookies)",
-                    started.elapsed().as_millis(),
-                    captured.len()
-                ),
-            );
-            return (captured, true);
-        }
-        std::thread::sleep(Duration::from_millis(400));
+    // Phase 1: automatic SSO. Ready only on authenticated content, not cookies.
+    if wait_for_authenticated_exam(
+        app,
+        &window,
+        &expected_host,
+        Duration::from_secs(25),
+        &mut best,
+    ) {
+        show_login_window_prompt(&window, "考试系统验证完成，正在进入…");
+        return (best, true);
     }
 
-    // Phase 2: one extra manual login on the passport page, then retry.
-    if login_seen || !has_jsession {
-        show_login_window_prompt(
-            &window,
-            "知到考试引擎需要一次额外登录；登录后会自动继续，请勿关闭窗口",
-        );
-        exam_log(app, "login SSO: waiting for one extra login (up to 300s)");
-        let manual_start = std::time::Instant::now();
-        let mut renavigated = false;
-        while manual_start.elapsed() < Duration::from_secs(300) {
-            let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
-                return (best, false);
-            };
-            let (captured, jsession) = capture_sso_cookies(&window, &best);
-            best = captured;
-            has_jsession |= jsession;
-            if has_jsession || login_window_exam_ready(&window) {
-                let (captured, _) = capture_sso_cookies(&window, &best);
-                exam_log(
-                    app,
-                    format!(
-                        "login SSO: ready after manual login (+{}ms, {} cookies)",
-                        manual_start.elapsed().as_millis(),
-                        captured.len()
-                    ),
-                );
-                return (captured, true);
-            }
-            let login_page = window.url().ok().as_ref().is_some_and(is_login_url);
-            if login_page {
-                // A new login round started; allow another follow-up navigation.
-                renavigated = false;
-            } else if !renavigated {
-                renavigated = true;
-                exam_log(
-                    app,
-                    "login SSO: manual login finished; re-navigating the exam list",
-                );
-                let _ = window.navigate(exam_url.clone());
-            }
-            std::thread::sleep(Duration::from_millis(500));
-        }
+    let current = window.url().ok();
+    if !current.as_ref().is_some_and(is_login_url) {
+        let url_text = current
+            .as_ref()
+            .map(|url| url.to_string())
+            .unwrap_or_default();
+        let marker = login_window_authenticated_marker(&window);
         exam_log(
             app,
             format!(
-                "login SSO: timed out without exam engine JSESSIONID ({} cookies)",
-                best.len()
+                "login SSO: exam list did not show authenticated content; final url={url_text} marker={marker}"
             ),
         );
+        show_login_window_error(
+            &window,
+            "知到考试系统验证失败",
+            &format!(
+                "考试页已打开，但没有检测到已登录的作业/测验内容。\n\n最后地址：{url_text}\n内容标记：{marker}\n日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log\n\n请关闭窗口后重新登录知到重试。"
+            ),
+        );
+        std::thread::sleep(Duration::from_secs(8));
+        return (best, false);
     }
+
+    // Phase 2: manual login in this window, then re-verify (up to 2 rounds).
+    let mut rounds = 0u32;
+    while rounds < 2 {
+        rounds += 1;
+        show_login_window_prompt(
+            &window,
+            "知到考试系统需要一次额外登录（与本窗口同一账号），登录后会自动继续",
+        );
+        exam_log(
+            app,
+            format!("login SSO: waiting for the extra login (round {rounds})"),
+        );
+        let wait_start = std::time::Instant::now();
+        loop {
+            let current = window.url().ok();
+            if !current.as_ref().is_some_and(is_login_url) {
+                break;
+            }
+            if wait_start.elapsed() > Duration::from_secs(300) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        if wait_start.elapsed() > Duration::from_secs(300) {
+            exam_log(app, "login SSO: manual login timeout");
+            break;
+        }
+        exam_log(
+            app,
+            format!("login SSO: extra login finished; re-navigating exam list (round {rounds})"),
+        );
+        if window.navigate(exam_url.clone()).is_err() {
+            break;
+        }
+        if wait_for_authenticated_exam(
+            app,
+            &window,
+            &expected_host,
+            Duration::from_secs(25),
+            &mut best,
+        ) {
+            show_login_window_prompt(&window, "考试系统验证完成，正在进入…");
+            exam_log(
+                app,
+                format!(
+                    "login SSO: authenticated exam list marker found after manual login (+{}ms)",
+                    started.elapsed().as_millis()
+                ),
+            );
+            return (best, true);
+        }
+        if !window.url().ok().as_ref().is_some_and(is_login_url) {
+            // No marker and no login page: another manual round cannot help.
+            break;
+        }
+    }
+
+    let current = window
+        .url()
+        .ok()
+        .map(|url| url.to_string())
+        .unwrap_or_default();
+    let marker = login_window_authenticated_marker(&window);
+    exam_log(
+        app,
+        format!(
+            "login SSO: manual login rounds failed; final url={current} marker={marker} (+{}ms)",
+            started.elapsed().as_millis()
+        ),
+    );
+    show_login_window_error(
+        &window,
+        "知到考试系统验证失败",
+        &format!(
+            "额外登录后仍未检测到已登录的考试列表内容。\n\n最后地址：{current}\n内容标记：{marker}\n日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log\n\n请关闭窗口后重新登录知到重试。"
+        ),
+    );
+    std::thread::sleep(Duration::from_secs(8));
     (best, false)
 }
 
@@ -658,9 +793,6 @@ async fn warm_up_exam_cookies(
         }
     }
 }
-
-/// Build the exam list URL from the first shared course (its
-/// `recruitAndCourseId` secret is what the SPA expects in `recruitId`).
 fn exam_list_url_for_courses(courses: &[ZhsCourse]) -> Url {
     let secret = courses
         .iter()
@@ -779,13 +911,8 @@ async fn finish_zhs_login(
             }
         };
     }
-    // Safety net: even if the DOM probe/cookie poll missed the readiness signal,
-    // an exam-engine JSESSIONID in the final set means the SSO actually worked.
-    let sso_ready = sso_ready
-        || session_cookies.iter().any(|cookie| {
-            cookie.name == "JSESSIONID"
-                && (cookie.domain.contains("studentexam") || cookie.domain.contains("taurusexam"))
-        });
+    // Readiness is only the authenticated-content signal from the login phase;
+    // cookie presence is never used as a fallback (it produced false positives).
     state.set_zhs_exam_sso_ready(sso_ready);
     if !state.mark_login_succeeded() {
         return Ok(());
