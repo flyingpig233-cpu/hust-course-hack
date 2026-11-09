@@ -49,7 +49,7 @@ use super::{
 };
 
 /// Hosts that receive the Zhihuishu cookies.
-const ZHS_COOKIE_HOSTS: [&str; 11] = [
+const ZHS_COOKIE_HOSTS: [&str; 13] = [
     "https://www.zhihuishu.com/",
     "https://studyvideoh5.zhihuishu.com/",
     "https://studyservice-api.zhihuishu.com/",
@@ -61,6 +61,13 @@ const ZHS_COOKIE_HOSTS: [&str; 11] = [
     "https://lc.zhihuishu.com/",
     "https://im.zhihuishu.com/",
     "https://onlineweb.zhihuishu.com/",
+    // Homework/exam engines. Sessions captured through the login webview are
+    // reduced to a raw `Cookie:` header (`ZhsClient::from_cookie_header`), so
+    // every API host that commands talk to must be listed here or its requests
+    // go out unauthenticated (the exam modal then reports a bogus
+    // "login expired" for every call).
+    "https://studentexam-api.zhihuishu.com/",
+    "https://taurusexam-api.zhihuishu.com/",
 ];
 
 /// Videos per `queryStuyInfo` batch when refreshing completion state.
@@ -2070,6 +2077,26 @@ fn collect_video_ids(value: &Value, out: &mut Vec<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookie_header_authenticates_exam_hosts() {
+        // The GUI captures the login session as a raw `Cookie:` header, so the
+        // exam hosts must be in `ZHS_COOKIE_HOSTS` or every homework/exam call
+        // goes out unauthenticated and the UI reports a bogus login failure.
+        let client = ZhsClient::from_cookie_header("CASLOGC=abc;SERVERID=def").unwrap();
+        for host in [
+            "https://studentexam-api.zhihuishu.com/",
+            "https://taurusexam-api.zhihuishu.com/",
+        ] {
+            let url = Url::parse(host).unwrap();
+            let header = client.jar.cookies(&url).expect("cookie header");
+            let text = header.to_str().unwrap();
+            assert!(
+                text.contains("CASLOGC=abc"),
+                "{host} missing cookies: {text}"
+            );
+        }
+    }
 
     #[test]
     fn parses_course_references() {
