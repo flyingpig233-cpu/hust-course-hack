@@ -1754,6 +1754,18 @@ export const mockApi = {
     if (!meet) throw new Error("演示数据中没有该见面课");
     const totalMinutes = Math.max(1, Math.ceil((meet.durationSecs ?? 0) / 60));
     const watched = zhsWatched.get(meet.liveId) ?? [];
+    // Demo: the first meeting is already signed (签到完成) and therefore
+    // complete even though replay minutes are empty.
+    if (meet.meetCourseId === 9001) {
+      return {
+        totalMinutes,
+        watchedMinutes: [...watched],
+        watchedCount: watched.length,
+        percent: 100,
+        completed: true,
+        attendance: { signed: true, signStatus: "2", label: "签到完成" },
+      };
+    }
     return {
       totalMinutes,
       watchedMinutes: [...watched],
@@ -1762,6 +1774,12 @@ export const mockApi = {
         100,
         Math.round((watched.length / totalMinutes) * 100),
       ),
+      completed: false,
+      attendance: {
+        signed: false,
+        signStatus: "0",
+        label: "未签到",
+      },
     };
   },
 

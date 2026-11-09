@@ -8,8 +8,8 @@
 use crate::{events::JobProgress, state::AppState};
 use hust_course_hack::zhihuishu::{
     ZhsChapter, ZhsClient, ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus,
-    ZhsLesson, ZhsMeet, ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetWatchOptions, ZhsProgress,
-    ZhsProgressStage, ZhsVideo, ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
+    ZhsLesson, ZhsMeet, ZhsMeetAttendance, ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetWatchOptions,
+    ZhsProgress, ZhsProgressStage, ZhsVideo, ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -371,11 +371,34 @@ impl From<ZhsMeet> for ZhsMeetDto {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ZhsMeetAttendanceDto {
+    /// Platform `signInStatus == "2"`: the meeting is signed/attended.
+    pub signed: bool,
+    pub sign_status: Option<String>,
+    /// Chinese label from the core model (`签到完成` / `未签到` / 未知).
+    pub label: String,
+}
+
+impl From<ZhsMeetAttendance> for ZhsMeetAttendanceDto {
+    fn from(attendance: ZhsMeetAttendance) -> Self {
+        Self {
+            signed: attendance.signed,
+            sign_status: attendance.sign_status.clone(),
+            label: attendance.label().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ZhsMeetProgressDto {
     pub total_minutes: u32,
     pub watched_minutes: Vec<u32>,
     pub watched_count: usize,
     pub percent: u32,
+    /// A signed meeting already satisfies the replay requirement.
+    pub completed: bool,
+    pub attendance: ZhsMeetAttendanceDto,
 }
 
 impl From<ZhsMeetProgress> for ZhsMeetProgressDto {
@@ -385,6 +408,8 @@ impl From<ZhsMeetProgress> for ZhsMeetProgressDto {
             watched_minutes: progress.watched_minutes,
             watched_count: progress.watched_count,
             percent: progress.percent,
+            completed: progress.completed,
+            attendance: progress.attendance.into(),
         }
     }
 }

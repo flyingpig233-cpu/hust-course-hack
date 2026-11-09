@@ -438,11 +438,22 @@ export interface ZhsMeet {
   status: number | null;
 }
 
+/** Sign-in (签到) attendance state of one meet course. */
+export interface ZhsMeetAttendance {
+  signed: boolean;
+  signStatus: string | null;
+  /** Chinese label from the backend (`签到完成` / `未签到` / 未知). */
+  label: string;
+}
+
 export interface ZhsMeetProgress {
   totalMinutes: number;
   watchedMinutes: number[];
   watchedCount: number;
   percent: number;
+  /** A signed meeting already satisfies the replay requirement. */
+  completed: boolean;
+  attendance: ZhsMeetAttendance;
 }
 
 export type ZhsWatchState =
