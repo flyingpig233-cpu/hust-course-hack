@@ -107,7 +107,20 @@ fn add_record(jar: &Jar, base: &Url, record: &CookieRecord) -> Result<()> {
         header.push_str("; Secure");
     }
 
-    jar.add_cookie_str(&header, base);
+    // Host-only cookies must be scoped to their own domain: the generic `base`
+    // URL belongs to the SmartCourse host, and using it for cookies of another
+    // platform (Zhihuishu, Ulearning, ...) makes `cookie_store` reject the
+    // domain attribute so the cookie is silently dropped.
+    let cookie_base = if record.domain.trim().is_empty() {
+        base.clone()
+    } else {
+        Url::parse(&format!(
+            "https://{}/",
+            record.domain.trim_start_matches('.')
+        ))
+        .unwrap_or_else(|_| base.clone())
+    };
+    jar.add_cookie_str(&header, &cookie_base);
     Ok(())
 }
 
@@ -225,5 +238,50 @@ smartcourse.hust.edu.cn\tFALSE\t/\tTRUE\t1793258235\twebsite_fid\t42
         let url = Url::parse(BASE_URL).unwrap();
         let header = jar.cookies(&url).unwrap();
         assert!(header.to_str().unwrap().contains("session=abc123"));
+    }
+
+    #[test]
+    fn scopes_cookies_to_their_own_domain() {
+        use reqwest::cookie::CookieStore;
+
+        // Cookies from other platforms must reach their own host only; before
+        // the fix they were added against the SmartCourse base URL and rejected
+        // by `cookie_store` because the domain attribute did not match.
+        let jar = jar_from_records(vec![
+            CookieRecord {
+                domain: "api.ulearning.cn".to_string(),
+                include_subdomains: false,
+                path: "/".to_string(),
+                secure: true,
+                expires: 0,
+                name: "AUTHORIZATION".to_string(),
+                value: "ulearning-token".to_string(),
+            },
+            CookieRecord {
+                domain: ".zhihuishu.com".to_string(),
+                include_subdomains: true,
+                path: "/".to_string(),
+                secure: false,
+                expires: 0,
+                name: "CASLOGC".to_string(),
+                value: "zhs-session".to_string(),
+            },
+        ])
+        .unwrap();
+
+        let ulearning = Url::parse("https://api.ulearning.cn/").unwrap();
+        let header = jar.cookies(&ulearning).unwrap();
+        let header = header.to_str().unwrap();
+        assert!(header.contains("AUTHORIZATION=ulearning-token"), "{header}");
+        assert!(!header.contains("CASLOGC"), "{header}");
+
+        let zhihuishu = Url::parse("https://studyvideoh5.zhihuishu.com/").unwrap();
+        let header = jar.cookies(&zhihuishu).unwrap();
+        let header = header.to_str().unwrap();
+        assert!(header.contains("CASLOGC=zhs-session"), "{header}");
+        assert!(!header.contains("AUTHORIZATION"), "{header}");
+
+        let unrelated = Url::parse("https://example.com/").unwrap();
+        assert!(jar.cookies(&unrelated).is_none());
     }
 }
