@@ -32,7 +32,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -876,6 +876,7 @@ pub async fn zhs_exam_open_check_window(
     exam_id: String,
 ) -> Result<(), String> {
     let client = exam_client(&state)?;
+    ensure_exam_sso_ready(&state)?;
     let homework = find_homework(&client, recruit_id, course_id, &exam_id).await?;
     open_check_window(&app, recruit_id, course_id, &homework)
 }
@@ -987,6 +988,7 @@ pub async fn zhs_exam_redo(
     exam_name_or_id: String,
 ) -> Result<ZhsRedoResultDto, String> {
     let client = exam_client(&state)?;
+    ensure_exam_sso_ready(&state)?;
     let homework = find_homework_ref(&client, recruit_id, course_id, &exam_name_or_id).await?;
     ensure_not_final(&client, recruit_id, course_id, &homework.exam_id).await?;
     if homework.state != Some(1) && homework.achieve.is_none() {
@@ -1163,6 +1165,7 @@ pub async fn zhs_exam_open_attempt_window(
     exam_id: String,
 ) -> Result<(), String> {
     let client = exam_client(&state)?;
+    ensure_exam_sso_ready(&state)?;
     ensure_not_final(&client, recruit_id, course_id, &exam_id).await?;
     let homework = find_homework(&client, recruit_id, course_id, &exam_id).await?;
     open_attempt_window(&app, recruit_id, course_id, &homework)
@@ -1353,6 +1356,18 @@ pub async fn zhs_exam_webview_submitted(
 }
 // ---- Helpers ---------------------------------------------------------------
 
+/// Exam/redo windows are only opened after the login flow completed the exam
+/// engine SSO; otherwise the window would stall on the passport redirect.
+fn ensure_exam_sso_ready(state: &AppState) -> Result<(), String> {
+    if state.zhs_exam_sso_ready() {
+        return Ok(());
+    }
+    Err(
+        "考试引擎会话尚未就绪（登录时未完成考试 SSO）。请回主界面重新登录知到一次，登录窗口会自动完成考试引擎验证后再打开考试窗口。"
+            .to_string(),
+    )
+}
+
 fn exam_client(state: &AppState) -> Result<ZhsExamClient, String> {
     let zhs = state
         .zhs_client()
@@ -1532,7 +1547,7 @@ fn exam_list_url(secret: &str) -> Result<Url, String> {
 
 /// Minimal base64 encoder (the exam list expects the secret base64-encoded, and
 /// the GUI crate intentionally has no extra codec dependency).
-fn base64_encode(input: &str) -> String {
+pub(crate) fn base64_encode(input: &str) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -1728,7 +1743,7 @@ fn open_attempt_window(
 /// Open the shared isolated WebView2 window (cookies injected from the Rust
 /// jar, temporary profile cleaned on destroy).
 /// File log for the exam window only. Never receives cookie values.
-fn exam_log(app: &AppHandle, message: impl AsRef<str>) {
+pub(crate) fn exam_log(app: &AppHandle, message: impl AsRef<str>) {
     static LOCK: Mutex<()> = Mutex::new(());
     let Some(path) = exam_log_path(app) else {
         return;
@@ -1811,7 +1826,8 @@ fn open_exam_window(
     title: &str,
     script: String,
 ) -> Result<(), String> {
-    exam_log(app, format!("open request: {title} -> {exam_url}"));
+    let open_started = Instant::now();
+    exam_log(app, format!("open request (+0ms): {title} -> {exam_url}"));
 
     // The fixed label must not be reused while its WebView2 is still alive:
     // destroy the stale window and wait until Tauri really dropped it.
@@ -1842,6 +1858,8 @@ fn open_exam_window(
     let loaded_for_load = Arc::clone(&loaded);
     let count_for_load = Arc::clone(&injected);
     let expected_host = exam_url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let open_started_load = open_started;
+    let open_started_nav = open_started;
     let recovering = Arc::new(AtomicBool::new(false));
     let recovery_rounds = Arc::new(AtomicUsize::new(0));
     let recovering_load = Arc::clone(&recovering);
@@ -1869,7 +1887,13 @@ fn open_exam_window(
         .on_page_load(move |window, payload| {
             let url = payload.url().clone();
             let event = payload.event();
-            exam_log(&app_load, format!("page-load {event:?}: {url}"));
+            exam_log(
+                &app_load,
+                format!(
+                    "page-load {event:?} (+{}ms): {url}",
+                    open_started_load.elapsed().as_millis()
+                ),
+            );
             if event != PageLoadEvent::Finished || url.scheme() == "about" {
                 return;
             }
@@ -2105,7 +2129,13 @@ fn open_exam_window(
             );
         }
         match window.navigate(nav_url.clone()) {
-            Ok(()) => exam_log(&app_inject, format!("navigation requested: {nav_url}")),
+            Ok(()) => exam_log(
+                &app_inject,
+                format!(
+                    "navigation requested (+{}ms): {nav_url}",
+                    open_started_nav.elapsed().as_millis()
+                ),
+            ),
             Err(error) => {
                 exam_log(&app_inject, format!("navigate failed: {error}"));
                 show_exam_error(

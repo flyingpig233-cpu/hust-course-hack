@@ -112,6 +112,10 @@ pub struct AppState {
     /// The exam cookie warm-up already ran in this login attempt (prevents
     /// navigation loops on repeated page-load validations).
     zhs_exam_warmup: AtomicBool,
+    /// The login flow verified that the exam H5 list renders with an
+    /// exam-engine session (`JSESSIONID` present). Exam/redo windows are only
+    /// opened when this is true.
+    zhs_exam_sso_ready: AtomicBool,
 }
 
 impl AppState {
@@ -174,6 +178,16 @@ impl AppState {
         !self.zhs_exam_warmup.swap(true, Ordering::SeqCst)
     }
 
+    /// Whether the login flow completed the exam-engine SSO (exam list renders
+    /// with a `JSESSIONID`).
+    pub fn zhs_exam_sso_ready(&self) -> bool {
+        self.zhs_exam_sso_ready.load(Ordering::SeqCst)
+    }
+
+    pub fn set_zhs_exam_sso_ready(&self, ready: bool) {
+        self.zhs_exam_sso_ready.store(ready, Ordering::SeqCst);
+    }
+
     /// Merge cookies captured from an exam-host page load into the session and
     /// rebuild the Zhihuishu client so the exam APIs receive the host cookies.
     ///
@@ -182,6 +196,14 @@ impl AppState {
     pub fn merge_zhs_cookies(&self, records: Vec<CookieRecord>) {
         if records.is_empty() {
             return;
+        }
+        // A successful in-window login can also complete the exam SSO; keep the
+        // readiness flag in sync so later windows do not stall.
+        if records.iter().any(|record| {
+            record.name == "JSESSIONID"
+                && (record.domain.contains("studentexam") || record.domain.contains("taurusexam"))
+        }) {
+            self.zhs_exam_sso_ready.store(true, Ordering::SeqCst);
         }
         let mut session = self.write_session();
         let Some(SessionClient::Zhihuishu(zhs)) = session.as_mut().map(|s| &mut s.client) else {
@@ -348,6 +370,7 @@ impl AppState {
         self.login_succeeded.store(false, Ordering::SeqCst);
         self.login_checking.store(false, Ordering::SeqCst);
         self.zhs_exam_warmup.store(false, Ordering::SeqCst);
+        self.zhs_exam_sso_ready.store(false, Ordering::SeqCst);
         *self.write_login_platform() = Some(platform);
         *self.write_login_dir() = Some(data_dir);
     }
