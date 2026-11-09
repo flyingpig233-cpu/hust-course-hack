@@ -14,7 +14,7 @@
 //! Cookie values and the harvested analysis text never cross the IPC boundary in
 //! the other direction either: the UI only sees counts and question stems.
 
-use crate::{events::JobProgress, state::AppState};
+use crate::{events::JobProgress, login::LOGIN_LABEL, state::AppState};
 use anyhow::{Context, Result};
 use hust_course_hack::{
     cookie::CookieRecord,
@@ -1848,7 +1848,37 @@ fn open_exam_window(
         }
     }
 
-    let data_dir = exam_data_dir();
+    // Reuse the login window's WebView2 profile when available: the CAS/SSO
+    // state lives in the profile and cannot be reproduced by injecting cookies
+    // into a fresh one. Wait for the login window to release the profile first.
+    let mut shared_profile = app.state::<AppState>().zhs_webview_dir();
+    if shared_profile.is_some() && app.get_webview_window(LOGIN_LABEL).is_some() {
+        exam_log(
+            app,
+            "exam window: waiting for the login window to release the shared profile",
+        );
+        for _ in 0..60 {
+            if app.get_webview_window(LOGIN_LABEL).is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let using_shared = shared_profile.is_some() && app.get_webview_window(LOGIN_LABEL).is_none();
+    let data_dir = if using_shared {
+        let dir = shared_profile.take().expect("shared profile checked");
+        exam_log(
+            app,
+            format!(
+                "exam window: shared login profile={} (cookie injection skipped)",
+                dir.display()
+            ),
+        );
+        dir
+    } else {
+        exam_log(app, "exam window: temp profile + cookie injection");
+        exam_data_dir()
+    };
     let blank = Url::parse("about:blank").map_err(|error| format!("无效的空白页地址：{error}"))?;
     let injected = Arc::new(AtomicUsize::new(0));
     let loaded = Arc::new(AtomicBool::new(false));
@@ -1865,6 +1895,7 @@ fn open_exam_window(
     let recovering_load = Arc::clone(&recovering);
     let rounds_load = Arc::clone(&recovery_rounds);
     let target_url_load = exam_url.clone();
+    let using_shared_load = using_shared;
     let initial_script = format!("{DIAGNOSTIC_SCRIPT}\n{script}");
     exam_log(
         app,
@@ -2022,9 +2053,12 @@ fn open_exam_window(
                 return;
             }
 
-            // Expose the injected cookie count to the overlay scripts.
+            // Expose the cookie/profile mode to the overlay scripts.
             let count = count_for_load.load(Ordering::SeqCst);
             let _ = window.eval(format!("window.__ZHS_INJECTED_COUNT__ = {count};"));
+            if using_shared_load {
+                let _ = window.eval("window.__ZHS_PROFILE_SHARED__ = true;");
+            }
 
             // Merge cookies set by the exam host back into the main session, so a
             // manual login performed inside this window also fixes the API client.
@@ -2046,8 +2080,17 @@ fn open_exam_window(
         });
 
     let window = builder.build().map_err(|error| {
-        cleanup_exam_dir(data_dir.clone());
-        exam_log(app, format!("window build failed: {error}"));
+        if !using_shared {
+            cleanup_exam_dir(data_dir.clone());
+        }
+        exam_log(
+            app,
+            if using_shared {
+                format!("window build failed with the shared profile: {error}")
+            } else {
+                format!("window build failed: {error}")
+            },
+        );
         format!("打开考试窗口失败：{error}")
     })?;
 
@@ -2055,8 +2098,12 @@ fn open_exam_window(
     let data_dir_for_destroy = data_dir.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            exam_log(&app_destroy, "window destroyed (temporary profile cleaned)");
-            cleanup_exam_dir(data_dir_for_destroy.clone());
+            if using_shared {
+                exam_log(&app_destroy, "window destroyed (shared login profile kept)");
+            } else {
+                exam_log(&app_destroy, "window destroyed (temporary profile cleaned)");
+                cleanup_exam_dir(data_dir_for_destroy.clone());
+            }
         }
     });
     let _ = window.set_focus();
@@ -2069,64 +2116,71 @@ fn open_exam_window(
     let nav_url = exam_url.clone();
     tauri::async_runtime::spawn(async move {
         exam_sleep(180).await;
-        let cookies = app_inject.state::<AppState>().zhs_cookies();
-        let cookie_names = cookies
-            .iter()
-            .map(|cookie| cookie.name.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        exam_log(
-            &app_inject,
-            format!(
-                "cookie injection start: {} records (names: {cookie_names})",
-                cookies.len()
-            ),
-        );
-        let Some(window) = app_inject.get_webview_window(EXAM_WINDOW_LABEL) else {
-            exam_log(&app_inject, "window disappeared before cookie injection");
-            return;
-        };
-        // WebView2 may not expose its core immediately after window creation;
-        // retry a few times before navigating anyway (the error panel shows if
-        // the session really is missing).
-        let mut injected_ok = false;
-        for attempt in 0..4 {
-            if attempt > 0 {
-                exam_sleep(250).await;
-            }
-            let app_for_closure = app_inject.clone();
-            let holder = Arc::clone(&injected_count);
-            let cookies_for_closure = cookies.clone();
-            let result = window.with_webview(move |webview| {
-                match inject_webview2_cookies(&webview, &cookies_for_closure) {
-                    Ok(count) => {
-                        holder.store(count, Ordering::SeqCst);
-                        exam_log(
-                            &app_for_closure,
-                            format!("cookie injection ok: {count} cookies"),
-                        );
-                    }
-                    Err(error) => {
-                        exam_log(
-                            &app_for_closure,
-                            format!("cookie injection attempt {attempt} failed: {error:#}"),
-                        );
-                    }
-                }
-            });
-            if let Err(error) = result {
-                exam_log(&app_inject, format!("with_webview failed: {error}"));
-            }
-            if injected_count.load(Ordering::SeqCst) > 0 {
-                injected_ok = true;
-                break;
-            }
-        }
-        if !injected_ok {
+        if using_shared {
             exam_log(
                 &app_inject,
-                "cookie injection did not succeed; navigating anyway (login redirect will show the error panel)",
+                "cookie injection skipped: shared login profile already carries the exam SSO",
             );
+        } else {
+            let cookies = app_inject.state::<AppState>().zhs_cookies();
+            let cookie_names = cookies
+                .iter()
+                .map(|cookie| cookie.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            exam_log(
+                &app_inject,
+                format!(
+                    "cookie injection start: {} records (names: {cookie_names})",
+                    cookies.len()
+                ),
+            );
+            let Some(window) = app_inject.get_webview_window(EXAM_WINDOW_LABEL) else {
+                exam_log(&app_inject, "window disappeared before cookie injection");
+                return;
+            };
+            // WebView2 may not expose its core immediately after window creation;
+            // retry a few times before navigating anyway (the error panel shows if
+            // the session really is missing).
+            let mut injected_ok = false;
+            for attempt in 0..4 {
+                if attempt > 0 {
+                    exam_sleep(250).await;
+                }
+                let app_for_closure = app_inject.clone();
+                let holder = Arc::clone(&injected_count);
+                let cookies_for_closure = cookies.clone();
+                let result = window.with_webview(move |webview| {
+                    match inject_webview2_cookies(&webview, &cookies_for_closure) {
+                        Ok(count) => {
+                            holder.store(count, Ordering::SeqCst);
+                            exam_log(
+                                &app_for_closure,
+                                format!("cookie injection ok: {count} cookies"),
+                            );
+                        }
+                        Err(error) => {
+                            exam_log(
+                                &app_for_closure,
+                                format!("cookie injection attempt {attempt} failed: {error:#}"),
+                            );
+                        }
+                    }
+                });
+                if let Err(error) = result {
+                    exam_log(&app_inject, format!("with_webview failed: {error}"));
+                }
+                if injected_count.load(Ordering::SeqCst) > 0 {
+                    injected_ok = true;
+                    break;
+                }
+            }
+            if !injected_ok {
+                exam_log(
+                    &app_inject,
+                    "cookie injection did not succeed; navigating anyway (login redirect will show the error panel)",
+                );
+            }
         }
         match window.navigate(nav_url.clone()) {
             Ok(()) => exam_log(

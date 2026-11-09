@@ -9,6 +9,7 @@ mod zhihuishu;
 mod zhs_exam;
 
 use state::AppState;
+use tauri::Manager;
 
 pub fn run() {
     #[cfg(debug_assertions)]
@@ -65,6 +66,13 @@ pub fn run() {
             zhs_exam::zhs_exam_redo_result,
             zhs_exam::zhs_exam_solve_captcha,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running HUST Course Hack");
+        .build(tauri::generate_context!())
+        .expect("error while building HUST Course Hack")
+        .run(|app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit)
+                && let Some(dir) = app_handle.state::<AppState>().take_zhs_webview_dir()
+            {
+                login::cleanup_login_dir_sync(dir);
+            }
+        });
 }
