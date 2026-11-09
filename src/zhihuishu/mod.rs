@@ -37,9 +37,9 @@ pub use exam::{
 pub use meet::{ZhsMeetWatchOptions, plan_meet_minutes, run_meet_watch};
 pub use models::{
     ZhsChapter, ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus, ZhsLesson, ZhsMeet,
-    ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote, ZhsProgress,
-    ZhsProgressStage, ZhsUser, ZhsVideo, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions,
-    ZhsWatchOutcome, ZhsWatchState,
+    ZhsMeetAttendance, ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote,
+    ZhsProgress, ZhsProgressStage, ZhsUser, ZhsVideo, ZhsVideoStudy, ZhsVideoTarget,
+    ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
 };
 pub use watch::{plan_videos, run_video_watch};
 
@@ -154,6 +154,8 @@ pub const VIDEO_EXCEPTION_PATH: &str = "/gateway/t/v1/cheat/exceptionActionDetai
 pub const MEET_EXCEPTION_PATH: &str = "/app-commserv-live/gateway/t/v1/chect/exceptionActionDetail";
 /// Meet replay watched-minute list.
 pub const MEET_HISTORY_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/getWatchHistory";
+/// Meet sign-in/attendance state (JSONP, `im.zhihuishu.com`).
+pub const MEET_AUTH_PATH: &str = "/live/checkLiveHomeAuth";
 /// Meet replay minute report.
 pub const MEET_SUBMIT_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/setWatchHistorySecret";
 /// Meet course list (plain form POST, no `secretStr`).

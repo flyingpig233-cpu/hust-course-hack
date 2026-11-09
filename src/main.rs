@@ -326,6 +326,9 @@ enum ZhsMeetCommand {
         /// Disable the anti-cheat circuit breaker.
         #[arg(long)]
         no_circuit_breaker: bool,
+        /// Also report replay minutes for meetings already signed (签到).
+        #[arg(long)]
+        include_signed: bool,
         /// Print the plan and the fields that would be sent; send nothing.
         #[arg(long)]
         dry_run: bool,
@@ -355,6 +358,7 @@ struct MeetWatchArgs {
     delay_ms: String,
     check_every: usize,
     no_circuit_breaker: bool,
+    include_signed: bool,
     dry_run: bool,
     yes: bool,
 }
@@ -973,6 +977,7 @@ async fn zhs(command: ZhsCommand, cookies: &Path) -> Result<i32> {
                     delay_ms,
                     check_every,
                     no_circuit_breaker,
+                    include_signed,
                     dry_run,
                     yes,
                 } => {
@@ -984,6 +989,7 @@ async fn zhs(command: ZhsCommand, cookies: &Path) -> Result<i32> {
                         delay_ms,
                         check_every,
                         no_circuit_breaker,
+                        include_signed,
                         dry_run,
                         yes,
                     };
@@ -1503,13 +1509,32 @@ async fn zhs_meet_status(client: &ZhsClient, reference: &str, meeting: Option<u6
     let mut exit_code = 0;
     for meet in selected {
         match client.meet_progress(meet).await {
-            Ok(progress) => println!(
-                "{}：已看 {}/{} 分钟（{}%）",
-                meet.label(),
-                progress.watched_count,
-                progress.total_minutes,
-                progress.percent
-            ),
+            Ok(progress) => {
+                if progress.completed || progress.attendance_satisfied() {
+                    if progress.total_minutes > 0 {
+                        println!(
+                            "{}：已完成（签到完成） / 回放 {}/{} 分钟（无需补刷）",
+                            meet.label(),
+                            progress.watched_count,
+                            progress.total_minutes,
+                        );
+                    } else {
+                        println!(
+                            "{}：已完成（签到完成） / 回放时长未知（无需补刷）",
+                            meet.label(),
+                        );
+                    }
+                } else {
+                    println!(
+                        "{}：考勤 {} / 已看 {}/{} 分钟（{}%）",
+                        meet.label(),
+                        progress.attendance.label(),
+                        progress.watched_count,
+                        progress.total_minutes,
+                        progress.percent
+                    );
+                }
+            }
             Err(error) => {
                 exit_code = 1;
                 eprintln!("{}：读取回放进度失败：{error:#}", meet.label());
@@ -1533,6 +1558,7 @@ async fn zhs_meet_watch(client: &ZhsClient, args: MeetWatchArgs) -> Result<i32> 
         delay_max_ms,
         circuit_breaker: !args.no_circuit_breaker,
         check_every: args.check_every,
+        include_signed: args.include_signed,
     };
 
     let course = client.resolve_course(&args.course).await?;

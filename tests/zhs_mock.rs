@@ -114,6 +114,12 @@ pub struct MockState {
     pub fail_set_minute: usize,
     /// Replay duration reported by the meet list and the IM fallback.
     pub replay_duration_secs: u64,
+    /// `signInStatus` returned by `checkLiveHomeAuth` ("2" = signed).
+    pub meet_sign_status: String,
+    /// Fail the attendancce JSONP endpoint (HTTP 500).
+    pub meet_auth_error: bool,
+    /// Fail the replay video-list endpoint (HTTP 503).
+    pub meet_video_error: bool,
     /// Fail the `c/has` module-key handshake (video fallback / meet error tests).
     pub fail_module_key: bool,
     /// Return an empty `rt` from `lookHomework` (forces the openHomework/openExam fallback).
@@ -138,6 +144,9 @@ impl Default for MockState {
             drop_connections: false,
             fail_set_minute: 0,
             replay_duration_secs: 7_195,
+            meet_sign_status: "1".to_string(),
+            meet_auth_error: false,
+            meet_video_error: false,
             fail_module_key: false,
             fail_look_homework: false,
             homework_captcha: false,
@@ -720,7 +729,36 @@ fn route(
         );
     }
 
+    if path.contains("/live/checkLiveHomeAuth") {
+        if state.meet_auth_error {
+            return (
+                500,
+                "application/json".to_string(),
+                json!({"msg": "mock attendance failure"}).to_string(),
+            );
+        }
+        let body = json!({
+            "signInStatus": state.meet_sign_status,
+            "openStatus": "2",
+            "courseLeaveStatus": "2",
+            "auth": "-1",
+            "courseEndStatus": "1",
+        });
+        return (
+            200,
+            "application/javascript".to_string(),
+            format!("checkLiveHomeAuth({body})"),
+        );
+    }
+
     if path.contains("/livehome/getVideosByLiveId") {
+        if state.meet_video_error {
+            return (
+                503,
+                "application/json".to_string(),
+                json!({"msg": "mock replay video failure"}).to_string(),
+            );
+        }
         // JSONP response shape used by the live page.
         return (
             200,
@@ -1327,6 +1365,7 @@ fn fast_meet_options() -> ZhsMeetWatchOptions {
         delay_max_ms: 30,
         circuit_breaker: false,
         check_every: 100,
+        include_signed: false,
     }
 }
 
@@ -1445,6 +1484,7 @@ async fn meet_flow_trips_the_circuit_breaker_on_a_lock() {
         delay_max_ms: 2,
         circuit_breaker: true,
         check_every: 1,
+        include_signed: false,
     };
     let outcome = client
         .meet_watch(&meet, &options, &no_progress)
@@ -1478,6 +1518,7 @@ async fn meet_flow_dry_run_reports_no_minutes_and_stays_in_coverage() {
             delay_max_ms: 2,
             circuit_breaker: false,
             check_every: 10,
+            include_signed: false,
         };
         let outcome = client
             .meet_watch(&meet, &options, &no_progress)
@@ -1513,6 +1554,139 @@ async fn meet_flow_can_be_cancelled_before_the_first_report() {
         .expect("cancelled run");
     assert_eq!(outcome.state, ZhsWatchState::Cancelled);
     assert!(server.requests_for("/setWatchHistorySecret").is_empty());
+}
+
+#[tokio::test]
+async fn meet_attendance_parses_the_jsonp_signed_state() {
+    let server = MockServer::start();
+    server.configure(|state| state.meet_sign_status = "2".to_string());
+    let (client, meet) = meet_fixture(&server).await;
+
+    let attendance = client.meet_attendance(&meet).await.expect("attendance");
+    assert!(attendance.signed);
+    assert_eq!(attendance.sign_status.as_deref(), Some("2"));
+    assert_eq!(attendance.open_status.as_deref(), Some("2"));
+    assert_eq!(attendance.course_leave_status.as_deref(), Some("2"));
+    assert_eq!(attendance.course_end_status.as_deref(), Some("1"));
+    assert_eq!(attendance.raw["auth"], "-1");
+
+    let requests = server.requests_for("/live/checkLiveHomeAuth");
+    assert_eq!(requests.len(), 1);
+    let query = &requests[0].query;
+    assert_eq!(
+        query.get("liveCourseId").map(String::as_str),
+        Some("13416762")
+    );
+    assert_eq!(
+        query.get("courseId").map(String::as_str),
+        Some("1000011214")
+    );
+    assert_eq!(query.get("recruitId").map(String::as_str), Some("463667"));
+    assert_eq!(
+        query.get("callback").map(String::as_str),
+        Some("checkLiveHomeAuth")
+    );
+    assert!(query.get("userId").is_some());
+}
+
+#[tokio::test]
+async fn meet_progress_uses_attendance_as_the_completion_signal() {
+    // Unsigned: replay minutes decide, as before.
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "1".to_string();
+        state.replay_duration_secs = 600;
+        state.history = vec![1, 2, 3];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client
+        .meet_progress(&meet)
+        .await
+        .expect("unsigned progress");
+    assert!(!progress.attendance_satisfied());
+    assert!(!progress.completed);
+    assert_eq!(progress.total_minutes, 10);
+    assert_eq!(progress.percent, 30);
+
+    // Signed: replay duration may be unavailable without failing the status;
+    // 签到完成 counts as replay completion (100%).
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "2".to_string();
+        state.replay_duration_secs = 0;
+        state.meet_video_error = true;
+        state.history = vec![];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client.meet_progress(&meet).await.expect("signed progress");
+    assert!(progress.attendance_satisfied());
+    assert!(progress.attendance.known());
+    assert!(progress.completed);
+    assert_eq!(progress.total_minutes, 0);
+    assert_eq!(progress.watched_count, 0);
+    assert_eq!(progress.percent, 100);
+
+    // Signed with a known duration: watched == total and 100%.
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "2".to_string();
+        state.replay_duration_secs = 600;
+        state.history = vec![];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client.meet_progress(&meet).await.expect("signed progress");
+    assert!(progress.completed);
+    assert_eq!(progress.total_minutes, 10);
+    assert_eq!(progress.watched_count, 10);
+    assert_eq!(progress.percent, 100);
+}
+
+#[tokio::test]
+async fn meet_progress_tolerates_an_attendance_endpoint_error() {
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_auth_error = true;
+        state.replay_duration_secs = 600;
+        state.history = vec![1];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client
+        .meet_progress(&meet)
+        .await
+        .expect("replay progress still answers when attendance is down");
+    assert!(!progress.attendance_satisfied());
+    assert!(!progress.attendance.known());
+    assert_eq!(progress.total_minutes, 10);
+}
+
+#[tokio::test]
+async fn meet_watch_skips_signed_meetings_unless_requested() {
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "2".to_string();
+        state.history = vec![];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+
+    let outcome = client
+        .meet_watch(&meet, &fast_meet_options(), &no_progress)
+        .await
+        .expect("signed watch");
+    assert_eq!(outcome.state, ZhsWatchState::Skip);
+    assert!(outcome.message.contains("已签到"), "{}", outcome.message);
+    assert!(
+        server.requests_for("/setWatchHistorySecret").is_empty(),
+        "a signed meeting must not report replay minutes"
+    );
+
+    let mut options = fast_meet_options();
+    options.include_signed = true;
+    options.dry_run = true;
+    let outcome = client
+        .meet_watch(&meet, &options, &no_progress)
+        .await
+        .expect("include-signed dry run");
+    assert_eq!(outcome.state, ZhsWatchState::DryRun);
 }
 
 #[tokio::test]

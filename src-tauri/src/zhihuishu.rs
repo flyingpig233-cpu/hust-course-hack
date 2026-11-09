@@ -112,6 +112,7 @@ impl ZhsMeetWatchRequest {
             delay_max_ms,
             circuit_breaker: self.circuit_breaker.unwrap_or(defaults.circuit_breaker),
             check_every: self.check_every.unwrap_or(defaults.check_every).max(1),
+            include_signed: defaults.include_signed,
         }
     }
 }
