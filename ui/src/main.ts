@@ -583,7 +583,12 @@ async function loadZhsDetail(
   if (store.busy) return;
   store.busy = true;
   updateSidebar();
-  if (!silent) renderZhsLoading(main, course, () => void cancelCurrentJob());
+  if (!silent) {
+    renderZhsLoading(main, course, () => void cancelCurrentJob());
+  } else if (store.zhs.detail) {
+    // Show the busy banner on the current tree while the silent refresh runs.
+    showZhsCourseView();
+  }
 
   let unlisten: (() => void) | null = null;
   let detail: ZhsCourseDetail | null = null;
@@ -621,7 +626,50 @@ async function loadZhsDetail(
     return;
   }
   if (failure) {
+    if (silent && store.zhs.detail) {
+      // A silent refresh must not replace the working tree with an error card.
+      toast(`刷新完成状态失败：${failure}`, "error");
+      showZhsCourseView();
+      return;
+    }
     renderZhsCourseError(main, course, failure, () => void loadZhsDetail(course));
+  }
+}
+
+/**
+ * Re-read the authoritative completion record after a real watch run.
+ *
+ * `zhs_course_detail` re-queries `queryStuyInfo` (`watchState`) and returns the
+ * corrected per-video state and counts, because the `videolist`
+ * `isStudiedLesson` flag stays stale after a report. The shared-course list
+ * additionally carries the platform's own progress percentage; that lookup is
+ * best effort and must never hide the corrected per-video state.
+ */
+async function refreshZhsAfterWatch(course: ZhsCourse): Promise<void> {
+  await loadZhsDetail(course, true);
+  const detail = store.zhs.detail;
+  if (!detail || detail.course.recruitId !== course.recruitId) return;
+  try {
+    const courses = await api.zhsListCourses();
+    const fresh = courses.find((item) => item.recruitId === course.recruitId);
+    if (!fresh) return;
+    // Merge the fresh list instead of replacing it: a course added manually
+    // from a study-page URL may not appear in the shared-course list.
+    for (const item of courses) upsertZhsCourse(item);
+    const current = store.zhs.detail;
+    if (current && current.course.recruitId === course.recruitId) {
+      current.course = {
+        ...current.course,
+        progress: fresh.progress,
+        studiedLessonCount: fresh.studiedLessonCount,
+        totalLessonCount: fresh.totalLessonCount,
+      };
+      if (store.zhs.view === "course") showZhsCourseView();
+    }
+    updateSidebar();
+  } catch {
+    // Progress percentage is best effort; the watchState-derived counts above
+    // are the authoritative completion record.
   }
 }
 
@@ -653,9 +701,10 @@ function showZhsCourseView(): void {
         videoCompleted: zhsCompletedVideos(detail),
         onToast: (message, tone) => toast(message, tone),
         onFinished: (summary: ZhsWatchSummary) => {
-          if (!summary.dryRun && summary.ok > 0) {
-            void loadZhsDetail(course, true);
-          }
+          // Any real run changes platform state, even a partial or cancelled
+          // one, so always re-read the completion record. Dry runs send
+          // nothing and the tree cannot have changed.
+          if (!summary.dryRun) void refreshZhsAfterWatch(course);
         },
       }),
     onCheck: () => void checkZhsStatus(String(course.courseId)),

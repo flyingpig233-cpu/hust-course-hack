@@ -2013,7 +2013,21 @@ details[open] > .tree-summary > .tree-chevron {
 
 /* Watch modal ------------------------------------------------------------ */
 
+/*
+ * The watch/quiz modal content is the single flex item of `.modal`. Give it a
+ * column layout with `min-height: 0` so a long body (e.g. the real-execution
+ * risk section) scrolls inside `.modal-body` instead of pushing the footer out
+ * of the clipped panel.
+ */
+.modal > .watch-modal {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .watch-modal .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 18px 22px;
 }
 
@@ -2125,6 +2139,193 @@ details[open] > .tree-summary > .tree-chevron {
   color: #9c2b2b;
   font-size: 12px;
   white-space: pre-line;
+}
+
+/* Zhihuishu video modal: summary strip + scope / options / mode ----------- */
+
+.zhs-watch-modal .watch-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8faff;
+}
+
+.watch-summary-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.watch-summary-cell span {
+  font-size: 10.8px;
+  color: var(--muted);
+}
+
+.watch-summary-cell strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.watch-summary-note {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  min-height: 1.2em;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.watch-section {
+  margin: 0 0 16px;
+}
+
+.watch-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.watch-section-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.watch-section-head p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.watch-choice-row,
+.watch-mode-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.watch-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.watch-choice strong {
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.watch-choice small,
+.watch-mode small {
+  font-size: 10.8px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.watch-choice.is-active {
+  border-color: #9dbaff;
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px rgba(47, 107, 255, 0.08);
+}
+
+.watch-choice:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.watch-mode {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.watch-mode input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.watch-mode span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.watch-mode strong {
+  font-size: 12.5px;
+}
+
+.watch-mode.is-active {
+  border-color: #9dbaff;
+  background: var(--accent-soft);
+}
+
+.watch-danger {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid #f3c9c9;
+  border-radius: 11px;
+  background: var(--bad-soft);
+}
+
+.watch-danger-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #9c2b2b;
+}
+
+.watch-danger p {
+  margin: 0 0 9px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #8a3030;
+}
+
+.watch-danger[hidden],
+.field[hidden] {
+  display: none;
+}
+
+.watch-tech {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: #f8fafd;
+}
+
+.watch-tech summary {
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.watch-tech p {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 .settings-grid {
