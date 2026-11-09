@@ -19,9 +19,12 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::models::{
-    UlChapter, UlCourse, UlPage, UlPageContent, UlQuestion, UlSection, UlSectionRecord, UlUser,
-    UlVideo,
+    UlChapter, UlCourse, UlPage, UlPageContent, UlQuestion, UlSection, UlSectionRecord, UlTextbook,
+    UlUser, UlVideo,
 };
+
+/// Empty list reused by parsers that tolerate a missing array.
+static EMPTY_ARRAY: Vec<Value> = Vec::new();
 
 /// First present key holding an id (number or numeric string).
 fn as_i64(value: &Value) -> Option<i64> {
@@ -145,6 +148,77 @@ pub fn parse_course_list(value: &Value) -> Vec<UlCourse> {
         .collect()
 }
 
+/// Parse `GET /courses/students` (courseapi) into course skeletons.
+///
+/// The list exposes only the external `ocId` (`id`); [`super::client::UlearningClient::list_courses`]
+/// resolves the internal `textbookId` per course afterwards.
+pub fn parse_student_courses(value: &Value) -> Vec<UlCourse> {
+    let data = payload(value);
+    let items: &Vec<Value> = value
+        .as_array()
+        .or_else(|| data.as_array())
+        .or_else(|| get_array(data, &["courseList", "courses", "list", "rows"]))
+        .or_else(|| get_array(value, &["courseList", "courses", "list", "rows"]))
+        .unwrap_or(&EMPTY_ARRAY);
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let oc_id = get_i64(item, &["id", "ocId", "oc_id"])?;
+            if oc_id <= 0 {
+                return None;
+            }
+            Some(UlCourse {
+                oc_id: Some(oc_id),
+                textbook_id: 0,
+                class_id: get_i64(item, &["classId", "classid", "class_id"]),
+                name: get_str(item, &["name", "courseName", "title"]),
+                author: Some(get_str(item, &["teacherName", "teacher", "author"]))
+                    .filter(|text| !text.is_empty()),
+                remaining_secs: None,
+            })
+        })
+        .collect()
+}
+
+/// `total` of the `GET /courses/students` response (for pagination).
+pub fn parse_students_total(value: &Value) -> Option<u64> {
+    let data = payload(value);
+    ["total", "totalCount"]
+        .iter()
+        .filter_map(|key| data.get(*key).or_else(|| value.get(*key)))
+        .find_map(|item| {
+            item.as_u64()
+                .or_else(|| item.as_str().and_then(|text| text.trim().parse().ok()))
+        })
+        .filter(|total| *total > 0)
+}
+
+/// Parse `GET /textbook/student/{ocId}/list` into textbook entries.
+pub fn parse_textbook_list(value: &Value) -> Vec<UlTextbook> {
+    let data = payload(value);
+    let items: &Vec<Value> = value
+        .as_array()
+        .or_else(|| data.as_array())
+        .or_else(|| get_array(data, &["textbookList", "list", "rows"]))
+        .unwrap_or(&EMPTY_ARRAY);
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let textbook_id = get_i64(item, &["courseId", "textbookId", "textbook_id", "id"])?;
+            if textbook_id <= 0 {
+                return None;
+            }
+            Some(UlTextbook {
+                textbook_id,
+                name: get_str(item, &["name", "courseName", "textbookName"]),
+                limit_millis: get_i64(item, &["limit", "limitTime", "endTime"]),
+            })
+        })
+        .collect()
+}
+
 /// Parse `GET /course/{id}/basicinformation` into `(name, author)`.
 pub fn parse_basic_information(value: &Value) -> (Option<String>, Option<String>) {
     let root = value
@@ -160,12 +234,18 @@ pub fn parse_basic_information(value: &Value) -> (Option<String>, Option<String>
 }
 
 /// Parse `GET /course/{id}/remaining`; negative means expired.
+///
+/// The platform returns **days** (live-verified on 2026-11-08: `1753` matches
+/// the textbook `limit` timestamp difference exactly), so convert to seconds
+/// to keep [`super::models::UlCourse::remaining_secs`] in one unit.
 pub fn parse_remaining(value: &Value) -> Option<i64> {
-    if let Some(number) = as_i64(value) {
-        return Some(number);
-    }
-    let root = payload(value);
-    get_i64(root, &["time", "remaining", "remainingTime", "seconds"])
+    let days = if let Some(number) = as_i64(value) {
+        Some(number)
+    } else {
+        let root = payload(value);
+        get_i64(root, &["time", "remaining", "remainingTime"])
+    };
+    days.map(|days| days.saturating_mul(86_400))
 }
 
 /// Parse the class name from `GET /classes/{id}?classId=`.
@@ -654,8 +734,9 @@ mod tests {
             parse_basic_information(&json!({"course": {"name": "概论", "author": "王老师"}})),
             (Some("概论".to_string()), Some("王老师".to_string()))
         );
-        assert_eq!(parse_remaining(&json!(3600)), Some(3600));
-        assert_eq!(parse_remaining(&json!({"time": -1})), Some(-1));
+        // `/remaining` returns days; the parser normalizes to seconds.
+        assert_eq!(parse_remaining(&json!(3600)), Some(3600 * 86_400));
+        assert_eq!(parse_remaining(&json!({"time": -1})), Some(-86_400));
         assert_eq!(
             parse_class_name(&json!([{"name": "2026秋1班"}])),
             Some("2026秋1班".to_string())
@@ -681,5 +762,62 @@ mod tests {
         assert_eq!(courses[0].name, "习近平新时代中国特色社会主义思想概论");
         // Entries without an internal textbook id are dropped.
         assert!(parse_course_list(&json!([{"courseId": 165508}])).is_empty());
+    }
+
+    #[test]
+    fn parses_measured_courseapi_student_list() {
+        // Sanitized fixture of the measured `GET /courses/students` response.
+        let value = json!({
+            "pn": 1,
+            "ps": 15,
+            "total": 1,
+            "courseList": [{
+                "id": 165_508,
+                "name": "【2026秋】测试课程",
+                "cover": "https://example.invalid/cover.png",
+                "courseCode": "TESTCODE",
+                "type": 1,
+                "classId": 1_019_700,
+                "className": "测试班",
+                "status": 1,
+                "teacherName": "测试老师",
+                "learnProgress": 0,
+                "publishStatus": 1
+            }]
+        });
+        let courses = parse_student_courses(&value);
+        assert_eq!(courses.len(), 1);
+        let course = &courses[0];
+        assert_eq!(course.oc_id, Some(165_508));
+        assert_eq!(course.textbook_id, 0, "textbookId is resolved later");
+        assert_eq!(course.class_id, Some(1_019_700));
+        assert_eq!(course.name, "【2026秋】测试课程");
+        assert_eq!(course.author.as_deref(), Some("测试老师"));
+        assert_eq!(parse_students_total(&value), Some(1));
+        assert_eq!(parse_students_total(&json!({"total": 0})), None);
+    }
+
+    #[test]
+    fn parses_measured_textbook_list() {
+        // Sanitized fixture of `GET /textbook/student/{ocId}/list`.
+        let value = json!([{
+            "courseId": 47_353,
+            "name": "测试课程教材",
+            "type": 4,
+            "status": 1,
+            "limit": 1_945_641_786_000i64,
+            "openCourse": 1
+        }]);
+        let textbooks = parse_textbook_list(&value);
+        assert_eq!(textbooks.len(), 1);
+        assert_eq!(textbooks[0].textbook_id, 47_353);
+        assert_eq!(textbooks[0].name, "测试课程教材");
+        assert_eq!(textbooks[0].limit_millis, Some(1_945_641_786_000));
+        assert_eq!(
+            textbooks[0].remaining_secs(1_945_641_786_000),
+            Some(0),
+            "limit is a millisecond timestamp"
+        );
+        assert!(parse_textbook_list(&json!([])).is_empty());
     }
 }

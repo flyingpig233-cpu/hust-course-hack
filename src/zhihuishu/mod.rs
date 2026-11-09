@@ -63,6 +63,10 @@ pub const MODULE_VIDEO: u32 = 11;
 /// Meet-course (live replay) module id.
 pub const MODULE_MEET: u32 = 9;
 
+/// Shared-course list module id (measured 2026-11-08: `queryShareCourseInfo`
+/// encrypts with the runtime module-13 key, not module 11).
+pub const MODULE_COURSE_LIST: u32 = 13;
+
 /// XOR key for the video `sdsew` report.
 pub const XOR_KEY_VIDEO: &str = "zzpttjd";
 
@@ -102,6 +106,9 @@ pub const STUONLINE_BASE: &str = "https://stuonline.zhihuishu.com";
 /// Referer/origin of the student portal.
 pub const ONLINE_REFERER: &str = "https://online.zhihuishu.com/";
 
+/// Referer/origin of `onlineservice-api` (shared-course list).
+pub const ONLINE_SERVICE_REFERER: &str = "https://onlineweb.zhihuishu.com/";
+
 /// Replay page host (`lc`).
 pub const LC_BASE: &str = "https://lc.zhihuishu.com";
 
@@ -132,12 +139,16 @@ pub const MEET_HISTORY_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/get
 pub const MEET_SUBMIT_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/setWatchHistorySecret";
 /// Meet course list (plain form POST, no `secretStr`).
 ///
-/// Verified by the userscript on a live account: the student portal serves it
-/// under `onlineSchool`, while the legacy `stuonline` path is kept as fallback.
-pub const MEET_LIST_PATH: &str = "/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss";
-/// Legacy meet-list path, tried when the primary endpoint is unreachable.
-pub const MEET_LIST_FALLBACK_PATH: &str = "/stuonline/teachMeeting/listTeachMeetingStu?examV2=ss";
-/// Shared-course list (best effort; the endpoint is not captured yet).
+/// Verified live on 2026-11-08: the student portal serves it at
+/// `stuonline.zhihuishu.com/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss`
+/// with the form fields `recruitId`, `page.pageNo`, `page.pageSize` and an
+/// `X-Requested-With: XMLHttpRequest` header. The response is a JSON object
+/// whose `maps` array holds the sessions (and `mapCount` the total).
+pub const MEET_LIST_PATH: &str = "/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss";
+/// Legacy meet-list path on the `online` host, tried when the primary fails.
+pub const MEET_LIST_FALLBACK_PATH: &str =
+    "/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss";
+/// Shared-course list (verified live on 2026-11-08).
 pub const COURSE_LIST_PATH: &str = "/gateway/t/v1/student/course/share/queryShareCourseInfo";
 /// Shared-course metadata (best effort; used for `isApply`/`classId`).
 pub const QUERY_COURSE_PATH: &str = "/gateway/t/v1/learning/queryCourse";

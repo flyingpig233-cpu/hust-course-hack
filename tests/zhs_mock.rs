@@ -570,7 +570,9 @@ fn route(
         );
     }
 
-    if path.contains("/onlineSchool/json/teachMeeting/listTeachMeetingStu") {
+    if path.contains("/stuonline/json/teachMeeting/listTeachMeetingStu")
+        || path.contains("/onlineSchool/json/teachMeeting/listTeachMeetingStu")
+    {
         return (
             200,
             "application/json".to_string(),
@@ -578,6 +580,7 @@ fn route(
                 "courseId": MOCK_COURSE_ID,
                 "recruitId": MOCK_RECRUIT_ID,
                 "classId": 13_640_013u64,
+                "mapCount": 1,
                 "maps": [{
                     "liveCourseId": MOCK_LIVE_ID.to_string(),
                     "videoId": MOCK_REPLAY_VIDEO_ID.to_string(),

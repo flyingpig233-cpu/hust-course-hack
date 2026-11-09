@@ -171,6 +171,7 @@ export const ulBrowserApi: UlBackend = {
 
   async listCourses(): Promise<UlCourse[]> {
     requireSession();
+    courses = await client.listCourses();
     return [...courses];
   },
 

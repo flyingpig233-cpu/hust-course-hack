@@ -6,6 +6,7 @@
 // a Zhihuishu cookie. Parsing helpers are exported for the offline tests.
 import {
   MODULE_MEET,
+  MODULE_ONLINESERVICE,
   MODULE_VIDEO,
   ModuleKeyCache,
   XOR_KEY_COURSE,
@@ -136,6 +137,16 @@ function pickNum(record: Record<string, unknown>, keys: string[]): number | null
   return num(pick(record, keys));
 }
 
+/** Parse a progress value that may be a number or a platform percentage string. */
+function pickPercent(record: Record<string, unknown>, keys: string[]): number | null {
+  const value = pick(record, keys);
+  if (typeof value === 'string') {
+    const trimmed = value.trim().replace(/%$/, '');
+    return trimmed ? num(trimmed) : null;
+  }
+  return num(value);
+}
+
 function text(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -178,7 +189,7 @@ export function parseCourse(value: unknown): ZhsCourse | null {
     secret: textOrNull(pick(raw, ['recruitAndCourseId', 'secret', 'courseSecret'])),
     is_apply: pickNum(raw, ['isApply', 'is_apply']),
     course_type: textOrNull(pick(raw, ['courseType', 'course_type', 'type'])),
-    progress: pickNum(raw, ['progress', 'studyProgress', 'schedule']),
+    progress: pickPercent(raw, ['progress', 'studyProgress', 'schedule']),
     studied_lesson_count: pickNum(raw, ['studiedLessonCount', 'studiedCount']),
     total_lesson_count: pickNum(raw, ['totalLessonCount', 'lessonCount']),
     status: pickNum(raw, ['status', 'courseStatus']),
@@ -187,7 +198,13 @@ export function parseCourse(value: unknown): ZhsCourse | null {
 
 /** Find the course array inside the many shapes the platform returns. */
 function findArray(body: Record<string, unknown>, keys: string[]): unknown[] {
-  const containers = [body, asRecord(body.data), asRecord(body.rt), asRecord(asRecord(body.data).rt)];
+  const containers = [
+    body,
+    asRecord(body.data),
+    asRecord(body.rt),
+    asRecord(body.result),
+    asRecord(asRecord(body.data).rt),
+  ];
   for (const container of containers) {
     for (const key of keys) {
       const value = container[key];
@@ -199,7 +216,16 @@ function findArray(body: Record<string, unknown>, keys: string[]): unknown[] {
 
 /** Parse the shared-course list response. */
 export function parseCourseList(body: Record<string, unknown>): ZhsCourse[] {
-  const rows = findArray(body, ['courseList', 'shareCourseDtos', 'list', 'rows', 'records', 'courses', 'data']);
+  const rows = findArray(body, [
+    'courseOpenDtos',
+    'courseList',
+    'shareCourseDtos',
+    'list',
+    'rows',
+    'records',
+    'courses',
+    'data',
+  ]);
   const seen = new Set<number>();
   const courses: ZhsCourse[] = [];
   for (const row of rows) {
@@ -292,6 +318,24 @@ export function parseCourseInfo(course: ZhsCourse, body: Record<string, unknown>
   };
 }
 
+/** Parse a speaker field that may be plain text or `speakerJson`. */
+function speakerText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return trimmed;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const names = rows
+      .map((row) => asRecord(row))
+      .map((row) => text(pick(row, ['name', 'teacherName', 'speakerName', 'realName'])).trim())
+      .filter(Boolean);
+    return names.join('、');
+  } catch {
+    return trimmed;
+  }
+}
+
 /** Parse one meet-course row from `listTeachMeetingStu`. */
 export function parseMeet(value: unknown, course: ZhsCourse): ZhsMeet | null {
   const raw = asRecord(value);
@@ -305,8 +349,9 @@ export function parseMeet(value: unknown, course: ZhsCourse): ZhsMeet | null {
     video_id: pickNum(raw, ['videoId', 'video_id']),
     recruit_id: pickNum(raw, ['recruitId']) ?? course.recruit_id,
     course_id: pickNum(raw, ['courseId']) ?? course.course_id,
-    name: text(pick(raw, ['meetName', 'courseName', 'name', 'title', 'teachMeetingName'])).trim(),
-    teacher: text(pick(raw, ['teacherName', 'speakerUserName', 'speakerName', 'teacher', 'hostName'])).trim(),
+    name: text(pick(raw, ['meetName', 'taskName', 'courseName', 'name', 'title', 'teachMeetingName'])).trim(),
+    teacher: text(pick(raw, ['teacherName', 'speakerUserName', 'speakerName', 'teacher', 'hostName'])).trim()
+      || speakerText(pick(raw, ['speakerJson', 'speakerInfo', 'teacherJson'])),
     start_time: timeText(pick(raw, ['startTime', 'startTimeStr', 'start_time', 'liveStartTime', 'liveTime', 'startDate'])),
     end_time: timeText(pick(raw, ['endTime', 'endTimeStr', 'end_time', 'liveEndTime', 'endDate'])),
     replay_url: textOrNull(pick(raw, ['replayCourseUrl', 'replayUrl', 'replayCourse', 'playbackUrl', 'replay_url'])),
@@ -317,7 +362,13 @@ export function parseMeet(value: unknown, course: ZhsCourse): ZhsMeet | null {
 }
 
 function findPageArray(body: Record<string, unknown>, keys: string[]): unknown[] {
-  const containers = [body, asRecord(body.data), asRecord(body.rt), asRecord(asRecord(body.data).rt)];
+  const containers = [
+    body,
+    asRecord(body.data),
+    asRecord(body.rt),
+    asRecord(body.result),
+    asRecord(asRecord(body.data).rt),
+  ];
   for (const container of containers) {
     const direct = findArray(container, keys);
     if (direct.length > 0) return direct;
@@ -331,9 +382,19 @@ function findPageArray(body: Record<string, unknown>, keys: string[]): unknown[]
   return [];
 }
 
-/** Parse the meet list response (the endpoint may wrap it in several keys). */
-export function parseMeetList(body: Record<string, unknown>, course: ZhsCourse): ZhsMeet[] {
-  const keys = ['list', 'meetList', 'meetingList', 'teachMeetingList', 'teachMeetingStuList', 'rows', 'records'];
+/** One paginated meet list reply (`listTeachMeetingStu`). */
+export interface ZhsMeetPage {
+  meets: ZhsMeet[];
+  /** `mapCount` (or a compatible total-count field), when exposed. */
+  mapCount: number | null;
+}
+
+/**
+ * Parse one page of the meet list reply. The live endpoint returns
+ * `{mapCount, maps:[...]}`; older wrappers are still accepted.
+ */
+export function parseMeetPage(body: Record<string, unknown>, course: ZhsCourse): ZhsMeetPage {
+  const keys = ['maps', 'list', 'meetList', 'meetingList', 'teachMeetingList', 'teachMeetingStuList', 'rows', 'records'];
   const rows = findPageArray(body, keys);
   const seen = new Set<number>();
   const meets: ZhsMeet[] = [];
@@ -343,7 +404,18 @@ export function parseMeetList(body: Record<string, unknown>, course: ZhsCourse):
     seen.add(meet.meet_course_id);
     meets.push(meet);
   }
-  return meets;
+  const containers = [body, asRecord(body.data), asRecord(body.rt), asRecord(body.result)];
+  let mapCount: number | null = null;
+  for (const container of containers) {
+    mapCount = pickNum(container, ['mapCount', 'totalCount', 'total', 'count']);
+    if (mapCount !== null) break;
+  }
+  return { meets, mapCount };
+}
+
+/** Parse the meet list response (the endpoint may wrap it in several keys). */
+export function parseMeetList(body: Record<string, unknown>, course: ZhsCourse): ZhsMeet[] {
+  return parseMeetPage(body, course).meets;
 }
 
 function minutesOf(value: unknown): number[] {
@@ -630,16 +702,23 @@ export class ZhsClient {
     };
   }
 
-  /** `queryShareCourseInfo`: the shared-course list (endpoint per plan §9). */
-  async listCourses(schoolId: number | null = null, signal?: AbortSignal): Promise<ZhsCourse[]> {
-    const body = await this.encrypted(
-      ZHS_ONLINESERVICE_ORIGIN,
-      '/gateway/t/v1/student/course/share/queryShareCourseInfo',
-      { status: 0, pageNum: 1, pageSize: 50, schoolId: schoolId ?? 0 },
-      MODULE_VIDEO,
-      'POST',
-      signal,
-    );
+  /**
+   * `queryShareCourseInfo`: the shared-course list.
+   *
+   * Live capture (2026-11-08): module **13** `secretStr` whose plaintext is
+   * exactly `{status:0,pageNo:1,pageSize:5}` (no injected `dateFormate`); the
+   * outer form field is `date=<ms>`. The reply is
+   * `{result:{totalCount,courseOpenDtos:[...]},code:200}`.
+   */
+  async listCourses(signal?: AbortSignal): Promise<ZhsCourse[]> {
+    const key = await this.key(MODULE_ONLINESERVICE);
+    const secretStr = await encryptSecret(key, JSON.stringify({ status: 0, pageNo: 1, pageSize: 5 }));
+    const form = new URLSearchParams({ secretStr, date: String(Date.now()) }).toString();
+    const body = await this.send({
+      url: `${ZHS_ONLINESERVICE_ORIGIN}/gateway/t/v1/student/course/share/queryShareCourseInfo`,
+      method: 'POST',
+      body: form,
+    }, 'queryShareCourseInfo', signal);
     const courses = parseCourseList(body);
     if (courses.length === 0) {
       throw new ZhsApiError('课程列表接口没有返回共享课；可粘贴学习页链接手动添加课程。', 'queryShareCourseInfo');
@@ -812,28 +891,55 @@ export class ZhsClient {
   private static readonly MEET_EXCEPTION_PATH = '/app-commserv-live/gateway/t/v1/chect/exceptionActionDetail';
 
   /**
-   * Meet-course list. The student portal serves it from
-   * `online.zhihuishu.com/onlineSchool/...`; the legacy `stuonline` endpoint is
-   * tried when the primary host fails. Both take the same plain form body.
+   * Meet-course list.
+   *
+   * Live 2026-11-08/09: `POST stuonline.zhihuishu.com/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss`
+   * with `recruitId`, `page.pageNo=0`, `page.pageSize=10` (the earlier path
+   * without `/json` returns 400). The reply is `{mapCount, maps:[...]}`; pages
+   * are fetched until `mapCount` entries are collected. The old
+   * `online.zhihuishu.com/onlineSchool/...` endpoint stays as a fallback.
    */
   async meetList(course: ZhsCourse, signal?: AbortSignal): Promise<ZhsMeet[]> {
-    const body = new URLSearchParams({
-      recruitId: String(course.recruit_id),
-      'page.pageNo': '0',
-      'page.pageSize': '50',
-    }).toString();
-    const primary = `${ZHS_ONLINE_ORIGIN}/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss`;
+    const PAGE_SIZE = 10;
+    const primary = `${ZHS_STUONLINE_ORIGIN}/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss`;
+    const fallback = `${ZHS_ONLINE_ORIGIN}/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss`;
+    let base = primary;
+    const fetchPage = async (pageNo: number): Promise<Record<string, unknown>> => {
+      const body = new URLSearchParams({
+        recruitId: String(course.recruit_id),
+        'page.pageNo': String(pageNo),
+        'page.pageSize': String(PAGE_SIZE),
+      }).toString();
+      return this.send({ url: base, method: 'POST', body }, 'listTeachMeetingStu', signal);
+    };
+
+    let first: Record<string, unknown>;
     try {
-      const response = await this.send({ url: primary, method: 'POST', body }, 'listTeachMeetingStu', signal);
-      const meets = parseMeetList(response, course);
-      if (meets.length > 0) return meets;
+      first = await fetchPage(0);
     } catch (error) {
       if (signal?.aborted) throw error;
       this.warn(`知到见面课列表主接口失败：${error instanceof Error ? error.message : '请求失败'}，尝试备用接口`);
+      base = fallback;
+      first = await fetchPage(0);
     }
-    const fallback = `${ZHS_STUONLINE_ORIGIN}/stuonline/teachMeeting/listTeachMeetingStu?examV2=ss`;
-    const response = await this.send({ url: fallback, method: 'POST', body }, 'listTeachMeetingStu', signal);
-    return parseMeetList(response, course);
+
+    const firstPage = parseMeetPage(first, course);
+    const meets = [...firstPage.meets];
+    const mapCount = firstPage.mapCount;
+    if (mapCount !== null && meets.length < mapCount) {
+      const pages = Math.min(50, Math.ceil(mapCount / PAGE_SIZE));
+      for (let pageNo = 1; pageNo < pages && meets.length < mapCount; pageNo += 1) {
+        const page = parseMeetPage(await fetchPage(pageNo), course);
+        if (page.meets.length === 0) break;
+        meets.push(...page.meets);
+      }
+    }
+    const seen = new Set<number>();
+    return meets.filter((meet) => {
+      if (seen.has(meet.meet_course_id)) return false;
+      seen.add(meet.meet_course_id);
+      return true;
+    });
   }
 
   /** Replay video metadata via the JSONP helper; used for the duration/video-id fallback. */

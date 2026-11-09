@@ -1186,8 +1186,14 @@ async fn zhs_check(client: &ZhsClient, reference: &str) -> Result<i32> {
             }
         }
         Err(error) => {
-            failed = true;
-            eprintln!("获取见面课列表失败，跳过见面课风控检查：{error:#}");
+            // The meet-list endpoint is a plain student-portal JSON endpoint that
+            // currently rejects API-cookie sessions (HTTP 400) even though video
+            // and per-meeting replay APIs work. Treat it as a warning so the
+            // video status is still usable, and point at the per-meeting path.
+            eprintln!("见面课列表接口当前不可用，已跳过见面课风控检查：{error:#}");
+            eprintln!(
+                "可稍后重试，或直接用单场见面课：cargo run -- --cookies cookies.txt zhs meet watch --course \"...\" --meeting <meetCourseId>"
+            );
         }
     }
 
@@ -1209,7 +1215,19 @@ fn describe_status(status: &ZhsExceptionStatus) -> String {
 
 async fn zhs_meet_list(client: &ZhsClient, reference: &str) -> Result<i32> {
     let course = client.resolve_course(reference).await?;
-    let meets = client.meet_list(&course).await?;
+    let meets = match client.meet_list(&course).await {
+        Ok(meets) => meets,
+        Err(error) => {
+            eprintln!("获取见面课列表失败：{error:#}");
+            eprintln!(
+                "该接口是学生门户的普通 JSON 接口，API 会话下可能返回 HTTP 400；可改用单场见面课："
+            );
+            eprintln!(
+                "  cargo run -- --cookies cookies.txt zhs meet watch --course \"...\" --meeting <meetCourseId>"
+            );
+            return Ok(1);
+        }
+    };
     println!("{}（courseId={}）", course.label(), course.course_id);
     if meets.is_empty() {
         println!("没有见面课场次");

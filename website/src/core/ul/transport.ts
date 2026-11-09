@@ -54,6 +54,9 @@ const ROUTES: RouteRule[] = [
   { origin: UL_API_ORIGIN, method: 'GET', path: /^\/questionAnswer\/\d+$/ },
   { origin: UL_API_ORIGIN, method: 'POST', path: /^\/yws\/api\/personal\/sync$/ },
   { origin: UL_API_ORIGIN, method: 'POST', path: /^\/user\/currentUnit$/ },
+  // Course list + textbook mapping (live 2026-11-08, courseapi host).
+  { origin: UL_COURSEAPI_ORIGIN, method: 'GET', path: /^\/courses\/students$/ },
+  { origin: UL_COURSEAPI_ORIGIN, method: 'GET', path: /^\/textbook\/student\/\d+\/list$/ },
 ];
 
 const MAX_BODY_BYTES = 200_000;

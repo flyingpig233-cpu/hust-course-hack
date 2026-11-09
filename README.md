@@ -410,7 +410,7 @@ for outcome in outcomes {
 ```powershell
 $zhs = "D:\zhs-cookies.txt"
 
-# 课程列表（接口未确认时可用学习页 URL / recruitAndCourseId 兜底）
+# 课程列表（实测接口；失败时可用学习页 URL / recruitAndCourseId 兜底）
 cargo run -- --cookies $zhs zhs list
 cargo run -- --cookies $zhs zhs tree --course "<学习页 URL 或 recruitAndCourseId>"
 
@@ -448,7 +448,9 @@ cargo run -- --cookies $zhs zhs check --course "..."
 - 视频完成上报字段：`sdsew`（XOR 编码字段表）、`ewssw`（监测点序列）、`zwsds`（noteId 的 base64）；
 - 见面课考勤：`getWatchHistory` 查已看分钟，`setWatchHistorySecret` 逐分钟上报；
 - 平台有独立行为分析（`cheat/exceptionActionDetail`）：秒刷属高风险形态，本工具默认 dry-run、限速、随机覆盖率与熔断；请自行评估账号风险；
-- 课程列表接口（`queryShareCourseInfo`）尚未用真实抓包确认，失败时请用学习页 URL/`recruitAndCourseId` 兜底；见面课列表响应字段也可能随平台调整。
+- 课程列表接口（`queryShareCourseInfo`）已于 2026-11-08 用真实账号抓包确认（加密模块 13、`pageNo` 分页）；失败时仍可用学习页 URL/`recruitAndCourseId` 兜底；见面课列表响应字段也可能随平台调整。
+- **见面课列表接口**已于 2026-11-09 实测修正（`stuonline.zhihuishu.com/stuonline/json/teachMeeting/listTeachMeetingStu`，表单 `recruitId` + `page.pageNo/pageSize`，响应 `maps`/`mapCount`）；`zhs meet list` 与 `zhs check` 已真机验证。
+- 见面课回放分钟上报：接口返回成功（`rt:true`），但对已结束场次回读 `getWatchHistory` 仍为空（`rt:"#"`）；是否真正计入考勤需在考勤有效窗口/页面复核，界面仍默认 `--dry-run`。
 
 ## 优学院（U学）视频与章节练习秒刷
 
@@ -465,7 +467,7 @@ cargo run -- --cookies $zhs zhs check --course "..."
 ```powershell
 $ul = "D:\ul-cookies.txt"
 
-# 课程目录（播放器 URL 或 textbookId=..&classId=..；优学院没有稳定的学生课程列表接口）
+# 课程目录（列表已实测；也可用播放器 URL 或 textbookId=..&classId=..）
 cargo run -- --cookies $ul ulearn tree --course "textbookId=47353&classId=1019700"
 
 # 视频/图文：先看计划，再真实上报
@@ -509,7 +511,7 @@ DES-ECB 实现。
   （立即熔断停止整批）；
 - 目录/页面字段来自公开播放器 JS，**没有原始响应 fixture**；首次使用建议先 `--dry-run` 核对，
   再单节灰度并回读 `/studyrecord/item` 的 `completion_status`；
-- 课程列表接口未抓包，CLI/GUI/网站均用播放器 URL 或 `textbookId/classId` 兜底；
+- 课程列表已实测（`courseapi` 的 `/courses/students` + `/textbook/student/{ocId}/list`）；失败时仍可用播放器 URL 或 `textbookId/classId` 兜底；
 - 默认 dry-run、3–5 秒随机限速、失败即停；请自行评估账号与平台风控风险。
 
 ## 已验证的平台接口

@@ -6,7 +6,7 @@
 // `Authorization` and `UA-AUTHORIZATION` headers itself, so the static site
 // never sees the token. Bodies of `sync` requests are DES-ECB encrypted here.
 import { desEncryptEcbBase64 } from './crypto.ts';
-import { UL_API_ORIGIN, type UlHttpRequest, type UlTransport } from './transport.ts';
+import { UL_API_ORIGIN, UL_COURSEAPI_ORIGIN, type UlHttpRequest, type UlTransport } from './transport.ts';
 import type {
   UlChapter,
   UlCourse,
@@ -178,10 +178,15 @@ export function parseBasicInformation(body: Record<string, unknown>): { name: st
   };
 }
 
-/** `remaining.time < 0` means the course is over and reporting makes no sense. */
+/**
+ * `remaining.time` is **days** on the live endpoint (verified 2026-11-08:
+ * `1753` matches the textbook `limit` difference), so convert to seconds.
+ * A negative value means the course is over and reporting makes no sense.
+ */
 export function parseRemaining(body: Record<string, unknown>): { expired: boolean | null; seconds: number | null } {
   const data = asRecord(pick(body, ['data', 'result', 'rt']) ?? body);
-  const seconds = pickNum(data, ['time', 'remainingTime', 'remaining']);
+  const days = pickNum(data, ['time', 'remainingTime', 'remaining']);
+  const seconds = days === null ? null : days * 86_400;
   return { expired: seconds === null ? null : seconds < 0, seconds };
 }
 
@@ -312,6 +317,64 @@ export function parseInitialize(body: Record<string, unknown>): number {
   return value ?? Math.floor(Date.now() / 1000);
 }
 
+/** One student-course row from `/courses/students` (the course list). */
+export interface UlStudentCourseRow {
+  oc_id: number;
+  class_id: number | null;
+  name: string;
+  teacher: string;
+  progress: number | null;
+}
+
+/** One textbook row from `/textbook/student/{ocId}/list`. */
+export interface UlTextbookRow {
+  textbook_id: number;
+  name: string;
+  /** Course expiry timestamp in ms, when exposed. */
+  limit: number | null;
+}
+
+/** Parse `GET /courses/students` (courseweb student course list). */
+export function parseStudentCourses(body: unknown): UlStudentCourseRow[] {
+  const record = asRecord(body);
+  const rows = asArray(pick(record, ['courseList', 'list', 'rows']));
+  const source = rows.length > 0 ? rows : asArray(record.data);
+  const result: UlStudentCourseRow[] = [];
+  for (const row of source) {
+    const raw = asRecord(row);
+    const ocId = pickNum(raw, ['id', 'ocId', 'courseId']);
+    if (!ocId) continue;
+    const progressValue = pick(raw, ['learnProgress', 'progress']);
+    result.push({
+      oc_id: ocId,
+      class_id: pickNum(raw, ['classId', 'class_id']),
+      name: text(pick(raw, ['name', 'courseName', 'title'])).trim(),
+      teacher: text(pick(raw, ['teacherName', 'teacher', 'createUserName'])).trim(),
+      progress: typeof progressValue === 'string' ? num(progressValue.replace(/%$/, '')) : num(progressValue),
+    });
+  }
+  return result;
+}
+
+/** Parse `GET /textbook/student/{ocId}/list` (an array at the top level). */
+export function parseTextbookRows(body: unknown): UlTextbookRow[] {
+  const rows = Array.isArray(body)
+    ? body
+    : asArray(pick(asRecord(body), ['list', 'textbookList', 'data', 'rows']));
+  const result: UlTextbookRow[] = [];
+  for (const row of rows) {
+    const raw = asRecord(row);
+    const textbookId = pickNum(raw, ['courseId', 'textbookId', 'id']);
+    if (!textbookId) continue;
+    result.push({
+      textbook_id: textbookId,
+      name: text(pick(raw, ['name', 'courseName', 'textbookName'])).trim(),
+      limit: pickNum(raw, ['limit', 'expireTime', 'endTime']),
+    });
+  }
+  return result;
+}
+
 export interface UlClientOptions {
   warn?: (message: string) => void;
 }
@@ -345,17 +408,62 @@ export class UlearningClient {
     return response.text;
   }
 
-  private async json(input: UlHttpRequest, endpoint: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  private async jsonAny(input: UlHttpRequest, endpoint: string, signal?: AbortSignal): Promise<unknown> {
     const bodyText = (await this.send(input, endpoint, signal)).trim();
     if (!bodyText) throw new UlApiError('优学院接口返回了空响应', endpoint);
     if (/请先登录|用户登录|<title>[^<]*登录/.test(bodyText.slice(0, 800))) {
       throw new UlApiError('优学院登录已失效，请在优学院窗口重新登录。', endpoint);
     }
     try {
-      return asRecord(JSON.parse(bodyText) as unknown);
+      return JSON.parse(bodyText) as unknown;
     } catch {
       throw new UlApiError('优学院接口返回了非 JSON 响应', endpoint);
     }
+  }
+
+  private async json(input: UlHttpRequest, endpoint: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    return asRecord(await this.jsonAny(input, endpoint, signal));
+  }
+
+  /**
+   * Student course list + textbook mapping.
+   *
+   * Live 2026-11-08: `GET /courses/students?keyword=&publishStatus=1&type=1&pn=1&ps=15&lang=zh`
+   * (courseapi host) and `GET /textbook/student/{ocId}/list?lang=zh` for the
+   * internal `textbookId`. Courses without a textbook are skipped.
+   */
+  async listCourses(signal?: AbortSignal): Promise<UlCourse[]> {
+    const body = await this.jsonAny({
+      url: `${UL_COURSEAPI_ORIGIN}/courses/students?keyword=&publishStatus=1&type=1&pn=1&ps=15&lang=zh`,
+    }, 'courses/students', signal);
+    const rows = parseStudentCourses(body);
+    const courses: UlCourse[] = [];
+    for (const row of rows) {
+      if (signal?.aborted) throw new DOMException('任务已取消', 'AbortError');
+      try {
+        const textbookBody = await this.jsonAny({
+          url: `${UL_COURSEAPI_ORIGIN}/textbook/student/${row.oc_id}/list?lang=zh`,
+        }, 'textbook/student', signal);
+        const textbook = parseTextbookRows(textbookBody)[0];
+        if (!textbook) {
+          this.warn(`优学院课程 ${row.oc_id} 没有可用的 textbook，已跳过`);
+          continue;
+        }
+        courses.push({
+          textbook_id: textbook.textbook_id,
+          class_id: row.class_id ?? 0,
+          oc_id: row.oc_id,
+          name: row.name || textbook.name,
+          teacher: row.teacher,
+          locale: 'zh',
+          expired: textbook.limit === null ? null : textbook.limit < Date.now(),
+        });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        this.warn(`优学院课程 ${row.oc_id} 的 textbook 映射失败：${error instanceof Error ? error.message : '请求失败'}`);
+      }
+    }
+    return courses;
   }
 
   /** `GET /course/{textbookId}/basicinformation`. */

@@ -24,8 +24,9 @@ import {
   ZHS_CHANNEL,
   allowedZhsRequest,
   trustedSiteOrigin,
+  type ZhsHttpRequest,
 } from '../src/core/zhs/transport.ts';
-import { buildVideoReport, decodeCourseRef, parseCourseList, parseExceptionStatus, parseJsonp, parseMeetList, parseWatchHistory, RateLimiter, randomInt, ZhsClient } from '../src/core/zhs/client.ts';
+import { buildVideoReport, decodeCourseRef, parseCourseList, parseExceptionStatus, parseJsonp, parseMeetList, parseMeetPage, parseWatchHistory, RateLimiter, randomInt, ZhsClient } from '../src/core/zhs/client.ts';
 import { coverageTarget, planMeetMinutes, runMeetWatch, type MeetWatchClient } from '../src/core/zhs/meet.ts';
 import { planVideoTargets, runVideoWatch, type VideoWatchClient } from '../src/core/zhs/watch.ts';
 import { defaultMeetWatchOptions, defaultWatchOptions } from '../src/core/zhs/types.ts';
@@ -116,6 +117,66 @@ test('PKCS#1 v1.5 encryption and public-op unpadding interoperate with OpenSSL',
   })();
 });
 
+test('queryShareCourseInfo uses module 13, the date field and result.courseOpenDtos', async () => {
+  // Sanitized fixture shaped like the live capture (all ids/names replaced).
+  const fixture = {
+    result: {
+      totalCount: 2,
+      courseOpenDtos: [
+        {
+          courseId: 111,
+          courseName: '测试课程A',
+          teacherName: '张老师',
+          progress: '10.9%',
+          recruitId: 222,
+          secret: 'synthetic-secret',
+          classId: 333,
+          courseType: 1,
+          termName: '2026秋',
+        },
+        { courseId: 0, courseName: 'invalid-row-without-recruit' },
+      ],
+    },
+    code: 200,
+    message: null,
+  };
+  const cache = new ModuleKeyCache();
+  cache.set(13, 'module13-key-16b');
+  const requests: ZhsHttpRequest[] = [];
+  const client = new ZhsClient({
+    async request(input) {
+      requests.push(input);
+      return { status: 200, text: JSON.stringify(fixture) };
+    },
+  }, { moduleKeys: cache });
+  const courses = await client.listCourses();
+  assert.equal(courses.length, 1);
+  assert.equal(courses[0].name, '测试课程A');
+  assert.equal(courses[0].recruit_id, 222);
+  assert.equal(courses[0].course_id, 111);
+  assert.equal(courses[0].class_id, 333);
+  assert.equal(courses[0].teacher, '张老师');
+  assert.equal(courses[0].secret, 'synthetic-secret');
+  assert.equal(courses[0].progress, 10.9);
+  assert.equal(courses[0].course_type, '1');
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'POST');
+  assert.match(requests[0].url, /onlineservice-api\.zhihuishu\.com\/gateway\/t\/v1\/student\/course\/share\/queryShareCourseInfo$/);
+  const form = new URLSearchParams(requests[0].body ?? '');
+  assert.ok(form.get('date'));
+  assert.equal(form.has('dateFormate'), false);
+  assert.equal(
+    await decryptSecret('module13-key-16b', form.get('secretStr') ?? ''),
+    '{"status":0,"pageNo":1,"pageSize":5}',
+  );
+  assert.equal(allowedZhsRequest({
+    url: 'https://onlineservice-api.zhihuishu.com/gateway/t/v1/student/course/share/queryShareCourseInfo',
+    method: 'POST',
+    body: 'secretStr=x&date=1',
+  }), true);
+});
+
 test('video exception status treats rt.endTime without lock/abnormal as an abnormal lock', async () => {
   const cache = new ModuleKeyCache();
   cache.set(11, VIDEO_MODULE_KEY_FALLBACK);
@@ -202,6 +263,84 @@ test('course references decode from URLs, XOR secrets and plain ids', () => {
   assert.deepEqual(decodeCourseRef('1000011214', [course]), { recruit_id: 463667, course_id: 1000011214, secret: null });
   assert.deepEqual(decodeCourseRef('军事理论', [course]), { recruit_id: 463667, course_id: 1000011214, secret: null });
   assert.deepEqual(decodeCourseRef(''), { recruit_id: null, course_id: null, secret: null });
+});
+
+test('meet list uses stuonline /json, pageSize 10 and pages by mapCount', async () => {
+  const meetRow = (index: number) => ({
+    meetCourseId: 100 + index,
+    liveCourseId: 200 + index,
+    videoId: 300 + index,
+    replayCourseUrl: `https://lc.zhihuishu.com/live/vod_room.html?liveId=${200 + index}`,
+    startTime: '2026-11-08 19:00:00',
+    endTime: '2026-11-08 20:30:00',
+    examH5Url: null,
+    taskName: `见面课 ${index}`,
+    speakerJson: JSON.stringify([{ name: '张老师' }]),
+  });
+  const rows0 = Array.from({ length: 10 }, (_, index) => meetRow(index));
+  const rows1 = Array.from({ length: 2 }, (_, index) => meetRow(10 + index));
+  const requests: ZhsHttpRequest[] = [];
+  const client = new ZhsClient({
+    async request(input) {
+      requests.push(input);
+      const pageNo = Number(new URLSearchParams(input.body ?? '').get('page.pageNo') ?? '0');
+      return {
+        status: 200,
+        text: JSON.stringify({ mapCount: 12, maps: pageNo === 0 ? rows0 : rows1 }),
+      };
+    },
+  });
+  const meets = await client.meetList(course);
+  assert.equal(meets.length, 12);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].method, 'POST');
+  assert.match(
+    requests[0].url,
+    /^https:\/\/stuonline\.zhihuishu\.com\/stuonline\/json\/teachMeeting\/listTeachMeetingStu\?examV2=ss$/,
+  );
+  for (const [pageNo, request] of requests.entries()) {
+    const form = new URLSearchParams(request.body ?? '');
+    assert.equal(form.get('recruitId'), String(course.recruit_id));
+    assert.equal(form.get('page.pageNo'), String(pageNo));
+    assert.equal(form.get('page.pageSize'), '10');
+  }
+  assert.equal(meets[0].meet_course_id, 100);
+  assert.equal(meets[0].live_id, 200);
+  assert.equal(meets[0].video_id, 300);
+  assert.equal(meets[0].replay_url, 'https://lc.zhihuishu.com/live/vod_room.html?liveId=200');
+  assert.equal(meets[0].teacher, '张老师');
+  assert.notEqual(meets[0].start_time, null);
+  assert.equal(meets[11].meet_course_id, 111);
+
+  // Sanitized fixture: mapCount + maps is the live reply shape.
+  const parsed = parseMeetPage({ mapCount: 12, maps: rows0 }, course);
+  assert.equal(parsed.mapCount, 12);
+  assert.equal(parsed.meets.length, 10);
+  assert.equal(parsed.meets[9].meet_course_id, 109);
+
+  assert.equal(allowedZhsRequest({
+    url: 'https://stuonline.zhihuishu.com/stuonline/json/teachMeeting/listTeachMeetingStu?examV2=ss',
+    method: 'POST',
+    body: 'recruitId=1&page.pageNo=0&page.pageSize=10',
+  }), true);
+});
+
+test('meet list falls back to onlineSchool when the stuonline /json endpoint fails', async () => {
+  const requests: ZhsHttpRequest[] = [];
+  const client = new ZhsClient({
+    async request(input) {
+      requests.push(input);
+      if (input.url.includes('/stuonline/json/')) throw new Error('HTTP 400');
+      return {
+        status: 200,
+        text: JSON.stringify({ mapCount: 1, maps: [{ meetCourseId: 1, liveCourseId: 2, taskName: 'M' }] }),
+      };
+    },
+  });
+  const meets = await client.meetList(course);
+  assert.equal(meets.length, 1);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].url, /^https:\/\/online\.zhihuishu\.com\/onlineSchool\/json\/teachMeeting\/listTeachMeetingStu\?examV2=ss$/);
 });
 
 test('course/meet/history parsers survive the platform response wrappers', () => {

@@ -11,6 +11,8 @@ import type { ZhsTransport } from './transport.ts';
 export const AES_IV = '1g3qqdh4jvbskb9x';
 export const MODULE_VIDEO = 11;
 export const MODULE_MEET = 9;
+/** Module used by the online-service course-list endpoint (`queryShareCourseInfo`). */
+export const MODULE_ONLINESERVICE = 13;
 export const VIDEO_MODULE_KEY_FALLBACK = 'azp53h0kft7qi78q';
 export const XOR_KEY_VIDEO = 'zzpttjd';
 export const XOR_KEY_COURSE = 'zhihuishu';

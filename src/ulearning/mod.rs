@@ -28,12 +28,14 @@ pub use client::{UlError, UlearningClient};
 pub use models::{
     UlAction, UlChapter, UlCourse, UlCourseDetail, UlPage, UlPageContent, UlPageKind, UlPagePlan,
     UlPlan, UlProgress, UlProgressStage, UlQuestion, UlQuestionAnswer, UlSection, UlSectionPlan,
-    UlSectionRecord, UlSyncOutcome, UlUser, UlVideo, UlWatchOptions, UlWatchOutcome, UlWatchState,
+    UlSectionRecord, UlSyncOutcome, UlTextbook, UlUser, UlVideo, UlWatchOptions, UlWatchOutcome,
+    UlWatchState,
 };
 pub use parse::{
     parse_basic_information, parse_class_name, parse_course_list, parse_directory,
     parse_initialize, parse_page_content, parse_question_answer, parse_remaining,
-    parse_section_pages, parse_section_record, parse_user,
+    parse_section_pages, parse_section_record, parse_student_courses, parse_students_total,
+    parse_textbook_list, parse_user,
 };
 pub use plan::{page_kind, page_plan, plan_course, run_watch};
 pub use record::{build_record_payload, encrypt_record_payload, submit_record};
