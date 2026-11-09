@@ -190,6 +190,7 @@ zhs_cancel_job                          # 复用现有 AppState::begin_job/cance
   - `login_user`：`GET studyservice-api/gateway/t/v1/login/getLoginUserInfo`（模块 11）
   - `list_courses`：`POST onlineservice-api.../student/course/share/queryShareCourseInfo`（2026-11-08 实测：加密模块 13、payload `{"status":0,"pageNo":N,"pageSize":50}`、外层 `secretStr&date`、响应 `result.courseOpenDtos`）；失败时 CLI 兜底"粘贴学习页 URL/`recruitAndCourseId`"（见待确认 §9）
   - `course_detail`：`queryCourse`（拿 recruitId/courseId/classId/isApply）+ `videolist`（章节/节/小节/videoId/videoSec/isStudiedLesson）
+  - **`course_detail_with_states`**：在 `course_detail` 之后按 `lessonVideoId` 分批（100 个/批）调 `queryStuyInfo`，用 `watchState` 覆盖每个小节的 `is_studied`。原因：实测平台上报完成后 `videolist.isStudiedLesson` **不会刷新**（课程平台进度已 95% 仍返回 0），GUI 完成度与秒刷计划必须用 `watchState` 作为权威来源；该查询失败时降级为原始树并记日志（执行期 `prelearningNote` 仍会再确认一次）。
   - `prelearning_note`：拿 `studiedLessonDto.id`（即 noteId）
   - `query_stuy_info`：`{lessonIds, lessonVideoIds, recruitId}` → `data.lv[id] = {studyTotalTime, watchState}`
   - `save_interval`：`{ewssw, sdsew, zwsds, courseId}` → `data.submitSuccess`
@@ -255,11 +256,12 @@ cargo run -- --cookies zhs-cookies.txt zhs meet watch  --course <...> [--meeting
 
 1. **连接页**：平台单选（学在华科大 / 知到）。知到走独立登录窗口 `onlineweb.zhihuishu.com/onlinestuh5`；回跳后读 Cookie（含 HttpOnly）→ `getLoginUserInfo` 校验 → 建会话；关闭并删除临时 WebView2 目录。
 2. **课程列表**：共享课卡片（名称/进度/教师）；polymas 课程标灰"暂不支持"。
-3. **课程页**：左边章节/节/小节树 + video 表格（时长、已完成）；右侧操作区"秒刷本课视频"。
+3. **课程页**：左边章节/节/小节树 + video 表格（时长、平台完成状态）；完成度与"待处理"数来自 `course_detail_with_states`（`watchState=1`），并显示共享课列表的"平台进度"百分比；小节徽标区分「已完成（平台记录）」「待处理」。
 4. **见面课页**：场次列表（时间/主讲/回放/测验/状态）、回放进度（已看/总分钟、百分比）、"秒刷回放考勤"按钮。
-5. **执行弹窗**：默认 dry-run；勾选"我确认按随机 90–100% 覆盖率上报并承担风控风险"后真实执行；进度条 + 当前条目；可取消；结束显示结果表（可复制）。
-6. **熔断提示**：检测到异常立即弹全局提示并停止队列。
-7. 复用 `AppState::begin_job` / `cancel_job` / `job-progress` 事件；新 job 类型 `zhs-watch`、`zhs-meet-watch`。
+5. **执行弹窗**：按用户决策顺序分为三组——「范围」（全部待处理 / 只处理前 N 个，实时显示 待处理 X / 已完成 Y / 总计 Z）、「选项」（重新上报已完成 / 每节复核 watchState）、「模式」（试运行默认 / 真实上报）。只有选"真实上报"才展开独立的危险区与确认勾选；确认勾选只约束真实执行，主按钮文案随模式切换为「开始试运行」/「确认真实执行」。进度条 + 当前条目；可取消；结束显示结果表（可复制），行状态使用「已完成（平台记录）/ 已计划 / 跳过（已完成）」。
+6. **结束后刷新**：真实执行（含部分成功/取消）结束后重新调用 `zhs_course_detail`（内部复核 `watchState`），并尽力刷新共享课列表进度百分比；`zhs-watch` 计划阶段也用同一份校正后的状态，避免把平台已完成的小节再列入计划。
+7. **熔断提示**：检测到异常立即弹全局提示并停止队列。
+8. 复用 `AppState::begin_job` / `cancel_job` / `job-progress` 事件；新 job 类型 `zhs-watch`、`zhs-meet-watch`。
 
 ### 4.7 userscript
 
@@ -494,7 +496,7 @@ GET /app-commserv-live/gateway/t/v1/chect/exceptionActionDetail -> {"rt":{"lock"
 | --- | --- |
 | `cargo fmt --all -- --check` | ✅ 0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 告警 |
-| `cargo test --workspace` | ✅ 117 passed / 0 failed（lib 76 + bin 5 + submit_http 1 + zhs_core 17 + zhs_mock 18） |
+| `cargo test --workspace` | ✅ 174 passed / 0 failed（lib 123 + bin 9 + submit_http 1 + documents_http 3 + zhs_core 18 + zhs_mock 20） |
 | `npm run build`（根目录，tsc + vite） | ✅ |
 | `cd website; npm test; npm run build` | ✅ 33 passed / 0 failed，双桥接产出 |
 | `cargo check -p hust-course-hack-gui` | ✅ |
@@ -510,6 +512,7 @@ GET /app-commserv-live/gateway/t/v1/chect/exceptionActionDetail -> {"rt":{"lock"
 6. **多视频回放**：分钟→`videoId` 映射已按累计时长实现，但仅在单视频回放上实测；无时长且多视频时回退第一个 video id 并告警。
 7. **风险**：秒刷属高风险形态，平台有独立行为分析（`cheat/exceptionActionDetail`）。工具默认 dry-run、限速、随机 90–100% 覆盖率与熔断；账号风险由使用者自行承担。
 8. 随堂测验、考试、直播实时参与不在本期范围（测验接口调研已完成但未实现）。
+9. **视频完成度显示（2026-11-09 修复）**：实测真实秒刷后平台课程进度从 10.9% → 95%，但 `videolist.isStudiedLesson` 仍返回 0，导致 GUI 课程页一直显示 `0 / 59`，刷新也不变。现以批量 `queryStuyInfo` 的 `watchState` 为唯一完成来源（`course_detail_with_states`），`zhs_course_detail` DTO 直接返回校正后的 `totalVideos`/`completedVideos`；`zhs-watch` 计划阶段也使用同一份校正数据，真实执行结束后 GUI 自动重取课程详情并尽力刷新共享课列表的进度百分比。`isStudiedLesson` 仅作为 `queryStuyInfo` 失败时的降级值。
 
 ### C.4 环境备注
 
