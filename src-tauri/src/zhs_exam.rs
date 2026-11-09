@@ -14,7 +14,11 @@
 //! Cookie values and the harvested analysis text never cross the IPC boundary in
 //! the other direction either: the UI only sees counts and question stems.
 
-use crate::{events::JobProgress, login::LOGIN_LABEL, state::AppState};
+use crate::{
+    events::JobProgress,
+    login::{LOGIN_LABEL, WEBVIEW2_EXAM_BROWSER_ARGS},
+    state::AppState,
+};
 use anyhow::{Context, Result};
 use hust_course_hack::{
     cookie::CookieRecord,
@@ -1905,10 +1909,14 @@ fn open_exam_window(
         ),
     );
 
+    exam_log(app, format!("webview2 args: {WEBVIEW2_EXAM_BROWSER_ARGS}"));
     let builder = WebviewWindowBuilder::new(app, EXAM_WINDOW_LABEL, WebviewUrl::External(blank))
         .title(title)
         .inner_size(1180.0, 900.0)
         .min_inner_size(900.0, 640.0)
+        // Same args as the login window: WebView2 requires identical browser
+        // arguments for a shared user-data directory (the shared-profile case).
+        .additional_browser_args(WEBVIEW2_EXAM_BROWSER_ARGS)
         .data_directory(data_dir.clone())
         .initialization_script(initial_script)
         .on_navigation(move |url| {

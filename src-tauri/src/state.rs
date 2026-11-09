@@ -112,8 +112,8 @@ pub struct AppState {
     /// The exam cookie warm-up already ran in this login attempt (prevents
     /// navigation loops on repeated page-load validations).
     zhs_exam_warmup: AtomicBool,
-    /// The login flow verified that the exam H5 list renders with an
-    /// exam-engine session (`JSESSIONID` present). Exam/redo windows are only
+    /// The login flow verified that the exam list renders authenticated content
+    /// (real homework names/actions, stable URL). Exam/redo windows are only
     /// opened when this is true.
     zhs_exam_sso_ready: AtomicBool,
     /// The login window's WebView2 profile, kept after a successful Zhihuishu
@@ -183,7 +183,7 @@ impl AppState {
     }
 
     /// Whether the login flow completed the exam-engine SSO (exam list renders
-    /// with a `JSESSIONID`).
+    /// authenticated content, not just the SPA shell/cookies).
     pub fn zhs_exam_sso_ready(&self) -> bool {
         self.zhs_exam_sso_ready.load(Ordering::SeqCst)
     }
@@ -223,14 +223,9 @@ impl AppState {
         if records.is_empty() {
             return;
         }
-        // A successful in-window login can also complete the exam SSO; keep the
-        // readiness flag in sync so later windows do not stall.
-        if records.iter().any(|record| {
-            record.name == "JSESSIONID"
-                && (record.domain.contains("studentexam") || record.domain.contains("taurusexam"))
-        }) {
-            self.zhs_exam_sso_ready.store(true, Ordering::SeqCst);
-        }
+        // Readiness is only set by the login-phase authenticated-content check;
+        // cookie presence alone is a false positive (the SPA shell can render
+        // without a valid engine session).
         let mut session = self.write_session();
         let Some(SessionClient::Zhihuishu(zhs)) = session.as_mut().map(|s| &mut s.client) else {
             return;
