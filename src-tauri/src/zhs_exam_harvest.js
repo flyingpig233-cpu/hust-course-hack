@@ -23,6 +23,7 @@
     stopped: false,
     done: false,
     entries: [],
+    skipped: [],
     total: 0,
   };
   window.__ZHS_EXAM_HARVEST__ = H;
@@ -66,6 +67,7 @@
   var progressNode = null;
   var stopButton = null;
   var startButton = null;
+  var retryButton = null;
 
   function ensureOverlay() {
     if (overlay && overlay.isConnected) return;
@@ -78,7 +80,7 @@
         'right:18px',
         'bottom:18px',
         'z-index:2147483647',
-        'width:320px',
+        'width:340px',
         'padding:12px 14px',
         'border-radius:12px',
         'background:#111827',
@@ -90,17 +92,22 @@
     overlay.innerHTML =
       '<div style="font-weight:700;margin-bottom:6px">知到 AI解析采集</div>' +
       '<div id="__zhs_status" style="opacity:.86;min-height:32px;white-space:pre-wrap">等待进入已提交试卷页…</div>' +
-      '<div style="display:flex;gap:8px;margin-top:10px">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">' +
       '<button id="__zhs_start" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#2563eb;color:#fff">开始采集</button>' +
+      '<button id="__zhs_retry" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#b45309;color:#fff;display:none">重试跳过题目</button>' +
       '<button id="__zhs_stop" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#374151;color:#fff">停止</button>' +
       '</div>' +
-      '<div style="opacity:.6;margin-top:8px">只点击「AI解析」，不会提交试卷。</div>';
+      '<div style="opacity:.6;margin-top:8px">只点击「AI解析」，不会提交试卷。若解析面板遮挡页面会先自动关闭再继续。</div>';
     document.documentElement.appendChild(overlay);
     statusNode = overlay.querySelector('#__zhs_status');
     startButton = overlay.querySelector('#__zhs_start');
+    retryButton = overlay.querySelector('#__zhs_retry');
     stopButton = overlay.querySelector('#__zhs_stop');
     startButton.addEventListener('click', function () {
       if (!H.running) void run();
+    });
+    retryButton.addEventListener('click', function () {
+      if (!H.running) void retrySkipped();
     });
     stopButton.addEventListener('click', function () {
       H.stopped = true;
@@ -226,6 +233,73 @@
     return null;
   }
 
+  /** Click helper tolerant to scroll/overlay effects. */
+  function clickNode(node) {
+    try {
+      node.scrollIntoView({ block: 'center' });
+      node.click();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Close any AI-analysis overlay/drawer/panel that may cover the next
+   * question. Tries close buttons, then Escape; never touches other controls.
+   */
+  async function closeAnalysisOverlay() {
+    var closed = false;
+    var closeSelectors = [
+      '[class*="dialog" i] [class*="close" i]',
+      '[class*="modal" i] [class*="close" i]',
+      '[class*="drawer" i] [class*="close" i]',
+      '[class*="popup" i] [class*="close" i]',
+      '[class*="analysis" i] [class*="close" i]',
+      '[class*="analy" i] [class*="close" i]',
+    ];
+    for (var i = 0; i < closeSelectors.length; i += 1) {
+      var closeNodes = Array.from(document.querySelectorAll(closeSelectors[i])).filter(isVisible);
+      if (closeNodes.length > 0 && clickNode(closeNodes[0])) {
+        closed = true;
+        break;
+      }
+    }
+    if (!closed) {
+      var buttons = Array.from(document.querySelectorAll('button,a,span,div,i'))
+        .filter(isVisible)
+        .filter(function (el) {
+          var text = clean(el.innerText || el.textContent);
+          if (!text || text.length > 6) return false;
+          return /^(×|✕|关闭|收起|我知道了|知道了|返回)$/.test(text);
+        });
+      for (var j = 0; j < buttons.length; j += 1) {
+        var host = buttons[j].closest(
+          '[class*="dialog" i],[class*="modal" i],[class*="overlay" i],[class*="drawer" i],[class*="popup" i],[class*="analysis" i],[class*="analy" i]',
+        );
+        if (host) {
+          if (clickNode(buttons[j])) closed = true;
+          break;
+        }
+      }
+    }
+    try {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true,
+        }),
+      );
+    } catch (e) {
+      /* ignore */
+    }
+    await sleep(250);
+    return closed;
+  }
+
   async function collectOne(button, index, total) {
     var card = cardOf(button);
     var questionId = questionIdOf(card);
@@ -233,6 +307,7 @@
     setStatus('AI解析 ' + (index + 1) + ' / ' + total + '：点击并等待解析面板…');
 
     try {
+      button.scrollIntoView({ block: 'center' });
       button.click();
     } catch (e) {
       return { questionId: questionId, index: index, text: '' };
@@ -247,7 +322,9 @@
       if (text) break;
     }
 
-    // Best effort: toggle the panel closed again before the next question.
+    // Close the panel/overlay (some builds render it as a full-screen mask) so
+    // it cannot cover the next question; Escape/close-button heuristics only.
+    await closeAnalysisOverlay();
     try {
       button.click();
     } catch (e) {
@@ -262,18 +339,58 @@
 
   // ---- run loop ----------------------------------------------------------
 
+  async function persistEntries(entries, collected) {
+    if (entries.length === 0) {
+      setStatus('未采集到解析文本。请检查页面是否加载完成，或使用「手动导入」。');
+      return;
+    }
+    setStatus('采集完成 ' + collected + ' 题，正在写入答案库…');
+    try {
+      var result = await invoke('zhs_exam_record_ai', {
+        recruitId: CTX.recruitId,
+        courseId: CTX.courseId,
+        examId: CTX.examId,
+        entries: entries,
+      });
+      var skippedIds = (result.skippedQuestionIds || []).slice(0, 8).join(', ');
+      setStatus(
+        '写入完成：记录 ' +
+          result.recorded +
+          ' 题，跳过 ' +
+          result.skipped +
+          ' 题，答案库共 ' +
+          result.bankTotal +
+          ' 条。' +
+          (skippedIds ? '\n跳过题目：' + skippedIds : '') +
+          (H.skipped.length > 0
+            ? '\n可点击「重试跳过题目」只重新采集这些题。'
+            : '\n可以关闭本窗口。'),
+      );
+    } catch (err) {
+      setStatus(
+        '写入答案库失败：' +
+          (err && err.message ? err.message : String(err)) +
+          '。可在主窗口使用「手动导入」。',
+      );
+    }
+  }
+
   async function run() {
     if (H.running) return;
     H.running = true;
     H.stopped = false;
     H.done = false;
     H.entries = [];
+    H.skipped = [];
+    if (retryButton) retryButton.style.display = 'none';
     ensureOverlay();
 
     setStatus('正在查找「AI解析」按钮…');
     var buttons = aiButtons();
     if (buttons.length === 0) {
-      setStatus('未找到 AI解析 按钮。请确认已进入「查看已提交试卷」（checkHomework）页；也可关闭窗口后用「手动导入」。');
+      setStatus(
+        '未找到 AI解析 按钮。请确认已进入「查看已提交试卷」（checkHomework）页；也可关闭窗口后用「手动导入」。',
+      );
       H.running = false;
       return;
     }
@@ -291,14 +408,20 @@
       }
       if (entry) {
         H.entries.push(entry);
-        if (entry.text) collected += 1;
+        if (entry.text) {
+          collected += 1;
+        } else {
+          H.skipped.push({ entry: entry, button: buttons[i] });
+        }
       }
       setStatus(
         '已采集 ' +
           collected +
           ' / ' +
           buttons.length +
-          (entry && entry.text ? '：收录本题' : '：本题未识别到解析（记为跳过）'),
+          (entry && entry.text
+            ? '：收录本题'
+            : '：本题超时/未识别，记为跳过（稍后可重试）'),
       );
       if (i < buttons.length - 1 && !H.stopped) {
         await sleep(rand(1000, 3000));
@@ -307,35 +430,61 @@
 
     H.running = false;
     H.done = true;
+    await persistEntries(H.entries, collected);
+    if (H.skipped.length > 0 && retryButton) {
+      retryButton.style.display = 'inline-block';
+    }
+  }
 
-    if (H.entries.length === 0) {
-      setStatus('未采集到解析文本。请检查页面是否加载完成，或使用「手动导入」。');
+  /** Retry only the questions whose AI panel timed out / could not be read. */
+  async function retrySkipped() {
+    if (H.running) return;
+    if (H.skipped.length === 0) {
+      setStatus('没有需要重试的题目。');
+      if (retryButton) retryButton.style.display = 'none';
       return;
     }
-
-    setStatus('采集完成 ' + H.entries.length + ' 题，正在写入答案库…');
-    try {
-      var result = await invoke('zhs_exam_record_ai', {
-        recruitId: CTX.recruitId,
-        courseId: CTX.courseId,
-        examId: CTX.examId,
-        entries: H.entries,
-      });
+    H.running = true;
+    H.stopped = false;
+    ensureOverlay();
+    if (retryButton) retryButton.style.display = 'none';
+    var retried = [];
+    var remaining = [];
+    var total = H.skipped.length;
+    for (var i = 0; i < H.skipped.length; i += 1) {
+      if (H.stopped) break;
+      var item = H.skipped[i];
+      setStatus('重试跳过题目：' + (i + 1) + ' / ' + total);
+      var entry = null;
+      try {
+        entry = await collectOne(item.button, item.entry.index, H.total);
+      } catch (e) {
+        entry = null;
+      }
+      if (entry && entry.text) {
+        retried.push(entry);
+        H.entries.push(entry);
+      } else {
+        remaining.push(item);
+      }
+      await sleep(rand(1000, 3000));
+    }
+    H.skipped = remaining;
+    H.running = false;
+    if (retried.length > 0) {
       setStatus(
-        '写入完成：记录 ' +
-          result.recorded +
-          ' 题，跳过 ' +
-          result.skipped +
-          ' 题，答案库共 ' +
-          result.bankTotal +
-          ' 条。可以关闭本窗口。',
+        '重试完成：' +
+          retried.length +
+          ' 题成功，' +
+          remaining.length +
+          ' 题仍跳过，正在写入答案库…',
       );
-    } catch (err) {
-      setStatus(
-        '写入答案库失败：' +
-          (err && err.message ? err.message : String(err)) +
-          '。可在主窗口使用「手动导入」。',
-      );
+      await persistEntries(retried, retried.length);
+    } else {
+      setStatus('重试未获得新的解析文本。可稍后重试或在主窗口「手动导入」。');
+    }
+    if (H.skipped.length > 0 && retryButton) {
+      retryButton.style.display = 'inline-block';
     }
   }
 

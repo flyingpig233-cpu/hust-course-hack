@@ -3346,3 +3346,36 @@ details[open] > .tree-summary > .tree-chevron {
   gap: 8px;
   margin-top: 10px;
 }
+
+.exam-next-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border: 1px solid #f3d9b5;
+  border-radius: var(--radius);
+  background: #fffaf2;
+  box-shadow: var(--shadow-sm);
+}
+
+.exam-next-step-main {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.exam-next-step-main strong {
+  font-size: 13.5px;
+}
+
+.exam-next-step-main p {
+  margin: 4px 0 0;
+  color: var(--warn);
+  font-size: 12.5px;
+}
+
+.exam-card.is-next-step {
+  border-color: #f3d9b5;
+  background: #fffdf8;
+}
