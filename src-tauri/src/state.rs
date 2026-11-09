@@ -116,6 +116,10 @@ pub struct AppState {
     /// exam-engine session (`JSESSIONID` present). Exam/redo windows are only
     /// opened when this is true.
     zhs_exam_sso_ready: AtomicBool,
+    /// The login window's WebView2 profile, kept after a successful Zhihuishu
+    /// login/SSO so exam windows can reuse the same profile (the CAS/SSO state
+    /// cannot be reproduced by injecting cookies alone).
+    zhs_webview_dir: RwLock<Option<PathBuf>>,
 }
 
 impl AppState {
@@ -186,6 +190,28 @@ impl AppState {
 
     pub fn set_zhs_exam_sso_ready(&self, ready: bool) {
         self.zhs_exam_sso_ready.store(ready, Ordering::SeqCst);
+    }
+
+    /// Persist the current login window's WebView2 profile for exam windows.
+    ///
+    /// The login profile is moved out of `login_dir` so the login-window
+    /// destroy handler no longer deletes it. Returns the previously stored
+    /// profile (the caller deletes it).
+    pub fn adopt_zhs_webview_dir(&self) -> Option<PathBuf> {
+        let dir = self.write_login_dir().take();
+        let mut stored = self.write_zhs_webview_dir();
+        match dir {
+            Some(dir) => stored.replace(dir),
+            None => None,
+        }
+    }
+
+    pub fn zhs_webview_dir(&self) -> Option<PathBuf> {
+        self.read_zhs_webview_dir().clone()
+    }
+
+    pub fn take_zhs_webview_dir(&self) -> Option<PathBuf> {
+        self.write_zhs_webview_dir().take()
     }
 
     /// Merge cookies captured from an exam-host page load into the session and
@@ -430,6 +456,18 @@ impl AppState {
 
     fn write_login_dir(&self) -> std::sync::RwLockWriteGuard<'_, Option<PathBuf>> {
         self.login_dir
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn read_zhs_webview_dir(&self) -> std::sync::RwLockReadGuard<'_, Option<PathBuf>> {
+        self.zhs_webview_dir
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_zhs_webview_dir(&self) -> std::sync::RwLockWriteGuard<'_, Option<PathBuf>> {
+        self.zhs_webview_dir
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }

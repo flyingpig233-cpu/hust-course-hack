@@ -134,6 +134,14 @@ pub fn open_login_window(app: &AppHandle, platform: Platform) -> Result<(), Stri
         ));
     }
 
+    // Logging into another platform means the stored Zhihuishu exam profile is
+    // no longer useful; delete it now so it does not linger in %TEMP%.
+    if platform != Platform::Zhihuishu
+        && let Some(dir) = state.take_zhs_webview_dir()
+    {
+        cleanup_login_dir(dir);
+    }
+
     let config = login_config(platform);
     let data_dir = login_data_dir();
     state.start_login(platform, data_dir.clone());
@@ -807,6 +815,17 @@ async fn finish_zhs_login(
         }),
     });
     let _ = app.emit("session-changed", info);
+    if sso_ready {
+        // Reuse this WebView2 profile for exam windows: CAS/SSO state is in the
+        // profile itself and cannot be reproduced by injecting cookies.
+        if let Some(old) = state.adopt_zhs_webview_dir() {
+            cleanup_login_dir(old);
+        }
+        exam_log(
+            app,
+            "login: keeping the login WebView2 profile for exam windows",
+        );
+    }
     close_login_window(app);
     Ok(())
 }
@@ -893,15 +912,17 @@ fn login_data_dir() -> PathBuf {
 
 /// Delete a login profile after its webview is gone. WebView2 can keep file
 /// handles for a moment, so retry briefly.
-fn cleanup_login_dir(path: PathBuf) {
-    std::thread::spawn(move || {
-        for _ in 0..20 {
-            if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(150));
+pub(crate) fn cleanup_login_dir_sync(path: PathBuf) {
+    for _ in 0..20 {
+        if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
+            return;
         }
-    });
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+pub(crate) fn cleanup_login_dir(path: PathBuf) {
+    std::thread::spawn(move || cleanup_login_dir_sync(path));
 }
 
 /// Remove login profiles left behind by a previous crash. Profiles younger

@@ -140,6 +140,13 @@
     return Number.isFinite(count) ? count : 0;
   }
 
+  function profileLabel() {
+    if (window.__ZHS_PROFILE_SHARED__) {
+      return '共享登录配置（无需注入 Cookie）';
+    }
+    return '已注入 Cookie ' + injectedCookieCount() + ' 条';
+  }
+
   /** No AI buttons / SPA crash: diagnostic panel instead of an empty window. */
   function showCrashPanel(reason) {
     var recent = '';
@@ -148,9 +155,9 @@
       reason +
       '\n\n目标地址：' +
       String(location.href) +
-      '\n已注入 Cookie ' +
-      injectedCookieCount() +
-      ' 条\n最近状态：' +
+      '\n' +
+      profileLabel() +
+      '\n最近状态：' +
       (recent || '（暂无）');
     try {
       if (window.__ZHS_SHOW_ERROR__) window.__ZHS_SHOW_ERROR__('未能读取试卷', detail);
@@ -534,9 +541,8 @@
     ensureOverlay();
     hideLoadingPanel();
     setStatus(
-      '已注入 Cookie ' +
-        injectedCookieCount() +
-        ' 条。页面已就绪，4 秒后自动开始采集（也可手动点击“开始采集”）。',
+      profileLabel() +
+        '。页面已就绪，4 秒后自动开始采集（也可手动点击“开始采集”）。',
     );
     setTimeout(function () {
       if (!H.running && !H.done) void run();
