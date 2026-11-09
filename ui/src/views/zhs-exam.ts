@@ -74,16 +74,14 @@ function attemptText(homework: ZhsHomework): string {
   return `剩余重做 ${remaining} 次`;
 }
 
-/** Primary score + secondary best score when the two platform fields differ. */
+/**
+ * Platform 「作业成绩」 equals the API `score` field; `achieve` is not shown as
+ * a best score on the submitted page, so only `score` is displayed. The raw
+ * `score/achieve` values stay in the badge tooltip for diagnostics.
+ */
 function scoreText(homework: ZhsHomework): string | null {
-  const score = homework.score;
-  const achieve = homework.achieve;
-  if (score === null && achieve === null) return null;
-  const primary = score ?? achieve;
-  if (score !== null && achieve !== null && score !== achieve) {
-    return `得分 ${score} · 最高 ${achieve}`;
-  }
-  return `得分 ${primary}`;
+  const score = homework.score ?? homework.achieve;
+  return score === null ? null : `得分 ${score}`;
 }
 
 function paperBadges(homework: ZhsHomework): string {

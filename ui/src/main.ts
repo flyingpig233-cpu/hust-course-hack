@@ -811,7 +811,16 @@ function showZhsMeetView(): void {
     onRefresh: () => void loadZhsMeets(course),
     onLoadProgress: (meet) => void loadZhsMeetProgress(course, meet),
     onWatch: (meet) => {
-      const selected = meet ? [meet] : replayable;
+      const signed = (item: ZhsMeet): boolean =>
+        store.zhs.meetProgress.get(item.meetCourseId)?.attendance.signed ===
+        true;
+      const selected = meet
+        ? [meet]
+        : replayable.filter((item) => !signed(item));
+      if (selected.length === 0) {
+        toast("所有有回放的见面课都已签到完成，无需再刷回放考勤", "info");
+        return;
+      }
       const totalMinutes = selected.reduce(
         (total, item) =>
           total + Math.ceil((item.durationSecs ?? 0) / 60),
@@ -846,6 +855,10 @@ async function loadZhsMeetProgress(
     );
     store.zhs.meetProgress.set(meet.meetCourseId, progress);
     showZhsMeetView();
+    if (progress.attendance.signed) {
+      toast(`${meet.name}：已完成（签到完成），无需刷回放`, "success");
+      return;
+    }
     toast(
       `${meet.name}：已看 ${progress.watchedCount} / ${progress.totalMinutes} 分钟（${progress.percent}%）`,
       "info",
