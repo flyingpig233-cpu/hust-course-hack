@@ -53,6 +53,21 @@ const ZHS_COOKIE_URLS: [&str; 4] = [
     "https://studyvideoh5.zhihuishu.com/",
 ];
 
+/// Exam-list page opened once after login so the exam H5 host sets its own
+/// cookies (`JSESSIONID`/`SERVERID`/`acw_tc`). The bare list route is enough;
+/// it does not start an attempt.
+const ZHS_EXAM_WARMUP_URL: &str =
+    "https://onlineexamh5new.zhihuishu.com/stuExamWeb.html#/webExamList";
+/// URLs read after the exam warm-up page load. Host cookies override the domain
+/// cookies captured at login (see [`merge_cookie_groups`]).
+const ZHS_EXAM_COOKIE_URLS: [&str; 5] = [
+    "https://onlineexamh5new.zhihuishu.com/",
+    "https://onlineexamh5new.zhihuishu.com/stuExamWeb.html",
+    "https://studentexam-api.zhihuishu.com/",
+    "https://taurusexam-api.zhihuishu.com/",
+    "https://onlineweb.zhihuishu.com/onlinestuh5",
+];
+
 const UL_ENTRY: &str = "https://umooc.ulearning.cn/pc.html#/login";
 const UL_HOST_SUFFIX: &str = "ulearning.cn";
 /// Cookie URLs read after an Ulearning login. The session token is the
@@ -248,7 +263,7 @@ async fn try_finish_login(app: AppHandle, platform: Platform) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     let app_for_cookies = app.clone();
     let cookies =
-        tauri::async_runtime::spawn_blocking(move || read_login_cookies(&app_for_cookies, urls))
+        tauri::async_runtime::spawn_blocking(move || read_login_cookies(&app_for_cookies, &urls))
             .await
             .map_err(|error| anyhow!("cookie task failed: {error}"))??;
 
@@ -266,15 +281,23 @@ async fn try_finish_login(app: AppHandle, platform: Platform) -> Result<()> {
 /// Read the webview's cookies (including HttpOnly) without crossing the IPC
 /// boundary. Must run on a blocking worker: `cookies_for_url` deadlocks on the
 /// main thread on Windows.
-fn read_login_cookies(app: &AppHandle, urls: Vec<Url>) -> Result<Vec<CookieRecord>> {
+fn read_login_cookies(app: &AppHandle, urls: &[Url]) -> Result<Vec<CookieRecord>> {
     let window = app
         .get_webview_window(LOGIN_LABEL)
         .context("login window is already closed")?;
+    read_cookies_from_window(&window, urls)
+}
+
+/// Cookies of one webview for every URL, deduplicated by name+value.
+fn read_cookies_from_window(
+    window: &tauri::WebviewWindow,
+    urls: &[Url],
+) -> Result<Vec<CookieRecord>> {
     let mut records = Vec::new();
     let mut seen = HashSet::new();
     for url in urls {
         let cookies = window
-            .cookies_for_url(url)
+            .cookies_for_url(url.clone())
             .map_err(|error| anyhow!("{error}"))?;
         for cookie in cookies {
             let name = cookie.name().to_string();
@@ -300,6 +323,51 @@ fn read_login_cookies(app: &AppHandle, urls: Vec<Url>) -> Result<Vec<CookieRecor
         }
     }
     Ok(records)
+}
+
+/// Merge cookie groups, deduping by name+domain (+path).
+///
+/// The same name can legitimately exist on several hosts (the exam engines each
+/// set their own `JSESSIONID`), so a name-only dedupe would drop a live engine
+/// session. A later capture replaces an earlier one with the same name and
+/// domain; host cookies therefore override a platform-wide cookie only for that
+/// host, exactly like a browser cookie store.
+fn merge_cookie_groups(groups: impl IntoIterator<Item = Vec<CookieRecord>>) -> Vec<CookieRecord> {
+    fn key(record: &CookieRecord) -> (String, String, String) {
+        (
+            record.name.clone(),
+            record
+                .domain
+                .trim()
+                .trim_start_matches('.')
+                .to_ascii_lowercase(),
+            record.path.clone(),
+        )
+    }
+    let mut merged: Vec<CookieRecord> = Vec::new();
+    for group in groups {
+        for record in group {
+            let record_key = key(&record);
+            match merged.iter().position(|item| key(item) == record_key) {
+                Some(index) => merged[index] = record,
+                None => merged.push(record),
+            }
+        }
+    }
+    merged
+}
+
+/// Merge the login captures into the session list (domains preserved so the
+/// request jar reaches every exam host).
+fn zhs_session_cookies(records: Vec<CookieRecord>) -> Vec<CookieRecord> {
+    merge_cookie_groups([records])
+}
+
+/// Build a Zhihuishu client whose jar preserves the captured cookie domains so
+/// requests to `studentexam-api` / `taurusexam-api` carry their cookies.
+fn zhs_client_from_records(records: &[CookieRecord]) -> Result<ZhsClient> {
+    let jar = jar_from_records(records.to_vec())?;
+    ZhsClient::with_cookie_jar(jar)
 }
 
 async fn finish_hust_login(
@@ -342,6 +410,90 @@ async fn finish_hust_login(
     Ok(())
 }
 
+/// Navigate the login webview to the exam-list page and capture the host
+/// cookies set by the exam H5 / API hosts. Returns the merged cookie list; on
+/// failure returns the base cookies so the plain session can still be adopted.
+async fn warm_up_exam_cookies(app: &AppHandle, base: Vec<CookieRecord>) -> Vec<CookieRecord> {
+    let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
+        return base;
+    };
+    let Ok(url) = Url::parse(ZHS_EXAM_WARMUP_URL) else {
+        log::warn!("zhihuishu exam warm-up: invalid URL");
+        return base;
+    };
+    if let Err(error) = window.navigate(url) {
+        log::warn!("zhihuishu exam warm-up navigation failed: {error}");
+        return base;
+    }
+    log::info!("zhihuishu exam warm-up: visiting the exam list page");
+    let app_for_capture = app.clone();
+    let base_for_capture = base.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        capture_exam_cookies(&app_for_capture, base_for_capture)
+    })
+    .await
+    {
+        Ok(merged) => merged,
+        Err(error) => {
+            log::warn!("zhihuishu exam warm-up task failed: {error}");
+            base
+        }
+    }
+}
+
+/// Blocking capture loop: read exam-host cookies until the API hosts got their
+/// cookies (or a timeout). Must run on a blocking worker.
+fn capture_exam_cookies(app: &AppHandle, base: Vec<CookieRecord>) -> Vec<CookieRecord> {
+    let start = std::time::Instant::now();
+    let base_urls = ZHS_COOKIE_URLS
+        .iter()
+        .filter_map(|raw| Url::parse(raw).ok())
+        .collect::<Vec<_>>();
+    let exam_urls = ZHS_EXAM_COOKIE_URLS
+        .iter()
+        .filter_map(|raw| Url::parse(raw).ok())
+        .collect::<Vec<_>>();
+    let mut best = zhs_session_cookies(base);
+    loop {
+        let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
+            return best;
+        };
+        let base_groups = read_cookies_from_window(&window, &base_urls)
+            .map(|records| vec![records])
+            .unwrap_or_default();
+        let mut live_exam_urls = exam_urls.clone();
+        if let Ok(current) = window.url() {
+            live_exam_urls.insert(0, current);
+        }
+        let exam_groups = read_cookies_from_window(&window, &live_exam_urls)
+            .map(|records| vec![records])
+            .unwrap_or_default();
+        let exam_host_cookies = exam_groups.iter().flatten().count();
+        let merged = merge_cookie_groups(
+            base_groups
+                .into_iter()
+                .chain(exam_groups)
+                .collect::<Vec<_>>(),
+        );
+        best = zhs_session_cookies(merged);
+        let elapsed = start.elapsed();
+        // Give the page JS time to call the exam API hosts after the H5 host
+        // set its cookies; stop once we saw host cookies for a while or hit
+        // the timeout.
+        if (exam_host_cookies > 0 && elapsed >= Duration::from_secs(6))
+            || elapsed >= Duration::from_secs(20)
+        {
+            log::info!(
+                "zhihuishu exam warm-up: captured {} cookies ({} exam-host cookies)",
+                best.len(),
+                exam_host_cookies
+            );
+            return best;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
 async fn finish_zhs_login(
     app: &AppHandle,
     state: &AppState,
@@ -353,19 +505,59 @@ async fn finish_zhs_login(
         return Ok(());
     }
 
-    let header = cookies
+    let base_cookies = zhs_session_cookies(cookies.clone());
+    let header = base_cookies
         .iter()
         .map(|cookie| format!("{}={}", cookie.name, cookie.value))
         .collect::<Vec<_>>()
         .join("; ");
-    let client = ZhsClient::from_cookie_header(&header)?;
-    let user = client
+    let mut client = ZhsClient::from_cookie_header(&header)?;
+    let mut user = client
         .login_user()
         .await
         .context("getLoginUserInfo 校验失败；知到会话可能未建立或加密常量已更新")?;
 
     if user.is_teacher {
         return Err(anyhow!("知到教师账号不支持秒刷，请使用学生账号登录知到"));
+    }
+
+    // Exam engines (`studentexam-api` / `taurusexam-api`) need the host cookies
+    // that are only set after an authenticated visit to the exam H5 page. Visit
+    // it once per login attempt, merge the captured cookies, rebuild the client
+    // jar (domain cookies reach every zhihuishu host) and re-validate.
+    let mut session_cookies = base_cookies.clone();
+    if state.begin_zhs_exam_warmup() {
+        session_cookies = warm_up_exam_cookies(app, cookies.clone()).await;
+    } else {
+        log::debug!("zhihuishu exam warm-up already ran in this login attempt");
+    }
+
+    // Rebuild the client from the merged captures: `jar_from_records` preserves
+    // cookie domains, so `studentexam-api` / `taurusexam-api` requests carry
+    // their host cookies. Re-validate before adopting the merged session.
+    match zhs_client_from_records(&session_cookies) {
+        Ok(warm_client) => match warm_client.login_user().await {
+            Ok(warm_user) => {
+                log::info!(
+                    "zhihuishu exam warm-up merged: {} cookies",
+                    session_cookies.len()
+                );
+                client = warm_client;
+                user = warm_user;
+            }
+            Err(error) => {
+                log::warn!(
+                    "zhihuishu merged-cookie re-validation failed ({error:#}); keeping the plain session"
+                );
+                session_cookies = base_cookies;
+            }
+        },
+        Err(error) => {
+            log::warn!(
+                "zhihuishu merged-cookie client build failed ({error:#}); keeping the plain session"
+            );
+            session_cookies = base_cookies;
+        }
     }
 
     // The shared-course list endpoint is best effort; a failure must not block
@@ -390,11 +582,11 @@ async fn finish_zhs_login(
         } else {
             format!("知到网页登录（{real_name}）")
         },
-        cookie_count: cookies.len(),
+        cookie_count: session_cookies.len(),
     };
     log::info!(
         "zhihuishu session captured: {} cookies, {} courses",
-        cookies.len(),
+        session_cookies.len(),
         courses.len()
     );
     state.set_session(Session {
@@ -402,14 +594,13 @@ async fn finish_zhs_login(
         client: SessionClient::Zhihuishu(ZhsSession {
             client,
             courses,
-            cookies,
+            cookies: session_cookies,
         }),
     });
     let _ = app.emit("session-changed", info);
     close_login_window(app);
     Ok(())
 }
-
 async fn finish_ul_login(
     app: &AppHandle,
     state: &AppState,

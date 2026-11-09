@@ -7,7 +7,7 @@
 
 use hust_course_hack::{
     CourseSummary, SmartCourseClient,
-    cookie::CookieRecord,
+    cookie::{CookieRecord, jar_from_records},
     ulearning::{UlCourse, UlearningClient},
     zhihuishu::{ZhsClient, ZhsCourse},
 };
@@ -109,6 +109,9 @@ pub struct AppState {
     login_platform: RwLock<Option<Platform>>,
     /// Temporary WebView2 profile used by the login window.
     login_dir: RwLock<Option<PathBuf>>,
+    /// The exam cookie warm-up already ran in this login attempt (prevents
+    /// navigation loops on repeated page-load validations).
+    zhs_exam_warmup: AtomicBool,
 }
 
 impl AppState {
@@ -160,6 +163,45 @@ impl AppState {
         match session.as_ref().map(|s| &s.client) {
             Some(SessionClient::Zhihuishu(zhs)) => zhs.cookies.clone(),
             _ => Vec::new(),
+        }
+    }
+
+    /// Claim the one-time exam cookie warm-up of the current login attempt.
+    ///
+    /// Returns `false` when it already ran (so a repeated page load cannot
+    /// trigger another navigation loop).
+    pub fn begin_zhs_exam_warmup(&self) -> bool {
+        !self.zhs_exam_warmup.swap(true, Ordering::SeqCst)
+    }
+
+    /// Merge cookies captured from an exam-host page load into the session and
+    /// rebuild the Zhihuishu client so the exam APIs receive the host cookies.
+    ///
+    /// Host-only cookies on `*.zhihuishu.com` are promoted to `.zhihuishu.com`
+    /// so the `studentexam-api` / `taurusexam-api` hosts get them as well.
+    pub fn merge_zhs_cookies(&self, records: Vec<CookieRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        let mut session = self.write_session();
+        let Some(SessionClient::Zhihuishu(zhs)) = session.as_mut().map(|s| &mut s.client) else {
+            return;
+        };
+        for record in records {
+            let record_key = cookie_key(&record);
+            match zhs
+                .cookies
+                .iter()
+                .position(|existing| cookie_key(existing) == record_key)
+            {
+                Some(index) => zhs.cookies[index] = record,
+                None => zhs.cookies.push(record),
+            }
+        }
+        if let Ok(jar) = jar_from_records(zhs.cookies.clone())
+            && let Ok(client) = ZhsClient::with_cookie_jar(jar)
+        {
+            zhs.client = client;
         }
     }
 
@@ -305,6 +347,7 @@ impl AppState {
     pub fn start_login(&self, platform: Platform, data_dir: PathBuf) {
         self.login_succeeded.store(false, Ordering::SeqCst);
         self.login_checking.store(false, Ordering::SeqCst);
+        self.zhs_exam_warmup.store(false, Ordering::SeqCst);
         *self.write_login_platform() = Some(platform);
         *self.write_login_dir() = Some(data_dir);
     }
@@ -367,6 +410,21 @@ impl AppState {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Dedupe key for captured cookies: name + domain (dot-insensitive) + path.
+/// The same name on different hosts is a different cookie (each exam engine
+/// sets its own `JSESSIONID`).
+fn cookie_key(record: &CookieRecord) -> (String, String, String) {
+    (
+        record.name.clone(),
+        record
+            .domain
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase(),
+        record.path.clone(),
+    )
 }
 
 pub struct JobGuard<'a> {
