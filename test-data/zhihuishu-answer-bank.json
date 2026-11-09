@@ -1,7 +1,7 @@
 {
   "version": 1,
   "platform": "zhihuishu",
-  "generated_at_unix": 1791000000,
+  "generated_at_unix": 1794229725,
   "source": "military-theory unit tests (submitted papers + AI analysis)",
   "entries": [
     {
@@ -12,8 +12,8 @@
         "总数为14个",
         "未与我国解决陆地边界划分的国家只剩2个"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "下列国家既是我国的陆上邻国又是海上邻国的是",
@@ -22,8 +22,8 @@
       "answers": [
         "越南"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "世界新军事革命是以重塑军事体系为主要目标",
@@ -32,8 +32,8 @@
       "answers": [
         "对"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "中国国防的主体是",
@@ -42,8 +42,8 @@
       "answers": [
         "国家，包括全体国民"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "中国国防的历史充分证明了国家民族独立兴旺发展必须有强大的国防",
@@ -52,8 +52,8 @@
       "answers": [
         "对"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "中国战略地理的特点是既是一个陆上大国又是一个是一个陆海兼备的大国",
@@ -62,8 +62,8 @@
       "answers": [
         "海洋大国"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "中国武装力量整体是指什么",
@@ -72,8 +72,8 @@
       "answers": [
         "中国人民解放军、中国人民武装警察部队和民兵"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "中美对抗将在短期内决定胜负",
@@ -82,8 +82,8 @@
       "answers": [
         "错"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "以下不是信息化战争的基本特征的是哪一项",
@@ -102,8 +102,8 @@
       "answers": [
         "1500"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "克劳塞维茨提出的战争目的是什么",
@@ -133,8 +133,8 @@
       "answers": [
         "蒙古帝国"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "公民在国防动员中应尽的责任和义务不包含",
@@ -143,8 +143,8 @@
       "answers": [
         "捐钱献物"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "关于信息化战争中信息的作用以下哪些说法是正确的",
@@ -177,35 +177,35 @@
       "answers": [
         "新军事革命的只是武器装备信息化"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "国防动员的基本内容包括什么",
       "stem": "国防动员的基本内容包括什么？（ ）",
       "question_type": "multiple",
       "answers": [
-        "政治动员",
-        "武装力量动员",
         "人民防空动员",
-        "经济动员"
+        "经济动员",
+        "政治动员",
+        "武装力量动员"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "太空安全对下列哪些领域有影响",
       "stem": "太空安全对下列哪些领域有影响？（ ）",
       "question_type": "multiple",
       "answers": [
-        "文化",
-        "军事",
         "政治",
+        "经济",
         "科技",
-        "经济"
+        "军事",
+        "文化"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "如果将来日本军事上强大了有可能会将矛头指向美国",
@@ -214,8 +214,8 @@
       "answers": [
         "对"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "孙子兵法的作者是谁",
@@ -224,8 +224,8 @@
       "answers": [
         "孙武"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "当公民发现有人实施危害国防利益的行为时应当如何处理",
@@ -234,8 +234,8 @@
       "answers": [
         "予以制止，进行检举"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "影响中日关系的主要因素",
@@ -243,25 +243,25 @@
       "question_type": "multiple",
       "answers": [
         "历史问题",
-        "台湾问题",
-        "美日联盟问题"
+        "美日联盟问题",
+        "台湾问题"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "我国安全面临的威胁有哪些",
       "stem": "我国安全面临的威胁有哪些？（ ）",
       "question_type": "multiple",
       "answers": [
-        "恐怖主义",
-        "国家分裂",
         "领海争端",
+        "国家分裂",
+        "中印边境领土争端",
         "集团对抗",
-        "中印边境领土争端"
+        "恐怖主义"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229723
     },
     {
       "key": "我武装警察部队人数最多的部队是海警部队",
@@ -302,8 +302,8 @@
       "answers": [
         "振兴发展"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
     },
     {
       "key": "新时代人民解放军的使命",
@@ -325,8 +325,245 @@
       "answers": [
         "错"
       ],
-      "source": "ai_analysis",
-      "updated_at_unix": 1791000000
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "俄罗斯的战略追求",
+      "stem": "俄罗斯的战略追求：",
+      "question_type": "multiple",
+      "answers": [
+        "乌克兰割让乌东4州领土",
+        "乌克兰不加入北约"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229723
+    },
+    {
+      "key": "下列判断更符合当前战场态势的是",
+      "stem": "下列判断更符合当前战场态势的是？",
+      "question_type": "single",
+      "answers": [
+        "欧盟的意图是支持乌克兰抵抗、削弱俄罗斯"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229723
+    },
+    {
+      "key": "毛泽东军事思想的三个核心部分是",
+      "stem": "毛泽东军事思想的三个核心部分是：（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "人民战争的战略战术思想",
+        "人民军队建设思想",
+        "人民战争思想"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "抗战时期毛泽东总结了我军政治工作的经验鲜明提出了我军政治工作三大原则以下哪一项不属于三大原则之一",
+      "stem": "抗战时期，毛泽东总结了我军政治工作的经验，鲜明提出了我军政治工作三大原则，以下哪一项不属于三大原则之一：（ ）",
+      "question_type": "single",
+      "answers": [
+        "军政一致"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "以下哪些是发生在井冈山时期的",
+      "stem": "以下哪些是发生在井冈山时期的？（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "“支部建在连上”",
+        "三湾改编"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "新时期强军目标中听党指挥是作风优良是能打胜仗是",
+      "stem": "新时期强军目标中，“听党指挥”是( );“作风优良”是（ ）；“能打胜仗”是（）。（ ）",
+      "question_type": "single",
+      "answers": [
+        "灵魂、保证、核心"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "军队三步走战略目标的内容基本实现机械化是在实现国防现代化是在建设成为世界一流的军队是在",
+      "stem": "军队“三步走战略目标”的内容：（ ）基本实现机械化是在，实现国防现代化是在（），建设成为世界一流的军队是在（ ）。（ ）",
+      "question_type": "single",
+      "answers": [
+        "2020年；2035年；本世纪中叶"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "以下是军队现代化的内涵的是",
+      "stem": "以下是军队现代化的内涵的是：（ ）",
+      "question_type": "multiple",
+      "answers": [
+        "军事人员现代化",
+        "武器装备现代化",
+        "组织形态现代化",
+        "军事思想现代化"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "土地革命战争时期我军创造了以为核心的积极防御战略思想",
+      "stem": "土地革命战争时期我军创造了以（ ）为核心的积极防御战略思想。",
+      "question_type": "single",
+      "answers": [
+        "诱敌深入"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "抗日战争时期我军提出总方针",
+      "stem": "抗日战争时期我军提出（ ）总方针。",
+      "question_type": "single",
+      "answers": [
+        "持久战"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "新中国成立后积极防御战略的防御性是由决定的",
+      "stem": "新中国成立后，积极防御战略的防御性是由（ ）决定的。",
+      "question_type": "single",
+      "answers": [
+        "我国社会主义国家性质"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "积极防御战略思想是中国共产党军事战略思想的基本点",
+      "stem": "积极防御战略思想是中国共产党军事战略思想的基本点。（ ）",
+      "question_type": "judge",
+      "answers": [
+        "对"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229724
+    },
+    {
+      "key": "以舰载机为主要武器并作为其海上活动基地的大型水面战斗舰艇是nbsp",
+      "stem": "以舰载机为主要武器并作为其海上活动基地的大型水面战斗舰艇是（ &nbsp; ）。",
+      "question_type": "single",
+      "answers": [
+        "航空母舰"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "以下哪一个不属于宙斯盾作战系统分系统的是nbsp",
+      "stem": "以下哪一个不属于“宙斯盾”作战系统分系统的是（ &nbsp; ）",
+      "question_type": "single",
+      "answers": [
+        "电子对抗分系统"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "以下哪一个不属于舰载防空导弹系统的是nbsp",
+      "stem": "以下哪一个不属于舰载防空导弹系统的是（ &nbsp;）",
+      "question_type": "single",
+      "answers": [
+        "“白蛉”"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "我国2015年93胜利日大阅兵参阅装备中新型武器装备占向世界展现了我国军事科技的最新成果和先进水平",
+      "stem": "我国2015年“9.3胜利日”大阅兵，参阅装备中新型武器装备占＿＿＿,向世界展现了我国军事科技的最新成果和先进水平。　　　",
+      "question_type": "single",
+      "answers": [
+        "84%"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "美国在年研制出世界上第一台电子计算机主要用于计算弹道导弹参数",
+      "stem": "    美国在＿＿＿年研制出世界上第一台电子计算机，主要用于计算弹道导弹参数。        ",
+      "question_type": "single",
+      "answers": [
+        "1946"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "美国福特级核动力航母的优势是",
+      "stem": "美国福特级核动力航母的优势是？",
+      "question_type": "multiple",
+      "answers": [
+        "需要的人员少",
+        "电磁弹射",
+        "支持激光武器"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "以下哪一个选项的反舰导弹是不属于中国的",
+      "stem": "以下哪一个选项的反舰导弹是不属于中国的？",
+      "question_type": "multiple",
+      "answers": [
+        "“白蛉”、“红宝石”反舰导弹",
+        "“战斧”、“鱼叉”反舰导弹",
+        "“花岗岩”反舰导弹"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "航母战斗群必须具备以下能力",
+      "stem": "航母战斗群必须具备以下能力？",
+      "question_type": "multiple",
+      "answers": [
+        "防空",
+        "反潜",
+        "综合补给"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "下列哪个不是我国的舰载中远程防空导弹",
+      "stem": "下列哪个不是我国的舰载中远程防空导弹？",
+      "question_type": "multiple",
+      "answers": [
+        "歼20",
+        "东26",
+        "歼14"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
+    },
+    {
+      "key": "我军反航母利器和我军争夺制空权的利器分别是和本题请选出错误选项",
+      "stem": "我军反航母利器和我军争夺制空权的利器分别是（）和（）。（本题请选出错误选项）",
+      "question_type": "multiple",
+      "answers": [
+        "海红9、歼20",
+        "东26、海红9",
+        "歼20、东26"
+      ],
+      "source": "submitted",
+      "updated_at_unix": 1794229725
     }
   ]
 }
