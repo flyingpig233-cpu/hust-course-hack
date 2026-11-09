@@ -26,10 +26,11 @@ use hust_course_hack::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    io::Write,
     path::PathBuf,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -57,6 +58,114 @@ const BANK_FILE: &str = "zhihuishu-answer-bank.json";
 const HARVEST_SCRIPT: &str = include_str!("zhs_exam_harvest.js");
 /// Injected attempt script (dohomework page: manual slider, then auto answer).
 const ATTEMPT_SCRIPT: &str = include_str!("zhs_exam_attempt.js");
+/// Loading/error/diagnostic bootstrap injected into the exam window before any
+/// navigation. It guarantees the window is never blank white and bridges JS
+/// errors to the file log.
+const DIAGNOSTIC_SCRIPT: &str = r##"
+(function () {
+  if (window.__ZHS_DIAG_READY__) return;
+  window.__ZHS_DIAG_READY__ = true;
+  window.__ZHS_LOG_LINES__ = window.__ZHS_LOG_LINES__ || [];
+
+  function root() { return document.documentElement || document.body; }
+
+  window.__ZHS_PUSH_LOG__ = function (line) {
+    window.__ZHS_LOG_LINES__.push(String(line));
+    while (window.__ZHS_LOG_LINES__.length > 40) window.__ZHS_LOG_LINES__.shift();
+  };
+
+  window.__ZHS_HIDE_LOADING__ = function () {
+    var el = document.getElementById('__zhs_loading_panel');
+    if (el) el.remove();
+  };
+
+  window.__ZHS_SHOW_ERROR__ = function (title, detail) {
+    var host = root();
+    if (!host) return;
+    window.__ZHS_HIDE_LOADING__();
+    var old = document.getElementById('__zhs_error_panel');
+    if (old) old.remove();
+    var text = String(title || '') + '\n' + String(detail || '');
+    var panel = document.createElement('div');
+    panel.id = '__zhs_error_panel';
+    panel.setAttribute('style', 'position:fixed;inset:0;z-index:2147483645;background:#0f172a;color:#e5e7eb;font:14px/1.7 "Microsoft YaHei",system-ui,sans-serif;padding:44px;box-sizing:border-box;overflow:auto');
+    panel.innerHTML =
+      '<h2 style="margin:0 0 14px;color:#fca5a5">考试页加载失败</h2>' +
+      '<div id="__zhs_err_detail" style="white-space:pre-wrap;margin-bottom:18px;font-size:13px;opacity:.92"></div>' +
+      '<div style="display:flex;gap:10px">' +
+      '<button id="__zhs_err_reload" style="all:unset;cursor:pointer;padding:8px 18px;border-radius:8px;background:#2563eb;color:#fff">重新加载</button>' +
+      '<button id="__zhs_err_copy" style="all:unset;cursor:pointer;padding:8px 18px;border-radius:8px;background:#374151;color:#fff">复制诊断</button>' +
+      '</div>' +
+      '<p style="opacity:.65;margin-top:20px;font-size:12.5px">诊断日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log</p>';
+    host.appendChild(panel);
+    document.getElementById('__zhs_err_detail').textContent = text;
+    document.getElementById('__zhs_err_reload').onclick = function () { location.reload(); };
+    document.getElementById('__zhs_err_copy').onclick = function () {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text);
+          return;
+        }
+      } catch (e) { /* fall through */ }
+      var area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+      area.remove();
+    };
+  };
+
+  function showLoading() {
+    var host = root();
+    if (!host || document.getElementById('__zhs_error_panel') || document.getElementById('__zhs_loading_panel')) return;
+    var panel = document.createElement('div');
+    panel.id = '__zhs_loading_panel';
+    panel.setAttribute('style', 'position:fixed;inset:0;z-index:2147483644;background:#f8fafc;color:#0f172a;font:15px/1.8 "Microsoft YaHei",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;box-sizing:border-box');
+    panel.innerHTML =
+      '<div style="width:34px;height:34px;border:3px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:__zhs_spin 1s linear infinite;margin-bottom:14px"></div>' +
+      '<div style="font-weight:700;font-size:16px">正在加载考试页…</div>' +
+      '<div style="opacity:.7;margin-top:6px;font-size:13px">正在注入登录会话并打开知到页面，请稍候。</div>' +
+      '<div style="opacity:.5;margin-top:16px;font-size:12px">如长时间停留，请查看 %APPDATA%\\hust-course-hack\\logs\\zhs-exam.log</div>';
+    var style = document.createElement('style');
+    style.textContent = '@keyframes __zhs_spin{to{transform:rotate(360deg)}}';
+    host.appendChild(style);
+    host.appendChild(panel);
+  }
+
+  function report(kind, message) {
+    var text = String(kind) + ': ' + String(message == null ? '' : message).slice(0, 500);
+    window.__ZHS_PUSH_LOG__(text);
+    try {
+      var internals = window.__TAURI_INTERNALS__;
+      var ctx = window.__ZHS_EXAM_CTX__ || {};
+      if (internals && typeof internals.invoke === 'function') {
+        internals.invoke('zhs_exam_js_error', {
+          windowLabel: ctx.windowLabel || '',
+          message: text,
+        });
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  window.addEventListener('error', function (event) {
+    report('js-error', (event && event.message) || '');
+  });
+  window.addEventListener('unhandledrejection', function (event) {
+    var reason = event && event.reason;
+    report('js-rejection', reason && (reason.message || reason));
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', showLoading);
+  } else {
+    setTimeout(showLoading, 0);
+  }
+})();
+"##;
+/// How long the exam window waits for the first real page load before showing
+/// the timeout error panel.
+const EXAM_PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(25);
 
 // ---- DTOs ------------------------------------------------------------------
 
@@ -749,6 +858,18 @@ pub async fn zhs_exam_open_check_window(
     open_check_window(&app, recruit_id, course_id, &homework)
 }
 
+/// JS console bridge for the exam window: appends errors to the window log.
+#[tauri::command]
+pub async fn zhs_exam_js_error(
+    app: AppHandle,
+    window_label: String,
+    message: String,
+) -> Result<(), String> {
+    let message: String = message.chars().take(600).collect();
+    exam_log(&app, format!("js {window_label}: {message}"));
+    log::warn!("zhihuishu exam window js error ({window_label}): {message}");
+    Ok(())
+}
 // ---- Webview-driven attempt ------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1246,6 +1367,7 @@ fn open_check_window(
     let url = exam_check_url(recruit_id, course_id, homework);
     let context_json = serde_json::json!({
         "mode": "harvest",
+        "windowLabel": EXAM_WINDOW_LABEL,
         "recruitId": recruit_id,
         "courseId": course_id,
         "examId": homework.exam_id,
@@ -1253,8 +1375,8 @@ fn open_check_window(
         "name": homework.name,
     });
     let script = format!(
-        "window.__ZHS_EXAM_CTX__ = {};\n{}",
-        context_json, HARVEST_SCRIPT
+        "window.__ZHS_EXAM_CTX__ = {};\n{}\n{}",
+        context_json, DIAGNOSTIC_SCRIPT, HARVEST_SCRIPT
     );
     open_exam_window(app, url, "知到 · 作业/考试 AI解析采集", script)
 }
@@ -1268,6 +1390,7 @@ fn open_attempt_window(
     let url = exam_attempt_url(recruit_id, course_id, homework);
     let context_json = serde_json::json!({
         "mode": "attempt",
+        "windowLabel": EXAM_WINDOW_LABEL,
         "recruitId": recruit_id,
         "courseId": course_id,
         "examId": homework.exam_id,
@@ -1275,39 +1398,191 @@ fn open_attempt_window(
         "name": homework.name,
     });
     let script = format!(
-        "window.__ZHS_EXAM_CTX__ = {};\n{}",
-        context_json, ATTEMPT_SCRIPT
+        "window.__ZHS_EXAM_CTX__ = {};\n{}\n{}",
+        context_json, DIAGNOSTIC_SCRIPT, ATTEMPT_SCRIPT
     );
     open_exam_window(app, url, "知到 · 网页作答（滑块验证后自动作答）", script)
 }
 
 /// Open the shared isolated WebView2 window (cookies injected from the Rust
 /// jar, temporary profile cleaned on destroy).
-fn open_exam_window(app: &AppHandle, url: Url, title: &str, script: String) -> Result<(), String> {
-    if let Some(existing) = app.get_webview_window(EXAM_WINDOW_LABEL) {
-        let _ = existing.close();
+/// File log for the exam window only. Never receives cookie values.
+fn exam_log(app: &AppHandle, message: impl AsRef<str>) {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let Some(path) = exam_log_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
-    let data_dir = exam_data_dir();
-    let injected = Arc::new(AtomicBool::new(false));
-    let injecting = Arc::new(AtomicBool::new(false));
-    let app_for_load = app.clone();
-    let injected_for_load = Arc::clone(&injected);
-    let injecting_for_load = Arc::clone(&injecting);
-    let nav_url_for_load = url.clone();
+    let line: String = message
+        .as_ref()
+        .chars()
+        .map(|ch| if ch == '\n' || ch == '\r' { ' ' } else { ch })
+        .take(600)
+        .collect();
+    let stamp = now_unix();
+    if let Ok(_guard) = LOCK.lock()
+        && let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+    {
+        let _ = writeln!(file, "[{stamp}] {line}");
+    }
+}
 
-    let builder = WebviewWindowBuilder::new(app, EXAM_WINDOW_LABEL, WebviewUrl::External(url))
+fn exam_log_path(app: &AppHandle) -> Option<PathBuf> {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(
+            PathBuf::from(appdata)
+                .join("hust-course-hack")
+                .join("logs")
+                .join("zhs-exam.log"),
+        );
+    }
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("logs").join("zhs-exam.log"))
+}
+
+/// Render the visible error panel inside the exam window (never leave it white).
+fn show_exam_error(window: &tauri::WebviewWindow, title: &str, detail: &str) {
+    let Ok(title) = serde_json::to_string(title) else {
+        return;
+    };
+    let Ok(detail) = serde_json::to_string(detail) else {
+        return;
+    };
+    let script = format!(
+        "if (window.__ZHS_SHOW_ERROR__) {{ window.__ZHS_SHOW_ERROR__({title}, {detail}); }}"
+    );
+    if let Err(error) = window.eval(script) {
+        log::warn!("zhihuishu exam window: cannot render the error panel: {error}");
+    }
+}
+
+async fn exam_sleep(ms: u64) {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_millis(ms));
+    })
+    .await;
+}
+
+/// Open the shared isolated WebView2 window: about:blank first, cookies injected
+/// into its own profile, then the exam page. Any failure is rendered in the
+/// window (plus `%APPDATA%\hust-course-hack\logs\zhs-exam.log`).
+fn open_exam_window(
+    app: &AppHandle,
+    exam_url: Url,
+    title: &str,
+    script: String,
+) -> Result<(), String> {
+    exam_log(app, format!("open request: {title} -> {exam_url}"));
+
+    // The fixed label must not be reused while its WebView2 is still alive:
+    // destroy the stale window and wait until Tauri really dropped it.
+    if let Some(existing) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+        exam_log(app, "destroying stale exam window before recreating");
+        let _ = existing.destroy();
+        for _ in 0..40 {
+            if app.get_webview_window(EXAM_WINDOW_LABEL).is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if app.get_webview_window(EXAM_WINDOW_LABEL).is_some() {
+            exam_log(
+                app,
+                "stale exam window still registered after destroy; recreating anyway",
+            );
+        }
+    }
+
+    let data_dir = exam_data_dir();
+    let blank = Url::parse("about:blank").map_err(|error| format!("无效的空白页地址：{error}"))?;
+    let injected = Arc::new(AtomicUsize::new(0));
+    let loaded = Arc::new(AtomicBool::new(false));
+    let app_nav = app.clone();
+    let app_load = app.clone();
+    let app_merge = app.clone();
+    let loaded_for_load = Arc::clone(&loaded);
+    let count_for_load = Arc::clone(&injected);
+    let expected_host = exam_url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let initial_script = format!("{DIAGNOSTIC_SCRIPT}\n{script}");
+    exam_log(
+        app,
+        format!(
+            "initialization scripts prepared: diagnostic + {} automation bytes",
+            script.len()
+        ),
+    );
+
+    let builder = WebviewWindowBuilder::new(app, EXAM_WINDOW_LABEL, WebviewUrl::External(blank))
         .title(title)
         .inner_size(1180.0, 900.0)
         .min_inner_size(900.0, 640.0)
         .data_directory(data_dir.clone())
-        .initialization_script(script)
-        .on_page_load(move |_window, payload| {
-            if payload.event() != PageLoadEvent::Finished {
+        .initialization_script(initial_script)
+        .on_navigation(move |url| {
+            exam_log(&app_nav, format!("navigation: {url}"));
+            true
+        })
+        .on_page_load(move |window, payload| {
+            let url = payload.url().clone();
+            let event = payload.event();
+            exam_log(&app_load, format!("page-load {event:?}: {url}"));
+            if event != PageLoadEvent::Finished || url.scheme() == "about" {
                 return;
             }
+            // The page did load, so the timeout watcher must stand down.
+            loaded_for_load.store(true, Ordering::SeqCst);
+
+            let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+            let path = url.path().to_ascii_lowercase();
+            if host.contains("login")
+                || host.starts_with("passport.")
+                || host.starts_with("pass.")
+                || path.contains("login")
+                || path.contains("passport")
+            {
+                exam_log(&app_load, format!("login redirect detected: {url}"));
+                show_exam_error(
+                    &window,
+                    "会话未注入/已过期，请重新登录知到",
+                    &format!(
+                        "页面被重定向到登录页：{url}\n\n请关闭本窗口，回主界面重新登录知到后再试；若刚刚登录过，请确认登录窗口已完成考试域名预热。"
+                    ),
+                );
+                return;
+            }
+            if host != expected_host {
+                exam_log(
+                    &app_load,
+                    format!("unexpected page host: {url} (expected {expected_host})"),
+                );
+                show_exam_error(
+                    &window,
+                    if host.ends_with("zhihuishu.com") {
+                        "会话未注入/已过期，请重新登录知到"
+                    } else {
+                        "考试页加载失败"
+                    },
+                    &format!(
+                        "页面跳转到了非预期地址：{url}\n期望主机：{expected_host}\n\n请关闭本窗口，回主界面重新登录知到后再试；可点「重新加载」重试。"
+                    ),
+                );
+                return;
+            }
+
+            // Expose the injected cookie count to the overlay scripts.
+            let count = count_for_load.load(Ordering::SeqCst);
+            let _ = window.eval(format!("window.__ZHS_INJECTED_COUNT__ = {count};"));
+
             // Merge cookies set by the exam host back into the main session, so a
             // manual login performed inside this window also fixes the API client.
-            let app_for_cookies = app_for_load.clone();
+            let app_for_cookies = app_merge.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = tauri::async_runtime::spawn_blocking(move || {
                     if let Some(window) = app_for_cookies.get_webview_window(EXAM_WINDOW_LABEL)
@@ -1322,70 +1597,118 @@ fn open_exam_window(app: &AppHandle, url: Url, title: &str, script: String) -> R
                 })
                 .await;
             });
-            if injected_for_load.load(Ordering::SeqCst) {
-                return;
-            }
-            if injecting_for_load.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            let app = app_for_load.clone();
-            let injected = Arc::clone(&injected_for_load);
-            let injecting = Arc::clone(&injecting_for_load);
-            let nav_url = nav_url_for_load.clone();
-            tauri::async_runtime::spawn(async move {
-                let cookies = app.state::<AppState>().zhs_cookies();
-                if cookies.is_empty() {
-                    log::warn!(
-                        "zhihuishu exam window: no session cookies in state; manual login required"
-                    );
-                    injecting.store(false, Ordering::SeqCst);
-                    return;
-                }
-                let Some(window) = app.get_webview_window(EXAM_WINDOW_LABEL) else {
-                    injecting.store(false, Ordering::SeqCst);
-                    return;
-                };
-                let nav_window = window.clone();
-                let injecting_for_closure = Arc::clone(&injecting);
-                let result = window.with_webview(move |webview| {
-                    match inject_webview2_cookies(&webview, &cookies) {
-                        Ok(()) => {
-                            injected.store(true, Ordering::SeqCst);
-                            log::info!("zhihuishu exam window: session cookies injected");
-                            if let Err(error) = nav_window.navigate(nav_url) {
-                                log::warn!("zhihuishu exam window navigation failed: {error}");
-                            }
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "zhihuishu exam window cookie injection failed: {error:#}; \
-                                 falling back to manual login inside the window"
-                            );
-                        }
-                    }
-                    injecting_for_closure.store(false, Ordering::SeqCst);
-                });
-                if let Err(error) = result {
-                    log::warn!("zhihuishu exam window with_webview failed: {error}");
-                    injecting.store(false, Ordering::SeqCst);
-                }
-            });
         });
 
     let window = builder.build().map_err(|error| {
         cleanup_exam_dir(data_dir.clone());
+        exam_log(app, format!("window build failed: {error}"));
         format!("打开考试窗口失败：{error}")
     })?;
 
+    let app_destroy = app.clone();
+    let data_dir_for_destroy = data_dir.clone();
     window.on_window_event(move |event| {
-        if !matches!(event, WindowEvent::Destroyed) {
+        if matches!(event, WindowEvent::Destroyed) {
+            exam_log(&app_destroy, "window destroyed (temporary profile cleaned)");
+            cleanup_exam_dir(data_dir_for_destroy.clone());
+        }
+    });
+    let _ = window.set_focus();
+
+    // Inject the session cookies into the window's own profile BEFORE the first
+    // navigation, then navigate, then enforce a page-load timeout.
+    let app_inject = app.clone();
+    let injected_count = Arc::clone(&injected);
+    let loaded_for_watch = Arc::clone(&loaded);
+    let nav_url = exam_url.clone();
+    tauri::async_runtime::spawn(async move {
+        exam_sleep(180).await;
+        let cookies = app_inject.state::<AppState>().zhs_cookies();
+        let cookie_names = cookies
+            .iter()
+            .map(|cookie| cookie.name.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        exam_log(
+            &app_inject,
+            format!(
+                "cookie injection start: {} records (names: {cookie_names})",
+                cookies.len()
+            ),
+        );
+        let Some(window) = app_inject.get_webview_window(EXAM_WINDOW_LABEL) else {
+            exam_log(&app_inject, "window disappeared before cookie injection");
+            return;
+        };
+        // WebView2 may not expose its core immediately after window creation;
+        // retry a few times before navigating anyway (the error panel shows if
+        // the session really is missing).
+        let mut injected_ok = false;
+        for attempt in 0..4 {
+            if attempt > 0 {
+                exam_sleep(250).await;
+            }
+            let app_for_closure = app_inject.clone();
+            let holder = Arc::clone(&injected_count);
+            let cookies_for_closure = cookies.clone();
+            let result = window.with_webview(move |webview| {
+                match inject_webview2_cookies(&webview, &cookies_for_closure) {
+                    Ok(count) => {
+                        holder.store(count, Ordering::SeqCst);
+                        exam_log(
+                            &app_for_closure,
+                            format!("cookie injection ok: {count} cookies"),
+                        );
+                    }
+                    Err(error) => {
+                        exam_log(
+                            &app_for_closure,
+                            format!("cookie injection attempt {attempt} failed: {error:#}"),
+                        );
+                    }
+                }
+            });
+            if let Err(error) = result {
+                exam_log(&app_inject, format!("with_webview failed: {error}"));
+            }
+            if injected_count.load(Ordering::SeqCst) > 0 {
+                injected_ok = true;
+                break;
+            }
+        }
+        if !injected_ok {
+            exam_log(
+                &app_inject,
+                "cookie injection did not succeed; navigating anyway (login redirect will show the error panel)",
+            );
+        }
+        match window.navigate(nav_url.clone()) {
+            Ok(()) => exam_log(&app_inject, format!("navigation requested: {nav_url}")),
+            Err(error) => {
+                exam_log(&app_inject, format!("navigate failed: {error}"));
+                show_exam_error(
+                    &window,
+                    "考试页加载失败",
+                    &format!("无法打开考试页：{nav_url}\n\n错误：{error}"),
+                );
+            }
+        }
+
+        exam_sleep(EXAM_PAGE_LOAD_TIMEOUT.as_millis() as u64).await;
+        if loaded_for_watch.load(Ordering::SeqCst) {
             return;
         }
-        log::info!("zhihuishu exam window destroyed");
-        cleanup_exam_dir(data_dir.clone());
+        exam_log(&app_inject, format!("page-load timeout for {nav_url}"));
+        show_exam_error(
+            &window,
+            "考试页加载超时",
+            &format!(
+                "{:?} 内没有收到考试页加载完成事件。\n\n目标地址：{nav_url}\n\n可能原因：网络问题、登录会话未注入、或页面被重定向。\n可点「重新加载」，或关闭窗口后重新登录知到。",
+                EXAM_PAGE_LOAD_TIMEOUT
+            ),
+        );
     });
 
-    let _ = window.set_focus();
     Ok(())
 }
 /// Build the check-page URL for one homework entry.
@@ -1487,7 +1810,7 @@ fn read_exam_window_cookies(window: &tauri::WebviewWindow) -> anyhow::Result<Vec
 fn inject_webview2_cookies(
     webview: &tauri::webview::PlatformWebview,
     cookies: &[CookieRecord],
-) -> Result<()> {
+) -> Result<usize> {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
     use windows::core::{HSTRING, Interface};
 
@@ -1522,14 +1845,14 @@ fn inject_webview2_cookies(
         }
         unsafe { manager.AddOrUpdateCookie(&item) }.context("AddOrUpdateCookie failed")?;
     }
-    Ok(())
+    Ok(cookies.len())
 }
 
 #[cfg(not(windows))]
 fn inject_webview2_cookies(
     _webview: &tauri::webview::PlatformWebview,
     _cookies: &[CookieRecord],
-) -> Result<()> {
+) -> Result<usize> {
     Err(anyhow::anyhow!(
         "cookie injection is only implemented on Windows"
     ))

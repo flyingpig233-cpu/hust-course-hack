@@ -150,6 +150,45 @@
     logNode.scrollTop = logNode.scrollHeight;
   }
 
+  function hideLoadingPanel() {
+    try {
+      if (window.__ZHS_HIDE_LOADING__) window.__ZHS_HIDE_LOADING__();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function injectedCookieCount() {
+    var count = Number(window.__ZHS_INJECTED_COUNT__ || 0);
+    return Number.isFinite(count) ? count : 0;
+  }
+
+  /** SPA crashed / no paper: show the diagnostic panel with the last log lines. */
+  function showCrashPanel(reason) {
+    var recent = '';
+    if (logNode) {
+      recent = Array.from(logNode.children)
+        .slice(-20)
+        .map(function (node) {
+          return node.textContent || '';
+        })
+        .join('\n');
+    }
+    var detail =
+      reason +
+      '\n\n目标地址：' +
+      String(location.href) +
+      '\n已注入 Cookie ' +
+      injectedCookieCount() +
+      ' 条；最近日志：\n' +
+      (recent || '（暂无）');
+    try {
+      if (window.__ZHS_SHOW_ERROR__) window.__ZHS_SHOW_ERROR__('未能读取试卷', detail);
+    } catch (e) {
+      setStatus('未能读取试卷：' + reason);
+    }
+  }
+
   // ---- DOM helpers -------------------------------------------------------
 
   var QUESTION_SELECTORS = [
@@ -394,7 +433,13 @@
   async function loadPlan() {
     if (A.planned || A.running) return;
     ensureOverlay();
-    setStatus('等待试卷加载（若出现滑块验证请先手动完成）…');
+    hideLoadingPanel();
+    setStatus(
+      '已注入 Cookie ' +
+        injectedCookieCount() +
+        ' 条。等待试卷加载（若出现滑块验证请先手动完成）…',
+    );
+    log('已注入 Cookie ' + injectedCookieCount() + ' 条');
     var deadline = Date.now() + 180000;
     var questions = [];
     while (Date.now() < deadline) {
@@ -405,6 +450,7 @@
     }
     if (questions.length === 0) {
       setStatus('未能读取到题目：请确认已通过滑块验证并进入试卷页，然后刷新本窗口。');
+      showCrashPanel('页面已加载，但 180 秒内没有读到任何题目（可能是 SPA 崩溃、会话失效或页面结构变化）。');
       return;
     }
     A.questions = questions;
@@ -709,11 +755,18 @@
   function boot() {
     ensureOverlay();
     if (!/dohomework/i.test(String(location.hash || ''))) {
-      setStatus('等待进入「网页作答」页…');
+      // `about:blank` while the Rust side injects cookies and navigates: keep
+      // the loading panel up instead of showing a blank document.
+      setStatus('正在加载考试页（Cookie 注入后自动跳转）…');
       setTimeout(boot, 2500);
       return;
     }
-    setStatus('已进入试卷页。若出现滑块验证，请手动完成；完成后会自动读取题目。');
+    hideLoadingPanel();
+    setStatus(
+      '已注入 Cookie ' +
+        injectedCookieCount() +
+        ' 条。已进入试卷页，若出现滑块验证请手动完成；完成后会自动读取题目。',
+    );
     setTimeout(function () {
       void loadPlan();
     }, 3000);
