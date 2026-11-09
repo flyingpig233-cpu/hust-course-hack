@@ -211,7 +211,11 @@ impl MockServer {
             online: base.clone(),
             stuonline: base.clone(),
             online_service: base.clone(),
-            im: base,
+            im: base.clone(),
+            school_platform: base.clone(),
+            hike: base.clone(),
+            b2c: base.clone(),
+            polymas: base,
         };
         ZhsClient::with_cookie_jar_and_endpoints(Arc::new(Jar::default()), endpoints)
             .expect("build mock client")

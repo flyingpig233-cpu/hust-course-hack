@@ -12,7 +12,7 @@
 //! fallback the CLI and GUI use when [`ZhsClient::list_courses`] is unavailable.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt, fs,
     path::Path,
     sync::{Arc, Mutex},
@@ -23,26 +23,29 @@ use anyhow::{Context, Result, bail};
 use reqwest::{
     Client, StatusCode,
     cookie::{CookieStore, Jar},
-    header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT},
+    header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT},
 };
 use serde_json::{Value, json};
 use url::Url;
 
 use super::{
-    APPCOMM_USER_BASE, COURSE_LIST_PATH, IM_BASE, IM_LIVE_VIDEOS_PATH, LIVE_BASE, LIVE_REFERER,
-    LOGIN_USER_INFO_PATH, MEET_EXCEPTION_PATH, MEET_HISTORY_PATH, MEET_LIST_FALLBACK_PATH,
-    MEET_LIST_PATH, MEET_SUBMIT_PATH, MODULE_COURSE_LIST, MODULE_MEET, MODULE_VIDEO, ONLINE_BASE,
-    ONLINE_REFERER, ONLINE_SERVICE_BASE, ONLINE_SERVICE_REFERER, PRELEARNING_NOTE_PATH,
-    QUERY_COURSE_PATH, QUERY_STUY_INFO_PATH, SAVE_INTERVAL_PATH, STUDY_BASE, STUDY_REFERER,
-    STUONLINE_BASE, VIDEO_EXCEPTION_PATH, VIDEO_LIST_PATH, VIDEO_MODULE_KEY_FALLBACK,
-    XOR_KEY_COURSE, XOR_KEY_MEET, ZHS_USER_AGENT,
+    AI_COURSE_LIST_PATH, APPCOMM_USER_BASE, B2C_BASE, B2C_COURSE_LIST_PATH, COURSE_LIST_PATH,
+    HIKE_COURSE_LIST_PATH, HIKE_TEACHING_BASE, IM_BASE, IM_LIVE_VIDEOS_PATH, LIVE_BASE,
+    LIVE_REFERER, LOGIN_USER_INFO_PATH, MEET_EXCEPTION_PATH, MEET_HISTORY_PATH,
+    MEET_LIST_FALLBACK_PATH, MEET_LIST_PATH, MEET_SUBMIT_PATH, MICRO_COURSE_LIST_PATH,
+    MODULE_COURSE_LIST, MODULE_MEET, MODULE_VIDEO, ONLINE_BASE, ONLINE_REFERER,
+    ONLINE_SERVICE_BASE, ONLINE_SERVICE_REFERER, POLYMAS_BASE, POLYMAS_COURSE_LIST_PATH,
+    PRELEARNING_NOTE_PATH, QUERY_COURSE_PATH, QUERY_STUY_INFO_PATH, SAVE_INTERVAL_PATH,
+    SCHOOL_COURSE_LIST_PATH, SCHOOL_PLATFORM_BASE, SELECT_COURSE_LIST_PATH, STUDY_BASE,
+    STUDY_REFERER, STUONLINE_BASE, VIDEO_EXCEPTION_PATH, VIDEO_LIST_PATH,
+    VIDEO_MODULE_KEY_FALLBACK, XOR_KEY_COURSE, XOR_KEY_MEET, ZHS_USER_AGENT,
 };
 use super::{
     crypto::{self, ModuleKeyCache},
     meet::{self, ZhsMeetWatchOptions},
     models::{
-        ZhsCourse, ZhsCourseDetail, ZhsExceptionStatus, ZhsMeet, ZhsMeetProgress, ZhsMeetVideo,
-        ZhsPrelearningNote, ZhsUser, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions,
+        ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus, ZhsMeet, ZhsMeetProgress,
+        ZhsMeetVideo, ZhsPrelearningNote, ZhsUser, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions,
         ZhsWatchOutcome,
     },
     watch,
@@ -135,6 +138,14 @@ pub struct ZhsEndpoints {
     pub online_service: String,
     /// `im.zhihuishu.com` (replay duration/video fallback).
     pub im: String,
+    /// `school-platform.zhihuishu.com` (in-school smart course list).
+    pub school_platform: String,
+    /// `hike-teaching-api.zhihuishu.com` (online course list, best effort).
+    pub hike: String,
+    /// `b2cpush.zhihuishu.com` (B2C course list, best effort).
+    pub b2c: String,
+    /// `cloudapi.polymas.com` (POLYMAS 智能体课 list, best effort).
+    pub polymas: String,
 }
 
 impl Default for ZhsEndpoints {
@@ -147,6 +158,10 @@ impl Default for ZhsEndpoints {
             stuonline: STUONLINE_BASE.to_string(),
             online_service: ONLINE_SERVICE_BASE.to_string(),
             im: IM_BASE.to_string(),
+            school_platform: SCHOOL_PLATFORM_BASE.to_string(),
+            hike: HIKE_TEACHING_BASE.to_string(),
+            b2c: B2C_BASE.to_string(),
+            polymas: POLYMAS_BASE.to_string(),
         }
     }
 }
@@ -431,6 +446,7 @@ fn parse_course_list(value: &Value) -> Vec<ZhsCourse> {
                 .map(|source| get_str(source, &["secret", "recruitAndCourseId"]))
                 .find(|text| !text.is_empty());
             Some(ZhsCourse {
+                kind: ZhsCourseKind::Shared,
                 recruit_id,
                 course_id,
                 class_id: pick(&["classId", "class_id", "teachingClassId"]),
@@ -438,6 +454,7 @@ fn parse_course_list(value: &Value) -> Vec<ZhsCourse> {
                 name: text(&["courseName", "name", "title"]),
                 teacher: text(&["teacherName", "teacher", "speakerUserName"]),
                 secret,
+                external_id: None,
                 is_apply: get_i64(item, &["isApply", "is_apply"]),
                 course_type: Some(text(&["courseType", "courseTypeName", "type"]))
                     .filter(|t| !t.is_empty()),
@@ -464,6 +481,233 @@ fn parse_course_list_total(value: &Value) -> Option<u64> {
         .or_else(|| value.get("totalCount"))
         .or_else(|| value.get("total"))
         .and_then(Value::as_u64)
+}
+
+/// Candidate item arrays used by the non-shared course-list endpoints.
+///
+/// The four sources use different envelopes (`rt[]`, `result.list[]`,
+/// `rt.pageList[]`, `rt.dataList[]`, `result.courseOpenDtos[]`), so keep this
+/// tolerant instead of writing one parser per endpoint.
+fn flexible_course_items(value: &Value) -> &Vec<Value> {
+    value
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("rt").and_then(Value::as_array))
+        .or_else(|| {
+            get_array(
+                value,
+                &[
+                    "dataList",
+                    "pageList",
+                    "courseOpenDtos",
+                    "list",
+                    "courseList",
+                    "rows",
+                ],
+            )
+        })
+        .or_else(|| value.pointer("/result/list").and_then(Value::as_array))
+        .or_else(|| {
+            value.get("result").and_then(|result| {
+                get_array(
+                    result,
+                    &["list", "courseOpenDtos", "courseList", "rows", "dataList"],
+                )
+            })
+        })
+        .or_else(|| value.get("result").and_then(Value::as_array))
+        .or_else(|| {
+            value
+                .get("rt")
+                .and_then(|rt| get_array(rt, &["dataList", "pageList", "list"]))
+        })
+        .unwrap_or(&EMPTY_ARRAY)
+}
+
+/// Parse a non-shared course list, preserving the source kind.
+fn parse_flexible_course_list(value: &Value, kind: ZhsCourseKind) -> Vec<ZhsCourse> {
+    flexible_course_items(value)
+        .iter()
+        .filter_map(|item| parse_flexible_course(item, kind))
+        .collect()
+}
+
+/// Parse one AI/school/micro/B2C course item.
+fn parse_flexible_course(item: &Value, kind: ZhsCourseKind) -> Option<ZhsCourse> {
+    let nested = ["courseInfo", "course", "recruitCourseDto"]
+        .iter()
+        .filter_map(|key| item.get(*key))
+        .find(|value| value.is_object());
+    let sources: Vec<&Value> = nested.into_iter().chain(std::iter::once(item)).collect();
+    let pick =
+        |keys: &[&str]| -> Option<u64> { sources.iter().find_map(|source| get_u64(source, keys)) };
+    let text = |keys: &[&str]| -> String {
+        sources
+            .iter()
+            .map(|source| get_str(source, keys))
+            .find(|text| !text.is_empty())
+            .unwrap_or_default()
+    };
+
+    let course_id = pick(&["courseId", "course_id", "id"])?;
+    Some(ZhsCourse {
+        kind,
+        recruit_id: pick(&["recruitId", "recruit_id"]).unwrap_or(0),
+        course_id,
+        class_id: pick(&["classId", "class_id", "teachingClassId"]),
+        school_id: pick(&["schoolId", "school_id"]),
+        name: text(&["courseName", "name", "title"]),
+        teacher: text(&[
+            "teacherUserName",
+            "teacherName",
+            "teacher",
+            "speakerUserName",
+        ]),
+        secret: sources
+            .iter()
+            .map(|source| get_str(source, &["secret", "recruitAndCourseId"]))
+            .find(|text| !text.is_empty()),
+        external_id: None,
+        is_apply: get_i64(item, &["isApply", "is_apply"]),
+        course_type: Some(text(&["courseType", "courseTypeName", "type"]))
+            .filter(|value| !value.is_empty()),
+        progress: item
+            .get("progress")
+            .or_else(|| item.get("studyProgress"))
+            .and_then(parse_percent),
+        studied_lesson_count: get_u64(item, &["studiedLessonCount", "finishedLessonCount"])
+            .map(|count| count as usize),
+        total_lesson_count: get_u64(item, &["totalLessonCount", "lessonCount"])
+            .map(|count| count as usize),
+        status: get_i64(item, &["status", "courseStatus"]),
+    })
+}
+
+/// Parse the AI 智课 list response (`rt: [...]`, measured 2026-11-09).
+fn parse_ai_course_list(value: &Value) -> Vec<ZhsCourse> {
+    parse_flexible_course_list(value, ZhsCourseKind::Ai)
+}
+
+/// Parse the in-school smart-course response (`result.list[]`).
+fn parse_school_course_list(value: &Value) -> Vec<ZhsCourse> {
+    parse_flexible_course_list(value, ZhsCourseKind::School)
+}
+
+/// Parse the micro/select/hike/B2C best-effort lists.
+fn parse_other_course_list(value: &Value) -> Vec<ZhsCourse> {
+    parse_flexible_course_list(value, ZhsCourseKind::Other)
+}
+
+/// Parse the POLYMAS 智能体课 list (`data.list[]`).
+///
+/// Measured 2026-11-08: the ids are opaque strings (`courseId:
+/// "boD7Wgjg25uRom3vjDqV"`), `recruitId`/`classId` are null and the teachers are
+/// a `teachers[]` array, so this cannot reuse [`parse_flexible_course`].
+fn parse_polymas_course_list(value: &Value) -> Vec<ZhsCourse> {
+    let items = value
+        .pointer("/data/list")
+        .and_then(Value::as_array)
+        .unwrap_or(&EMPTY_ARRAY);
+    items
+        .iter()
+        .filter_map(|item| {
+            let external_id = get_str(item, &["courseId"]);
+            if external_id.is_empty() {
+                return None;
+            }
+            let teacher = get_array(item, &["teachers"])
+                .map(|teachers| {
+                    let names: Vec<String> = teachers
+                        .iter()
+                        .map(|teacher| get_str(teacher, &["teacherName", "name"]))
+                        .filter(|name| !name.is_empty())
+                        .collect();
+                    if names.len() > 3 {
+                        format!("{} 等 {} 人", names[..3].join("、"), names.len())
+                    } else {
+                        names.join("、")
+                    }
+                })
+                .filter(|names| !names.is_empty())
+                .unwrap_or_else(|| get_str(item, &["teacherName"]));
+            Some(ZhsCourse {
+                kind: ZhsCourseKind::Ai,
+                external_id: Some(external_id.clone()),
+                // POLYMAS ids are not numeric; keep `course_id` at 0 and use
+                // `external_id` for display.
+                course_id: external_id.parse::<u64>().unwrap_or(0),
+                name: get_str(item, &["courseName", "name"]),
+                teacher,
+                course_type: Some(get_str(item, &["courseType"])).filter(|value| !value.is_empty()),
+                status: get_i64(item, &["status", "courseStatus"]),
+                ..ZhsCourse::default()
+            })
+        })
+        .collect()
+}
+
+/// Stable de-duplication key for a course.
+fn course_key(course: &ZhsCourse) -> String {
+    if let Some(external_id) = course.external_id.as_ref() {
+        format!("external:{external_id}")
+    } else {
+        format!("{}:{}", course.recruit_id, course.course_id)
+    }
+}
+
+/// Merge courses from several sources, keeping the first occurrence of each
+/// `(recruitId, courseId)` pair (or opaque `external_id`). The shared list is
+/// pushed first, so a course appearing in both shared and optional sources keeps
+/// `kind = Shared`.
+fn dedupe_courses(courses: impl IntoIterator<Item = ZhsCourse>) -> Vec<ZhsCourse> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for course in courses {
+        if seen.insert(course_key(&course)) {
+            out.push(course);
+        }
+    }
+    out
+}
+
+/// Current UTC timestamp in the ISO-8601 millisecond shape used by
+/// `school-platform` and `b2cpush` (`2026-11-08T14:07:22.347Z`).
+fn iso_timestamp_millis() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_seconds = now.as_secs();
+    let millis = now.subsec_millis();
+    let days = (total_seconds / 86_400) as i64;
+    let seconds_of_day = total_seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
+        seconds_of_day / 3_600,
+        (seconds_of_day % 3_600) / 60,
+        seconds_of_day % 60,
+    )
+}
+
+/// Convert days since the Unix epoch to a civil `(year, month, day)`.
+///
+/// Howard Hinnant's `civil_from_days` algorithm; used instead of pulling in a
+/// date-time crate just for the ISO query parameter.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month as u32, day as u32)
 }
 
 /// Payload of one measured shared-course list page.
@@ -786,7 +1030,8 @@ pub struct ZhsClient {
     jar: Arc<Jar>,
     keys: Arc<ModuleKeyCache>,
     user: Arc<Mutex<Option<ZhsUser>>>,
-    endpoints: ZhsEndpoints,
+    // Boxed to keep `ZhsClient` (and the GUI session enum) small.
+    endpoints: Box<ZhsEndpoints>,
 }
 
 impl ZhsClient {
@@ -827,13 +1072,13 @@ impl ZhsClient {
             jar,
             keys: Arc::new(ModuleKeyCache::default()),
             user: Arc::new(Mutex::new(None)),
-            endpoints,
+            endpoints: Box::new(endpoints),
         })
     }
 
     /// Endpoints this client talks to (production hosts by default).
     pub fn endpoints(&self) -> &ZhsEndpoints {
-        &self.endpoints
+        self.endpoints.as_ref()
     }
 
     /// Shared HTTP client (used by the exam sub-client, which adds its own API
@@ -930,6 +1175,28 @@ impl ZhsClient {
             }
         }
         None
+    }
+
+    /// Cookies required by the POLYMAS 智能体课 endpoint.
+    ///
+    /// That endpoint is on `cloudapi.polymas.com`, which does not receive the
+    /// `.zhihuishu.com` cookie jar. Measured 2026-11-08: forwarding just the CAS
+    /// `jt-cas` + `o_session_id` pair is enough, so never send the whole jar to
+    /// a different registrable domain.
+    fn polymas_cookie_header(&self) -> Option<String> {
+        let url = Url::parse("https://www.zhihuishu.com/").ok()?;
+        let header = self.jar.cookies(&url)?;
+        let text = header.to_str().ok()?;
+        let mut pairs = Vec::new();
+        for part in text.split(';') {
+            let Some((name, value)) = part.trim().split_once('=') else {
+                continue;
+            };
+            if matches!(name, "jt-cas" | "o_session_id") {
+                pairs.push(format!("{name}={value}"));
+            }
+        }
+        (!pairs.is_empty()).then(|| pairs.join("; "))
     }
 
     /// Parse the `CASLOGC` cookie into a [`ZhsUser`] skeleton.
@@ -1033,6 +1300,252 @@ impl ZhsClient {
                 "知到课程列表返回为空或格式未知；请改用学习页 URL 或 recruitAndCourseId 指定课程"
             );
         }
+        Ok(courses)
+    }
+
+    /// Best-effort combined course list across every known course type.
+    ///
+    /// Sources are merged in this order and de-duplicated by
+    /// `(recruitId, courseId)`: 共享课 → AI 智课 → 校内智慧课程 → 其他
+    /// (微课/选课/hike/B2C). A failing source is skipped with a log line instead
+    /// of failing the whole listing, because the optional sources are still
+    /// unverified for most accounts.
+    pub async fn list_all_courses(&self) -> Vec<ZhsCourse> {
+        let mut courses = Vec::new();
+        match self.list_courses().await {
+            Ok(shared) => courses.extend(shared),
+            Err(error) => log::warn!("获取知到共享课列表失败（已跳过）：{error:#}"),
+        }
+        match self.list_ai_courses().await {
+            Ok(ai) => courses.extend(ai),
+            Err(error) => log::debug!("获取知到 AI 智课列表失败（已跳过）：{error:#}"),
+        }
+        match self.list_school_courses().await {
+            Ok(school) => courses.extend(school),
+            Err(error) => log::debug!("获取知到校内智慧课程失败（已跳过）：{error:#}"),
+        }
+        match self.list_other_courses().await {
+            Ok(other) => courses.extend(other),
+            Err(error) => log::debug!("获取知到其他类型课程失败（已跳过）：{error:#}"),
+        }
+        dedupe_courses(courses)
+    }
+
+    /// AI 智课 / 智慧课程 list (`student/queryStudentAICourseList`).
+    ///
+    /// Measured 2026-11-09: AES module **13**, plaintext `{"status":3}` (no
+    /// pagination), outer `date` field, response `rt: [...]`.
+    async fn list_ai_courses(&self) -> Result<Vec<ZhsCourse>> {
+        let mut courses = Vec::new();
+        let mut ai_error = None;
+        match self
+            .post_secret_dated(
+                &self.endpoints.online_service,
+                AI_COURSE_LIST_PATH,
+                MODULE_COURSE_LIST,
+                &json!({"status": 3}),
+                ONLINE_SERVICE_REFERER,
+            )
+            .await
+        {
+            Ok(value) => courses.extend(parse_ai_course_list(&value)),
+            Err(error) => ai_error = Some(error.context("AI 智课列表接口不可用")),
+        }
+
+        // POLYMAS 智能体课 (大学生批判性思维) use a separate plain-JSON endpoint
+        // and opaque ids; list them under the same AI kind.
+        if let Ok(user) = self.user_from_cookie()
+            && !user.uuid.is_empty()
+            && let Some(cookie_header) = self.polymas_cookie_header()
+        {
+            let body = json!({
+                "term": "",
+                "status": 2,
+                "keyword": "",
+                "crateCourseType": "",
+                "page": 1,
+                "size": 5,
+                "allCourse": false,
+                "uuid": user.uuid,
+                "date": iso_timestamp_millis(),
+            });
+            let url = format!("{}{}", self.endpoints.polymas, POLYMAS_COURSE_LIST_PATH);
+            match self
+                .http
+                .post(&url)
+                .header(CONTENT_TYPE, "application/json;charset=UTF-8")
+                .header(COOKIE, cookie_header)
+                .header(REFERER, ONLINE_SERVICE_REFERER)
+                .header(ORIGIN, origin_of(ONLINE_SERVICE_REFERER))
+                .header(USER_AGENT, ZHS_USER_AGENT)
+                .json(&body)
+                .send()
+                .await
+                .map_err(strip_error_url)
+            {
+                Ok(response) => {
+                    match self
+                        .read_json_response(POLYMAS_COURSE_LIST_PATH, response)
+                        .await
+                    {
+                        Ok(value) => courses.extend(parse_polymas_course_list(&value)),
+                        Err(error) => log::debug!("POLYMAS 课程列表解析失败（已跳过）：{error:#}"),
+                    }
+                }
+                Err(error) => log::debug!("POLYMAS 课程列表请求失败（已跳过）：{error:#}"),
+            }
+        } else {
+            log::debug!("POLYMAS 课程列表缺少 jt-cas/o_session_id（已跳过）");
+        }
+        match ai_error {
+            Some(error) if courses.is_empty() => Err(error),
+            _ => Ok(courses),
+        }
+    }
+
+    /// In-school smart-course list (`school-platform` plain GET).
+    ///
+    /// The measured account has no such course, but the endpoint is implemented
+    /// page-by-page so an account that does returns them.
+    async fn list_school_courses(&self) -> Result<Vec<ZhsCourse>> {
+        let user = self.user_from_cookie()?;
+        let Some(school_id) = user.school_id else {
+            return Ok(Vec::new());
+        };
+        if user.uuid.is_empty() {
+            return Ok(Vec::new());
+        }
+        const PAGE_LIMIT: u64 = 50;
+        let url = format!(
+            "{}{}",
+            self.endpoints.school_platform, SCHOOL_COURSE_LIST_PATH
+        );
+        let mut courses = Vec::new();
+        for page_no in 1..=20u64 {
+            let date = iso_timestamp_millis();
+            let response = self
+                .http
+                .get(&url)
+                .query(&[
+                    ("pageNo", page_no.to_string()),
+                    ("limit", PAGE_LIMIT.to_string()),
+                    ("schoolId", school_id.to_string()),
+                    ("uuid", user.uuid.clone()),
+                    ("date", date),
+                ])
+                .header(REFERER, ONLINE_SERVICE_REFERER)
+                .header(USER_AGENT, ZHS_USER_AGENT)
+                .send()
+                .await
+                .map_err(strip_error_url)
+                .with_context(|| format!("请求 {SCHOOL_COURSE_LIST_PATH} 失败"))?;
+            let value = self
+                .read_json_response(SCHOOL_COURSE_LIST_PATH, response)
+                .await?;
+            if value.get("success").and_then(Value::as_bool) == Some(false)
+                || value
+                    .get("errorCode")
+                    .and_then(as_i64)
+                    .is_some_and(|code| code != 0)
+            {
+                bail!("校内智慧课程接口返回错误");
+            }
+            let page = parse_school_course_list(&value);
+            let fetched = page.len();
+            courses.extend(page);
+            if fetched < PAGE_LIMIT as usize || page_no == 20 {
+                break;
+            }
+        }
+        Ok(courses)
+    }
+
+    /// Micro / elective / online / B2C best-effort lists.
+    ///
+    /// All four were empty for the measured account; a failing endpoint is
+    /// debug-logged and skipped so it can never break `zhs courses`.
+    async fn list_other_courses(&self) -> Result<Vec<ZhsCourse>> {
+        let mut courses = Vec::new();
+
+        match self
+            .post_secret_dated(
+                &self.endpoints.online_service,
+                MICRO_COURSE_LIST_PATH,
+                MODULE_COURSE_LIST,
+                &json!({"pageNo": 1, "pageSize": 5}),
+                ONLINE_SERVICE_REFERER,
+            )
+            .await
+        {
+            Ok(value) => courses.extend(parse_other_course_list(&value)),
+            Err(error) => log::debug!("微课列表不可用（已跳过）：{error:#}"),
+        }
+
+        let user = self.user_from_cookie().ok();
+        if let Some(school_id) = user.as_ref().and_then(|user| user.school_id) {
+            match self
+                .get_secret_dated(
+                    &self.endpoints.online_service,
+                    SELECT_COURSE_LIST_PATH,
+                    MODULE_COURSE_LIST,
+                    &json!({"schoolId": school_id}),
+                    ONLINE_SERVICE_REFERER,
+                )
+                .await
+            {
+                Ok(value) => courses.extend(parse_other_course_list(&value)),
+                Err(error) => log::debug!("选课列表不可用（已跳过）：{error:#}"),
+            }
+        }
+
+        match self
+            .get_secret_dated(
+                &self.endpoints.hike,
+                HIKE_COURSE_LIST_PATH,
+                MODULE_COURSE_LIST,
+                &json!({"pageNo": 1, "pageSize": 5}),
+                ONLINE_SERVICE_REFERER,
+            )
+            .await
+        {
+            Ok(value) => courses.extend(parse_other_course_list(&value)),
+            Err(error) => log::debug!("在线课程列表不可用（已跳过）：{error:#}"),
+        }
+
+        if let Some(user) = user.as_ref().filter(|user| !user.uuid.is_empty()) {
+            let date = iso_timestamp_millis();
+            let body = form_encode(&[
+                ("pageNum", "1"),
+                ("pageSize", "5"),
+                ("uuid", user.uuid.as_str()),
+                ("date", date.as_str()),
+            ]);
+            let url = format!("{}{}", self.endpoints.b2c, B2C_COURSE_LIST_PATH);
+            match self
+                .http
+                .post(&url)
+                .header(
+                    CONTENT_TYPE,
+                    "application/x-www-form-urlencoded; charset=UTF-8",
+                )
+                .header(REFERER, ONLINE_SERVICE_REFERER)
+                .header(USER_AGENT, ZHS_USER_AGENT)
+                .body(body)
+                .send()
+                .await
+                .map_err(strip_error_url)
+            {
+                Ok(response) => match self
+                    .read_json_response(B2C_COURSE_LIST_PATH, response)
+                    .await
+                {
+                    Ok(value) => courses.extend(parse_other_course_list(&value)),
+                    Err(error) => log::debug!("B2C 课程列表不可用（已跳过）：{error:#}"),
+                },
+                Err(error) => log::debug!("B2C 课程列表请求失败（已跳过）：{error:#}"),
+            }
+        }
+
         Ok(courses)
     }
 
@@ -1728,6 +2241,37 @@ impl ZhsClient {
             ("dateFormate", date_formate.as_str()),
             ("_", date_formate.as_str()),
         ]);
+        let url = format!("{base}{path}?{query}");
+        let response = self
+            .http
+            .get(&url)
+            .header(REFERER, referer)
+            .header(ORIGIN, origin_of(referer))
+            .header(USER_AGENT, ZHS_USER_AGENT)
+            .send()
+            .await
+            .map_err(strip_error_url)
+            .with_context(|| format!("request to {path} failed"))?;
+        self.read_json_response(path, response).await
+    }
+
+    /// GET a `secretStr` payload whose outer timestamp field is `date`.
+    ///
+    /// Measured on `querySelectCourseInfo` / `getCourseList`: the plaintext is
+    /// encrypted exactly as given and the URL carries `secretStr` + `date`, not
+    /// `dateFormate`.
+    async fn get_secret_dated(
+        &self,
+        base: &str,
+        path: &str,
+        module: u32,
+        payload: &Value,
+        referer: &str,
+    ) -> Result<Value> {
+        let key = self.module_key(module).await?;
+        let secret = crypto::encrypt_secret_json(&key, payload)?;
+        let date = unix_millis().to_string();
+        let query = form_encode(&[("secretStr", secret.as_str()), ("date", date.as_str())]);
         let url = format!("{base}{path}?{query}");
         let response = self
             .http
@@ -2483,5 +3027,214 @@ mod tests {
         assert_eq!(course.class_id, None);
         assert_eq!(course.status, Some(0));
         assert_eq!(parse_course_list_total(&value), Some(1));
+    }
+
+    #[test]
+    fn parses_measured_ai_course_list() {
+        // Sanitized fixture of the live `queryStudentAICourseList` response
+        // (captured 2026-11-09; module 13, plaintext `{"status":3}`).
+        let value = serde_json::json!({
+            "currentTime": 1_794_146_842_636u64,
+            "msg": "请求成功",
+            "rt": [{
+                "courseId": "2099354959572668416",
+                "courseName": "测试 AI 课程",
+                "type": 0,
+                "classId": 299_714,
+                "className": "测试教学班",
+                "teacherUserId": 857_103_647,
+                "teacherUserName": "测试老师",
+                "schoolId": 360,
+                "schoolName": "测试大学",
+                "status": 2,
+                "schedule": 1,
+                "mastery": 27,
+                "newFlag": true,
+                "linkUrl": "https://example.invalid/course"
+            }],
+            "status": "200"
+        });
+        let courses = parse_ai_course_list(&value);
+        assert_eq!(courses.len(), 1);
+        let course = &courses[0];
+        assert_eq!(course.kind, ZhsCourseKind::Ai);
+        assert_eq!(course.course_id, 2_099_354_959_572_668_416);
+        assert_eq!(course.recruit_id, 0);
+        assert_eq!(course.class_id, Some(299_714));
+        assert_eq!(course.school_id, Some(360));
+        assert_eq!(course.name, "测试 AI 课程");
+        assert_eq!(course.teacher, "测试老师");
+        assert_eq!(course.status, Some(2));
+        assert_eq!(course.course_type.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn parses_school_micro_and_empty_course_lists() {
+        let school = serde_json::json!({
+            "errorCode": 0,
+            "errorMsg": null,
+            "result": {
+                "pageCount": null,
+                "totalCount": 1,
+                "list": [{
+                    "courseId": 5_555,
+                    "recruitId": 7_777,
+                    "classId": 66,
+                    "courseName": "校内智慧课程",
+                    "teacherName": "王老师",
+                    "schoolId": 360,
+                    "status": 1
+                }]
+            },
+            "success": true
+        });
+        let courses = parse_school_course_list(&school);
+        assert_eq!(courses.len(), 1);
+        assert_eq!(courses[0].kind, ZhsCourseKind::School);
+        assert_eq!(courses[0].course_id, 5_555);
+        assert_eq!(courses[0].recruit_id, 7_777);
+        assert_eq!(courses[0].class_id, Some(66));
+        assert_eq!(courses[0].teacher, "王老师");
+
+        // Live empty school shape (2026-11-08): `list: null`.
+        let empty_school = serde_json::json!({
+            "errorCode": 0,
+            "result": {"pageCount": null, "list": null, "totalCount": null},
+            "success": true
+        });
+        assert!(parse_school_course_list(&empty_school).is_empty());
+
+        // Measured empty micro shape.
+        let empty_micro = serde_json::json!({
+            "result": {"totalCount": 0, "courseOpenDtos": null},
+            "code": 200
+        });
+        assert!(parse_other_course_list(&empty_micro).is_empty());
+
+        // Non-empty micro fixture, using the shared `courseOpenDtos` shape.
+        let micro = serde_json::json!({
+            "result": {
+                "totalCount": 1,
+                "courseOpenDtos": [{
+                    "courseId": 321,
+                    "recruitId": 654,
+                    "courseName": "微课",
+                    "teacherName": "李老师",
+                    "classId": 11,
+                    "schoolId": 360
+                }]
+            }
+        });
+        let courses = parse_other_course_list(&micro);
+        assert_eq!(courses.len(), 1);
+        assert_eq!(courses[0].kind, ZhsCourseKind::Other);
+        assert_eq!(courses[0].name, "微课");
+
+        // Hike (`rt.pageList`) and B2C (`rt.dataList`) envelopes, empty for the
+        // measured account, must not be mistaken for courses.
+        let hike = serde_json::json!({"status": 200, "rt": {"pageList": []}});
+        let b2c = serde_json::json!({"status": "200", "rt": {"dataList": []}});
+        let select = serde_json::json!({"result": [], "code": 200});
+        assert!(parse_other_course_list(&hike).is_empty());
+        assert!(parse_other_course_list(&b2c).is_empty());
+        assert!(parse_other_course_list(&select).is_empty());
+    }
+
+    #[test]
+    fn parses_measured_polymas_agent_course() {
+        // Sanitized fixture of the live POLYMAS response (2026-11-08):
+        // `courseId` is an opaque string and teachers is an array.
+        let value = serde_json::json!({
+            "code": 200,
+            "success": true,
+            "data": {
+                "list": [{
+                    "courseId": "boD7Wgjg25uRom3vjDqV",
+                    "courseName": "大学生批判性思维",
+                    "courseType": "agent",
+                    "isFrozen": 0,
+                    "recruitId": null,
+                    "classId": null,
+                    "status": 2,
+                    "teachers": [
+                        {"teacherName": "张妍"},
+                        {"teacherName": "张二奇"}
+                    ],
+                    "studyTime": "11"
+                }],
+                "total": "1"
+            }
+        });
+        let courses = parse_polymas_course_list(&value);
+        assert_eq!(courses.len(), 1);
+        let course = &courses[0];
+        assert_eq!(course.kind, ZhsCourseKind::Ai);
+        assert_eq!(course.external_id.as_deref(), Some("boD7Wgjg25uRom3vjDqV"));
+        assert_eq!(course.course_id, 0);
+        assert_eq!(course.name, "大学生批判性思维");
+        assert_eq!(course.teacher, "张妍、张二奇");
+        assert_eq!(course.course_type.as_deref(), Some("agent"));
+        assert_eq!(course.status, Some(2));
+
+        let empty = serde_json::json!({"code": 200, "data": {"list": []}});
+        assert!(parse_polymas_course_list(&empty).is_empty());
+    }
+
+    #[test]
+    fn dedupes_courses_and_keeps_the_shared_copy() {
+        let shared = ZhsCourse {
+            kind: ZhsCourseKind::Shared,
+            recruit_id: 1,
+            course_id: 2,
+            name: "共享课".to_string(),
+            ..ZhsCourse::default()
+        };
+        let ai_duplicate = ZhsCourse {
+            kind: ZhsCourseKind::Ai,
+            recruit_id: 1,
+            course_id: 2,
+            name: "AI 重复".to_string(),
+            ..ZhsCourse::default()
+        };
+        let ai_other = ZhsCourse {
+            kind: ZhsCourseKind::Ai,
+            recruit_id: 0,
+            course_id: 3,
+            name: "另一门 AI".to_string(),
+            ..ZhsCourse::default()
+        };
+        let merged = dedupe_courses(vec![
+            shared.clone(),
+            ai_duplicate,
+            ai_other.clone(),
+            shared.clone(),
+        ]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].kind, ZhsCourseKind::Shared);
+        assert_eq!(merged[0].name, "共享课");
+        assert_eq!(merged[1].kind, ZhsCourseKind::Ai);
+        assert_eq!(merged[1].course_id, 3);
+
+        // Opaque POLYMAS ids are deduped by `external_id`.
+        let polymas = ZhsCourse {
+            kind: ZhsCourseKind::Ai,
+            external_id: Some("boD7Wgjg25uRom3vjDqV".to_string()),
+            name: "大学生批判性思维".to_string(),
+            ..ZhsCourse::default()
+        };
+        let merged = dedupe_courses(vec![polymas.clone(), polymas]);
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn iso_timestamp_and_civil_dates_are_correct() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(789), (1972, 2, 29));
+        let iso = iso_timestamp_millis();
+        assert_eq!(iso.len(), 24, "iso = {iso}");
+        assert!(iso.ends_with('Z'));
+        assert!(iso.contains('T'));
+        let year = iso[0..4].parse::<u32>().unwrap();
+        assert!(year >= 2024, "iso = {iso}");
     }
 }
