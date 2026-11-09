@@ -120,6 +120,26 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
   let justSubmitted: ZhsHomework | null = null;
   let justHarvested = false;
   const listeners: Array<() => void> = [];
+  const recentToasts = new Map<string, number>();
+  let recentAuthHintAt = 0;
+  const AUTH_HINT =
+    "登录状态失效或考试接口未就绪：请重新登录知到，或稍后点「刷新」。";
+
+  /** Toast with a 4 s per-message cooldown and one actionable auth hint. */
+  function notify(message: string, tone?: ToastTone): void {
+    const key = message.trim();
+    const now = Date.now();
+    const last = recentToasts.get(key) ?? 0;
+    if (now - last < 4000) return;
+    recentToasts.set(key, now);
+    if (/登录状态失效|is not json|getStudentHomework|HTML|login/i.test(key)) {
+      if (now - recentAuthHintAt < 4000) return;
+      recentAuthHintAt = now;
+      options.onToast(AUTH_HINT, tone === "success" ? "info" : "error");
+      return;
+    }
+    options.onToast(message, tone);
+  }
 
   const close = openModal(content, {
     wide: true,
@@ -172,7 +192,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       if (tab === "submitted") submitted = list;
       else pending = list;
     } catch (error) {
-      options.onToast(errorText(error), "error");
+      notify(errorText(error), "error");
     } finally {
       busy = false;
       render();
@@ -186,7 +206,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     try {
       bank = await api.zhsExamBankInfo();
     } catch (error) {
-      options.onToast(errorText(error), "error");
+      notify(errorText(error), "error");
       view = "list";
     } finally {
       busy = false;
@@ -208,7 +228,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         true,
       );
     } catch (error) {
-      options.onToast(errorText(error), "error");
+      notify(errorText(error), "error");
       view = "list";
     } finally {
       busy = false;
@@ -232,7 +252,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         homework.examId,
       );
       lastAttempt = homework;
-      options.onToast(
+      notify(
         "作答窗口已打开：请完成滑块验证，并在窗口内确认计划后点击「开始自动作答」或红色「容错试做」",
         "info",
       );
@@ -240,7 +260,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       pending = null;
       submitted = null;
     } catch (error) {
-      options.onToast(errorText(error), "error");
+      notify(errorText(error), "error");
     }
   }
 
@@ -257,9 +277,9 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         options.courseId,
         homework.examId,
       );
-      options.onToast("采集窗口已打开：完成后会提示写入结果", "info");
+      notify("采集窗口已打开：完成后会提示写入结果", "info");
     } catch (error) {
-      options.onToast(errorText(error), "error");
+      notify(errorText(error), "error");
     }
   }
 
@@ -270,7 +290,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     );
     const raw = textarea?.value.trim() ?? "";
     if (!raw) {
-      options.onToast("请先粘贴 JSON", "error");
+      notify("请先粘贴 JSON", "error");
       return;
     }
     let entries: ZhsAiEntry[];
@@ -297,7 +317,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         throw new Error("JSON 必须是 {questionId: 解析文本} 或条目数组");
       }
     } catch (error) {
-      options.onToast(`JSON 解析失败：${errorText(error)}`, "error");
+      notify(`JSON 解析失败：${errorText(error)}`, "error");
       return;
     }
     busy = true;
@@ -309,14 +329,14 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         importing.examId,
         entries,
       );
-      options.onToast(
+      notify(
         `已写入 ${recorded.recorded} 题，跳过 ${recorded.skipped} 题；题库共 ${recorded.bankTotal} 条`,
         "success",
       );
       importing = null;
       view = "list";
     } catch (error) {
-      options.onToast(errorText(error), "error");
+      notify(errorText(error), "error");
     } finally {
       busy = false;
       render();
@@ -522,12 +542,12 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         render();
       } else if (act === "attempt" && item) void openAttempt(item);
       else if (act === "harvest-hint") {
-        options.onToast(
+        notify(
           "AI解析采集只对「已提交」的试卷有效：先通过「网页作答」提交一次（可得低分），再回到「已提交」采集解析。",
           "info",
         );
       } else if (act === "final-hint") {
-        options.onToast(
+        notify(
           "期末考试只有 1 次机会，GUI 仅列出、不自动提交，也不读取未提交试卷（读取会开始计时）。请在平台网页端自行参加。",
           "info",
         );
@@ -667,7 +687,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
 
   void onZhsExamAi((event) => {
     if (closed) return;
-    options.onToast(
+    notify(
       `AI解析写入完成：记录 ${event.recorded} 题、跳过 ${event.skipped} 题；题库共 ${event.bankTotal} 条`,
       "success",
     );
@@ -685,7 +705,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
 
   void onZhsExamResult((event) => {
     if (closed) return;
-    options.onToast(
+    notify(
       event.score === null
         ? "网页作答已提交（成绩待平台刷新）"
         : `网页作答已提交：${event.score} 分，正确 ${event.correctCount}/${event.questionCount} 题。下一步：采集 AI解析 → 网页重做满分`,

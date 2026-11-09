@@ -25,7 +25,7 @@ use hust_course_hack::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc,
@@ -1278,6 +1278,23 @@ fn open_exam_window(app: &AppHandle, url: Url, title: &str, script: String) -> R
             if payload.event() != PageLoadEvent::Finished {
                 return;
             }
+            // Merge cookies set by the exam host back into the main session, so a
+            // manual login performed inside this window also fixes the API client.
+            let app_for_cookies = app_for_load.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    if let Some(window) = app_for_cookies.get_webview_window(EXAM_WINDOW_LABEL)
+                        && let Ok(records) = read_exam_window_cookies(&window)
+                        && !records.is_empty()
+                    {
+                        app_for_cookies
+                            .state::<AppState>()
+                            .merge_zhs_cookies(records);
+                        log::info!("zhihuishu exam window: merged host cookies into the session");
+                    }
+                })
+                .await;
+            });
             if injected_for_load.load(Ordering::SeqCst) {
                 return;
             }
@@ -1383,6 +1400,59 @@ fn cleanup_exam_dir(path: PathBuf) {
             std::thread::sleep(Duration::from_millis(150));
         }
     });
+}
+
+/// Cookie URLs read from an exam window after every page load.
+fn exam_window_cookie_urls(window: &tauri::WebviewWindow) -> Vec<Url> {
+    let mut urls = Vec::new();
+    if let Ok(current) = window.url() {
+        urls.push(current);
+    }
+    for raw in [
+        "https://onlineexamh5new.zhihuishu.com/",
+        "https://studentexam-api.zhihuishu.com/",
+        "https://taurusexam-api.zhihuishu.com/",
+    ] {
+        if let Ok(url) = Url::parse(raw) {
+            urls.push(url);
+        }
+    }
+    urls
+}
+
+/// Read the exam window cookies (blocking worker; `cookies_for_url` deadlocks on
+/// the main thread on Windows).
+fn read_exam_window_cookies(window: &tauri::WebviewWindow) -> anyhow::Result<Vec<CookieRecord>> {
+    let urls = exam_window_cookie_urls(window);
+    let mut records = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for url in urls {
+        for cookie in window
+            .cookies_for_url(url)
+            .map_err(|error| anyhow::anyhow!("{error}"))?
+        {
+            let name = cookie.name().to_string();
+            let value = cookie.value().to_string();
+            if !seen.insert((name.clone(), value.clone())) {
+                continue;
+            }
+            records.push(CookieRecord {
+                domain: cookie.domain().unwrap_or_default().to_string(),
+                include_subdomains: cookie
+                    .domain()
+                    .is_some_and(|domain| domain.starts_with('.')),
+                path: cookie.path().unwrap_or("/").to_string(),
+                secure: cookie.secure().unwrap_or(false),
+                expires: cookie
+                    .expires_datetime()
+                    .map(|time| time.unix_timestamp())
+                    .unwrap_or(0),
+                name,
+                value,
+            });
+        }
+    }
+    Ok(records)
 }
 
 /// Inject the captured Zhihuishu cookies into the window's WebView2 profile.
