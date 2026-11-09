@@ -32,26 +32,58 @@ type View = "list" | "paper" | "import" | "bank";
  */
 const MAINTAINER_MODE = /^#\/?dev$/.test(window.location.hash);
 
+/**
+ * Platform state codes observed on the real account (2026-11):
+ * 1 = 未提交 (pending list), 4 = 已提交 (submitted list). 2/3 are best-effort
+ * labels for grading states; unknown values fall back to the raw number.
+ */
 const STATE_TEXT: Record<number, string> = {
-  0: "未提交",
-  1: "已提交",
+  1: "未提交",
+  2: "待批阅",
+  3: "批阅中",
+  4: "已提交",
 };
 
-function stateText(homework: ZhsHomework): string {
-  if (homework.state === null) return "状态未知";
-  return STATE_TEXT[homework.state] ?? `状态 ${homework.state}`;
-}
-
-function isSubmitted(homework: ZhsHomework): boolean {
-  return (
-    homework.state === 1 || homework.achieve !== null || homework.score !== null
-  );
+/**
+ * State badge. The list is already split by the `submitted` flag passed to
+ * `zhs_exam_list`, so that flag — not the state code — decides the card mode.
+ */
+function stateBadge(homework: ZhsHomework, submittedFlag: boolean): {
+  label: string;
+  title: string;
+} {
+  if (homework.state === null) {
+    return {
+      label: submittedFlag ? "已提交" : "未提交",
+      title: "平台未返回 state 字段，按列表类型显示",
+    };
+  }
+  const label =
+    STATE_TEXT[homework.state] ?? `状态 ${homework.state}`;
+  return {
+    label,
+    title: `平台 state=${homework.state}（列表：${
+      submittedFlag ? "已提交" : "未提交"
+    }）`,
+  };
 }
 
 function attemptText(homework: ZhsHomework): string {
   const remaining = homework.backNum;
-  if (remaining === null) return "次数未知";
-  return `剩余尝试 ${remaining} 次`;
+  if (remaining === null) return "剩余重做次数未知";
+  return `剩余重做 ${remaining} 次`;
+}
+
+/** Primary score + secondary best score when the two platform fields differ. */
+function scoreText(homework: ZhsHomework): string | null {
+  const score = homework.score;
+  const achieve = homework.achieve;
+  if (score === null && achieve === null) return null;
+  const primary = score ?? achieve;
+  if (score !== null && achieve !== null && score !== achieve) {
+    return `得分 ${score} · 最高 ${achieve}`;
+  }
+  return `得分 ${primary}`;
 }
 
 function paperBadges(homework: ZhsHomework): string {
@@ -59,10 +91,19 @@ function paperBadges(homework: ZhsHomework): string {
   if (homework.problemNum !== null) bits.push(`${homework.problemNum} 题`);
   if (homework.totalScore !== null) bits.push(`总分 ${homework.totalScore}`);
   if (homework.meetCourseType === 1) bits.push("见面课测验");
-  if (homework.score !== null) bits.push(`得分 ${homework.score}`);
+  const score = scoreText(homework);
+  if (score !== null) bits.push(score);
   bits.push(attemptText(homework));
+  const raw = `平台字段：score=${homework.score ?? "null"} achieve=${
+    homework.achieve ?? "null"
+  } backNum=${homework.backNum ?? "null"} achieveCount=${
+    homework.achieveCount ?? "null"
+  } state=${homework.state ?? "null"}`;
   return bits
-    .map((bit) => `<span class="exam-badge">${esc(bit)}</span>`)
+    .map(
+      (bit) =>
+        `<span class="exam-badge" title="${esc(raw)}">${esc(bit)}</span>`,
+    )
     .join("");
 }
 
@@ -457,7 +498,8 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     const finals = list.finals;
     const cards = homework
       .map((item) => {
-        const submittedPaper = isSubmitted(item);
+        const submittedPaper = tab === "submitted";
+        const state = stateBadge(item, submittedPaper);
         const isNext =
           tab === "submitted" && justSubmitted?.examId === item.examId;
         const harvestPrimary = MAINTAINER_MODE && isNext && !justHarvested;
@@ -471,7 +513,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
               }</span>
               <span class="badge ${
                 submittedPaper ? "badge-good" : "badge-muted"
-              }">${esc(stateText(item))}</span>
+              }" title="${esc(state.title)}">${esc(state.label)}</span>
               ${isNext ? `<span class="badge badge-warn">刚提交</span>` : ""}
             </div>
             <h3>${esc(item.name)}</h3>
