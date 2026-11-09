@@ -561,87 +561,113 @@ function zhsVideo(
 
 function zhsDetailFor(course: ZhsCourse): ZhsCourseDetail {
   if (course.recruitId === 500001) {
-    return {
-      course,
-      chapters: [
-        {
-          chapterId: 2001,
-          name: "第一章 绪论",
-          learningLessonStatus: 0,
-          isPass: 0,
-          limitChecked: null,
-          lessons: [
-            {
-              lessonId: 20010,
-              name: "1.1 心理健康概述",
-              isStudied: 0,
-              videoId: null,
-              videoSec: null,
-              videos: [
-                zhsVideo(780001, 200101, 612, false, "1.1.1 心理健康的标准"),
-                zhsVideo(780002, 200102, 534, false, "1.1.2 常见的心理困扰"),
-              ],
-            },
-          ],
-        },
-      ],
-    };
-  }
-  return {
-    course,
-    chapters: [
+    return zhsDetailWithCounts(course, [
       {
-        chapterId: 1000116293,
-        name: "第一章 中国国防",
+        chapterId: 2001,
+        name: "第一章 绪论",
         learningLessonStatus: 0,
         isPass: 0,
         limitChecked: null,
         lessons: [
           {
-            lessonId: 1000337351,
-            name: "1.1 国防概述",
-            isStudied: 1,
-            videoId: null,
-            videoSec: null,
-            videos: [
-              zhsVideo(70622143, 1000244446, 468, true, "1.1.1 国防的含义"),
-              zhsVideo(70796671, 1000244447, 491, true, "1.1.2 现代国防的特征"),
-            ],
-          },
-          {
-            lessonId: 1000337356,
-            name: "1.2 国防历史",
+            lessonId: 20010,
+            name: "1.1 心理健康概述",
             isStudied: 0,
             videoId: null,
             videoSec: null,
             videos: [
-              zhsVideo(71192505, 1000244477, 826, false, "1.2.1 中国古代国防"),
-              zhsVideo(74150643, 1000244476, 497, false, "1.2.2 近代国防的屈辱"),
+              zhsVideo(780001, 200101, 612, false, "1.1.1 心理健康的标准"),
+              zhsVideo(780002, 200102, 534, false, "1.1.2 常见的心理困扰"),
             ],
           },
         ],
       },
-      {
-        chapterId: 1000116294,
-        name: "第二章 国家安全",
-        learningLessonStatus: 0,
-        isPass: 0,
-        limitChecked: false,
-        lessons: [
-          {
-            lessonId: 1000337360,
-            name: "2.1 国家安全形势",
-            isStudied: 0,
-            videoId: null,
-            videoSec: null,
-            videos: [
-              zhsVideo(75000111, 1000245001, 703, false, "2.1.1 当前我国国家安全形势分析"),
-            ],
-          },
-        ],
-      },
-    ],
-  };
+    ]);
+  }
+  return zhsDetailWithCounts(course, [
+    {
+      chapterId: 1000116293,
+      name: "第一章 中国国防",
+      learningLessonStatus: 0,
+      isPass: 0,
+      limitChecked: null,
+      lessons: [
+        {
+          lessonId: 1000337351,
+          name: "1.1 国防概述",
+          isStudied: 1,
+          videoId: null,
+          videoSec: null,
+          videos: [
+            zhsVideo(70622143, 1000244446, 468, true, "1.1.1 国防的含义"),
+            zhsVideo(70796671, 1000244447, 491, true, "1.1.2 现代国防的特征"),
+          ],
+        },
+        {
+          lessonId: 1000337356,
+          name: "1.2 国防历史",
+          isStudied: 0,
+          videoId: null,
+          videoSec: null,
+          videos: [
+            zhsVideo(71192505, 1000244477, 826, false, "1.2.1 中国古代国防"),
+            zhsVideo(74150643, 1000244476, 497, false, "1.2.2 近代国防的屈辱"),
+          ],
+        },
+      ],
+    },
+    {
+      chapterId: 1000116294,
+      name: "第二章 国家安全",
+      learningLessonStatus: 0,
+      isPass: 0,
+      limitChecked: false,
+      lessons: [
+        {
+          lessonId: 1000337360,
+          name: "2.1 国家安全形势",
+          isStudied: 0,
+          videoId: null,
+          videoSec: null,
+          videos: [
+            zhsVideo(75000111, 1000245001, 703, false, "2.1.1 当前我国国家安全形势分析"),
+          ],
+        },
+      ],
+    },
+  ]);
+}
+
+/** Wrap a demo tree with the counts the real backend now returns. */
+function zhsDetailWithCounts(
+  course: ZhsCourse,
+  chapters: ZhsCourseDetail["chapters"],
+): ZhsCourseDetail {
+  let totalVideos = 0;
+  let completedVideos = 0;
+  for (const chapter of chapters) {
+    for (const lesson of chapter.lessons) {
+      const videos: ZhsVideo[] =
+        lesson.videos.length > 0
+          ? lesson.videos
+          : lesson.videoId !== null && lesson.videoSec !== null
+            ? [
+                {
+                  videoId: lesson.videoId,
+                  lessonVideoId: lesson.lessonId,
+                  videoSec: lesson.videoSec,
+                  isStudied: lesson.isStudied,
+                  name: lesson.name,
+                },
+              ]
+            : [];
+      totalVideos += videos.length;
+      completedVideos += videos.filter(
+        (video) => (video.isStudied ?? 0) !== 0,
+      ).length;
+    }
+  }
+  return { course, chapters, totalVideos, completedVideos };
 }
 
 const zhsMeets: ZhsMeet[] = [
@@ -1395,7 +1421,10 @@ export const mockApi = {
       stage: "videos",
       total: planned.length,
       dryRun: true,
-      skipped: all.length - planned.length,
+      // Skipped means "already recorded complete", not "capped by maxVideos".
+      skipped: request.includeCompleted
+        ? 0
+        : all.filter((target) => target.completed).length,
     });
     const outcomes: ZhsVideoOutcome[] = [];
     for (const [offset, target] of planned.entries()) {

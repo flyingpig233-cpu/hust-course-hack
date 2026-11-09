@@ -31,8 +31,8 @@ export function zhsLessonVideos(lesson: ZhsLesson): ZhsVideo[] {
   return [];
 }
 
-/** Total number of playable videos in a course tree. */
-export function zhsTotalVideos(detail: ZhsCourseDetail): number {
+/** Number of videos in the tree derived from the chapter payload. */
+function countVideos(detail: ZhsCourseDetail): number {
   return detail.chapters.reduce(
     (total, chapter) =>
       total +
@@ -44,8 +44,27 @@ export function zhsTotalVideos(detail: ZhsCourseDetail): number {
   );
 }
 
-/** Number of videos the platform currently marks as studied. */
+/**
+ * Total number of playable videos in a course tree.
+ *
+ * Prefers the backend count (computed from the corrected tree) and falls back
+ * to a local walk when talking to an older backend.
+ */
+export function zhsTotalVideos(detail: ZhsCourseDetail): number {
+  return typeof detail.totalVideos === "number"
+    ? detail.totalVideos
+    : countVideos(detail);
+}
+
+/**
+ * Number of videos the platform records as finished (`watchState == 1`).
+ *
+ * The backend computes this from a fresh `queryStuyInfo` read; deriving it from
+ * `video.isStudied` alone can show `0 / N` after a watch job because the
+ * platform does not refresh the `videolist` flag.
+ */
 export function zhsCompletedVideos(detail: ZhsCourseDetail): number {
+  if (typeof detail.completedVideos === "number") return detail.completedVideos;
   return detail.chapters.reduce(
     (total, chapter) =>
       total +
@@ -64,11 +83,11 @@ export function zhsCompletedVideos(detail: ZhsCourseDetail): number {
 export function zhsWatchStateText(state: ZhsWatchState): string {
   switch (state) {
     case "ok":
-      return "已完成";
+      return "已完成（平台记录）";
     case "skip":
-      return "已跳过";
+      return "跳过（已完成）";
     case "dry_run":
-      return "预演";
+      return "已计划";
     case "failed":
       return "失败";
     case "cancelled":

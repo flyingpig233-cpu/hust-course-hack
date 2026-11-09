@@ -387,6 +387,16 @@ export interface ZhsChapter {
 export interface ZhsCourseDetail {
   course: ZhsCourse;
   chapters: ZhsChapter[];
+  /** Total playable videos (small lessons) in the tree. */
+  totalVideos: number;
+  /**
+   * Videos the platform records as finished (`watchState == 1`).
+   *
+   * The backend recomputes this from `queryStuyInfo`; the `isStudied` flag on
+   * each video comes from `videolist`, which the platform does not refresh after
+   * a report, so prefer these counts over deriving them from the tree.
+   */
+  completedVideos: number;
 }
 
 export interface ZhsExceptionStatus {
