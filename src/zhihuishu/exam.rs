@@ -1421,6 +1421,18 @@ fn parse_submitted_answers(answers: &Value, scores: &Value) -> Vec<ZhsSubmittedA
 mod tests {
     use super::*;
 
+    /// Tests must not depend on the embedded production bank (it is populated
+    /// with real course answers), so start from an empty bank.
+    fn empty_bank() -> ZhsAnswerBank {
+        ZhsAnswerBank {
+            version: 1,
+            platform: "zhihuishu".to_string(),
+            generated_at_unix: 0,
+            source: String::new(),
+            entries: Vec::new(),
+        }
+    }
+
     fn option(id: &str, content: &str) -> ZhsExamOption {
         ZhsExamOption {
             id: id.to_string(),
@@ -1608,7 +1620,7 @@ mod tests {
 
     #[test]
     fn bank_resolves_reordered_options_by_content() {
-        let mut bank = ZhsAnswerBank::builtin();
+        let mut bank = empty_bank();
         bank.entries.push(ZhsBankEntry {
             key: single_question().bank_key(),
             stem: single_question().stem,
@@ -1649,7 +1661,7 @@ mod tests {
                 score: 0.0,
             },
         ];
-        let mut bank = ZhsAnswerBank::builtin();
+        let mut bank = empty_bank();
         let recorded = bank.record_submitted(&paper, &submitted, 1);
         assert_eq!(recorded, 1);
         let entry = bank
@@ -1708,7 +1720,7 @@ mod tests {
             "1002".to_string(),
             "正确答案：A、C。B项不正确，排除B。".to_string(),
         );
-        let mut bank = ZhsAnswerBank::builtin();
+        let mut bank = empty_bank();
         let recorded = bank.record_ai_analysis(&paper, &texts, 1);
         assert_eq!(recorded, 2, "entries = {:?}", bank.entries);
         let single = bank
@@ -1738,7 +1750,7 @@ mod tests {
             "1002".to_string(),
             "可能选A，也可能选B，需要结合更多材料。".to_string(),
         );
-        let mut bank = ZhsAnswerBank::builtin();
+        let mut bank = empty_bank();
         let recorded = bank.record_ai_analysis(&paper, &texts, 1);
         assert_eq!(recorded, 0);
         assert!(
@@ -1794,7 +1806,7 @@ mod tests {
             from_type: 3,
             device_id: String::new(),
         };
-        let mut bank = ZhsAnswerBank::builtin();
+        let mut bank = empty_bank();
         bank.entries.push(ZhsBankEntry {
             key: single_question().bank_key(),
             stem: single_question().stem,
@@ -1824,7 +1836,7 @@ mod tests {
 
     #[test]
     fn answer_bank_round_trips_through_json() {
-        let mut bank = ZhsAnswerBank::builtin();
+        let mut bank = empty_bank();
         bank.entries.push(ZhsBankEntry {
             key: "testkey".to_string(),
             stem: "测试题干".to_string(),
