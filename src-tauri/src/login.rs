@@ -18,12 +18,13 @@
 use crate::state::{
     AppState, HustSession, Platform, Session, SessionClient, SessionInfo, UlSession, ZhsSession,
 };
+use crate::zhs_exam::{base64_encode, exam_log};
 use anyhow::{Context, Result, anyhow};
 use hust_course_hack::{
     SmartCourseClient,
     cookie::{CookieRecord, jar_from_records},
     ulearning::UlearningClient,
-    zhihuishu::ZhsClient,
+    zhihuishu::{ZhsClient, ZhsCourse, ZhsCourseKind},
 };
 use std::{
     collections::HashSet,
@@ -53,11 +54,22 @@ const ZHS_COOKIE_URLS: [&str; 4] = [
     "https://studyvideoh5.zhihuishu.com/",
 ];
 
-/// Exam-list page opened once after login so the exam H5 host sets its own
-/// cookies (`JSESSIONID`/`SERVERID`/`acw_tc`). The bare list route is enough;
-/// it does not start an attempt.
+/// Fallback exam-list page. The real warm-up appends
+/// `?recruitId=<base64(recruitAndCourseId)>` from the first shared course so the
+/// SPA calls the exam APIs (and sets the engine `JSESSIONID`).
 const ZHS_EXAM_WARMUP_URL: &str =
     "https://onlineexamh5new.zhihuishu.com/stuExamWeb.html#/webExamList";
+/// Hosts whose cookies take part in the exam SSO; read individually on every
+/// poll so host cookies are not collapsed across hosts.
+const ZHS_SSO_HOSTS: [(&str, &str); 7] = [
+    ("onlineweb", "https://onlineweb.zhihuishu.com/onlinestuh5"),
+    ("www", "https://www.zhihuishu.com/"),
+    ("passport", "https://passport.zhihuishu.com/"),
+    ("login", "https://login.zhihuishu.com/"),
+    ("onlineexamh5new", "https://onlineexamh5new.zhihuishu.com/"),
+    ("studentexam-api", "https://studentexam-api.zhihuishu.com/"),
+    ("taurusexam-api", "https://taurusexam-api.zhihuishu.com/"),
+];
 // The exam warm-up reads per-host cookies directly (H5 host, both exam-engine
 // hosts and the onlineweb portal); see `capture_exam_cookies`.
 
@@ -403,39 +415,8 @@ async fn finish_hust_login(
     Ok(())
 }
 
-/// Navigate the login webview to the exam-list page and capture the host
-/// cookies set by the exam H5 / API hosts. Returns the merged cookie list; on
-/// failure returns the base cookies so the plain session can still be adopted.
-async fn warm_up_exam_cookies(app: &AppHandle, base: Vec<CookieRecord>) -> Vec<CookieRecord> {
-    let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
-        return base;
-    };
-    let Ok(url) = Url::parse(ZHS_EXAM_WARMUP_URL) else {
-        log::warn!("zhihuishu exam warm-up: invalid URL");
-        return base;
-    };
-    if let Err(error) = window.navigate(url) {
-        log::warn!("zhihuishu exam warm-up navigation failed: {error}");
-        return base;
-    }
-    log::info!("zhihuishu exam warm-up: visiting the exam list page");
-    let app_for_capture = app.clone();
-    let base_for_capture = base.clone();
-    match tauri::async_runtime::spawn_blocking(move || {
-        capture_exam_cookies(&app_for_capture, base_for_capture)
-    })
-    .await
-    {
-        Ok(merged) => merged,
-        Err(error) => {
-            log::warn!("zhihuishu exam warm-up task failed: {error}");
-            base
-        }
-    }
-}
-
 /// Show a non-blocking one-line prompt inside the login window (used when the
-/// exam warm-up lands on the passport/login page and the user must log in once).
+/// exam SSO needs one extra manual login).
 fn show_login_window_prompt(window: &tauri::WebviewWindow, text: &str) {
     let Ok(text) = serde_json::to_string(text) else {
         return;
@@ -449,111 +430,245 @@ fn show_login_window_prompt(window: &tauri::WebviewWindow, text: &str) {
     let _ = window.eval(script);
 }
 
-/// Blocking capture loop for the exam warm-up.
-///
-/// Reads cookies for the H5 host, both exam-engine hosts and the onlineweb
-/// portal on every poll, merges them (host cookies win), and only returns once
-/// `studentexam-api`/`taurusexam-api` have a `JSESSIONID` (or the timeout hits).
-/// If the page lands on passport/login, it navigates the login window to the
-/// normal portal and waits for the user to log in once instead of silently
-/// storing the plain web cookies.
-fn capture_exam_cookies(app: &AppHandle, base: Vec<CookieRecord>) -> Vec<CookieRecord> {
-    let start = std::time::Instant::now();
-    let base_urls = ZHS_COOKIE_URLS
+/// Whether the login window currently sits on a passport/login page.
+fn is_login_url(url: &Url) -> bool {
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let path = url.path().to_ascii_lowercase();
+    host.contains("login")
+        || host.starts_with("passport.")
+        || host.starts_with("pass.")
+        || path.contains("login")
+        || path.contains("passport")
+}
+
+/// Ask the login webview whether the exam list SPA rendered (`#examStateTabYsj`).
+fn login_window_exam_ready(window: &tauri::WebviewWindow) -> bool {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let script = "(function(){try{if(document.querySelector('#examStateTabYsj'))return 'ready';\
+        if(document.querySelector('[id*=\"examStateTab\"]'))return 'ready';\
+        return 'waiting';}catch(e){return 'error';}})();";
+    if window
+        .eval_with_callback(script, move |value| {
+            let _ = sender.send(value);
+        })
+        .is_err()
+    {
+        return false;
+    }
+    match receiver.recv_timeout(Duration::from_millis(600)) {
+        Ok(value) => value.contains("ready"),
+        Err(_) => false,
+    }
+}
+
+/// Read cookies for the base portal URLs plus every SSO host, merge them with
+/// `base` and report whether the exam engines got a `JSESSIONID`.
+fn capture_sso_cookies(
+    window: &tauri::WebviewWindow,
+    base: &[CookieRecord],
+) -> (Vec<CookieRecord>, bool) {
+    let mut groups: Vec<Vec<CookieRecord>> = vec![base.to_vec()];
+    for url in ZHS_COOKIE_URLS
         .iter()
         .filter_map(|raw| Url::parse(raw).ok())
-        .collect::<Vec<_>>();
-    let hosts = [
-        ("onlineexamh5new", "https://onlineexamh5new.zhihuishu.com/"),
-        ("studentexam-api", "https://studentexam-api.zhihuishu.com/"),
-        ("taurusexam-api", "https://taurusexam-api.zhihuishu.com/"),
-        ("onlineweb", "https://onlineweb.zhihuishu.com/onlinestuh5"),
-    ];
-    let mut best = zhs_session_cookies(base);
-    let mut prompted_user = false;
-    loop {
-        let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
-            return best;
+    {
+        if let Ok(records) = read_cookies_from_window(window, &[url]) {
+            groups.push(records);
+        }
+    }
+    let mut has_jsession = false;
+    for (name, raw) in ZHS_SSO_HOSTS {
+        let Ok(url) = Url::parse(raw) else {
+            continue;
         };
-        // If the warm-up page itself hit passport/login, keep the window on the
-        // normal portal and ask the user to log in once (same recovery as the
-        // exam window); we keep polling until JSESSIONID appears.
-        if let Ok(current) = window.url() {
-            let host = current.host_str().unwrap_or_default().to_ascii_lowercase();
-            let path = current.path().to_ascii_lowercase();
-            let login_page = host.contains("login")
-                || host.starts_with("passport.")
-                || host.starts_with("pass.")
-                || path.contains("login")
-                || path.contains("passport");
-            if login_page && !prompted_user {
-                prompted_user = true;
-                log::warn!(
-                    "zhihuishu exam warm-up: login redirect at {current}; asking for one manual login"
-                );
-                show_login_window_prompt(
-                    &window,
-                    "考试引擎会话缺失：请在本窗口登录一次知到，登录后会自动继续（无需关闭窗口）",
-                );
-                if !host.starts_with("login.")
-                    && !host.starts_with("passport.")
-                    && let Ok(portal) = Url::parse("https://onlineweb.zhihuishu.com/onlinestuh5")
-                {
-                    let _ = window.navigate(portal);
+        match read_cookies_from_window(window, &[url]) {
+            Ok(records) => {
+                if name == "studentexam-api" || name == "taurusexam-api" {
+                    has_jsession = records.iter().any(|cookie| cookie.name == "JSESSIONID");
                 }
+                groups.push(records);
+            }
+            Err(error) => {
+                log::warn!("zhihuishu exam SSO: reading {name} cookies failed: {error}");
             }
         }
+    }
+    if let Ok(current) = window.url()
+        && let Ok(records) = read_cookies_from_window(window, &[current])
+    {
+        groups.push(records);
+    }
+    (
+        zhs_session_cookies(merge_cookie_groups(groups)),
+        has_jsession,
+    )
+}
 
-        let base_groups = read_cookies_from_window(&window, &base_urls)
-            .map(|records| vec![records])
-            .unwrap_or_default();
-        let mut groups = base_groups;
-        let mut studentexam_jsession = false;
-        let mut taurusexam_jsession = false;
-        for (name, raw) in hosts {
-            let Ok(url) = Url::parse(raw) else {
-                continue;
-            };
-            match read_cookies_from_window(&window, &[url]) {
-                Ok(records) => {
-                    if name == "studentexam-api" {
-                        studentexam_jsession =
-                            records.iter().any(|cookie| cookie.name == "JSESSIONID");
-                    }
-                    if name == "taurusexam-api" {
-                        taurusexam_jsession =
-                            records.iter().any(|cookie| cookie.name == "JSESSIONID");
-                    }
-                    groups.push(records);
-                }
-                Err(error) => {
-                    log::warn!("zhihuishu exam warm-up: reading {name} cookies failed: {error}");
-                }
-            }
-        }
-        best = zhs_session_cookies(merge_cookie_groups(groups));
-        let elapsed = start.elapsed();
-        let limit = if prompted_user {
-            Duration::from_secs(180)
-        } else {
-            Duration::from_secs(20)
+/// Complete the exam-engine SSO during login.
+///
+/// Navigates the login webview to the exam list, waits for the SPA tab or a
+/// passport/login redirect, captures all SSO-host cookies, and on a redirect
+/// keeps the window on the login page with a banner for one extra login before
+/// retrying. Returns the merged cookies and whether the engine session is ready.
+fn complete_exam_sso(
+    app: &AppHandle,
+    base: Vec<CookieRecord>,
+    exam_url: Url,
+) -> (Vec<CookieRecord>, bool) {
+    let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
+        return (base, false);
+    };
+    let started = std::time::Instant::now();
+    let (captured, mut has_jsession) = capture_sso_cookies(&window, &base);
+    let mut best = captured;
+    exam_log(
+        app,
+        format!(
+            "login SSO: captured {} cookies before navigation",
+            best.len()
+        ),
+    );
+    if let Err(error) = window.navigate(exam_url.clone()) {
+        exam_log(app, format!("login SSO: navigation failed: {error}"));
+        return (best, false);
+    }
+    exam_log(
+        app,
+        format!(
+            "login SSO: navigation -> {exam_url} (+{}ms)",
+            started.elapsed().as_millis()
+        ),
+    );
+
+    // Phase 1: automatic SSO (the exam H5 usually renders within seconds).
+    let phase1_deadline = started + Duration::from_secs(45);
+    let mut login_seen = false;
+    while std::time::Instant::now() < phase1_deadline {
+        let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
+            return (best, false);
         };
-        if studentexam_jsession || taurusexam_jsession {
-            log::info!(
-                "zhihuishu exam warm-up: captured {} cookies (studentexam JSESSIONID={studentexam_jsession}, taurusexam JSESSIONID={taurusexam_jsession})",
-                best.len()
+        let (captured, jsession) = capture_sso_cookies(&window, &best);
+        best = captured;
+        has_jsession |= jsession;
+        let current = window.url().ok();
+        if current.as_ref().is_some_and(is_login_url) {
+            login_seen = true;
+            exam_log(
+                app,
+                format!(
+                    "login SSO: redirect to login (+{}ms): {}",
+                    started.elapsed().as_millis(),
+                    current.as_ref().map(|url| url.as_str()).unwrap_or_default()
+                ),
             );
-            return best;
+            break;
         }
-        if elapsed >= limit {
-            log::warn!(
-                "zhihuishu exam warm-up: no exam-engine JSESSIONID after {:?} (captured {} cookies, prompted_user={prompted_user})",
-                elapsed,
-                best.len()
+        if has_jsession || login_window_exam_ready(&window) {
+            let (captured, _) = capture_sso_cookies(&window, &best);
+            exam_log(
+                app,
+                format!(
+                    "login SSO: exam list ready (+{}ms, {} cookies)",
+                    started.elapsed().as_millis(),
+                    captured.len()
+                ),
             );
-            return best;
+            return (captured, true);
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    // Phase 2: one extra manual login on the passport page, then retry.
+    if login_seen || !has_jsession {
+        show_login_window_prompt(
+            &window,
+            "知到考试引擎需要一次额外登录；登录后会自动继续，请勿关闭窗口",
+        );
+        exam_log(app, "login SSO: waiting for one extra login (up to 300s)");
+        let manual_start = std::time::Instant::now();
+        let mut renavigated = false;
+        while manual_start.elapsed() < Duration::from_secs(300) {
+            let Some(window) = app.get_webview_window(LOGIN_LABEL) else {
+                return (best, false);
+            };
+            let (captured, jsession) = capture_sso_cookies(&window, &best);
+            best = captured;
+            has_jsession |= jsession;
+            if has_jsession || login_window_exam_ready(&window) {
+                let (captured, _) = capture_sso_cookies(&window, &best);
+                exam_log(
+                    app,
+                    format!(
+                        "login SSO: ready after manual login (+{}ms, {} cookies)",
+                        manual_start.elapsed().as_millis(),
+                        captured.len()
+                    ),
+                );
+                return (captured, true);
+            }
+            let login_page = window.url().ok().as_ref().is_some_and(is_login_url);
+            if login_page {
+                // A new login round started; allow another follow-up navigation.
+                renavigated = false;
+            } else if !renavigated {
+                renavigated = true;
+                exam_log(
+                    app,
+                    "login SSO: manual login finished; re-navigating the exam list",
+                );
+                let _ = window.navigate(exam_url.clone());
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        exam_log(
+            app,
+            format!(
+                "login SSO: timed out without exam engine JSESSIONID ({} cookies)",
+                best.len()
+            ),
+        );
+    }
+    (best, false)
+}
+
+/// Run the exam SSO completion on a blocking worker (window cookie/DOM reads).
+async fn warm_up_exam_cookies(
+    app: &AppHandle,
+    base: Vec<CookieRecord>,
+    exam_url: Url,
+) -> (Vec<CookieRecord>, bool) {
+    let app_for_capture = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        complete_exam_sso(&app_for_capture, base, exam_url)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            log::warn!("zhihuishu exam SSO task failed: {error}");
+            (Vec::new(), false)
+        }
+    }
+}
+
+/// Build the exam list URL from the first shared course (its
+/// `recruitAndCourseId` secret is what the SPA expects in `recruitId`).
+fn exam_list_url_for_courses(courses: &[ZhsCourse]) -> Url {
+    let secret = courses
+        .iter()
+        .find(|course| course.kind == ZhsCourseKind::Shared)
+        .map(ZhsCourse::secret_or_derive)
+        .filter(|secret| !secret.trim().is_empty());
+    match secret {
+        Some(secret) => {
+            let raw = format!(
+                "https://onlineexamh5new.zhihuishu.com/stuExamWeb.html#/webExamList?recruitId={}",
+                base64_encode(&secret)
+            );
+            Url::parse(&raw)
+                .unwrap_or_else(|_| Url::parse(ZHS_EXAM_WARMUP_URL).expect("static exam URL"))
+        }
+        None => Url::parse(ZHS_EXAM_WARMUP_URL).expect("static exam URL"),
     }
 }
 async fn finish_zhs_login(
@@ -583,16 +698,41 @@ async fn finish_zhs_login(
         return Err(anyhow!("知到教师账号不支持秒刷，请使用学生账号登录知到"));
     }
 
-    // Exam engines (`studentexam-api` / `taurusexam-api`) need the host cookies
-    // that are only set after an authenticated visit to the exam H5 page. Visit
-    // it once per login attempt, merge the captured cookies, rebuild the client
-    // jar (domain cookies reach every zhihuishu host) and re-validate.
+    let login_started = std::time::Instant::now();
+    exam_log(app, "login: zhihuishu session validated; starting exam SSO");
+
+    // The shared-course list is needed first: the exam list URL carries the
+    // first course's `recruitAndCourseId` secret, and without it the SPA may not
+    // call the exam APIs (no engine JSESSIONID). Best effort — a failure must
+    // not block the session.
+    let mut courses = match client.list_courses().await {
+        Ok(courses) => courses,
+        Err(error) => {
+            log::warn!("zhihuishu course list unavailable before exam SSO: {error:#}");
+            Vec::new()
+        }
+    };
+    let exam_url = exam_list_url_for_courses(&courses);
+
     let mut session_cookies = base_cookies.clone();
-    if state.begin_zhs_exam_warmup() {
-        session_cookies = warm_up_exam_cookies(app, cookies.clone()).await;
+    let sso_ready = if state.begin_zhs_exam_warmup() {
+        let (merged, ready) = warm_up_exam_cookies(app, cookies.clone(), exam_url).await;
+        if !merged.is_empty() {
+            session_cookies = merged;
+        }
+        exam_log(
+            app,
+            format!(
+                "login: exam SSO phase finished ready={ready} (+{}ms, {} cookies)",
+                login_started.elapsed().as_millis(),
+                session_cookies.len()
+            ),
+        );
+        ready
     } else {
         log::debug!("zhihuishu exam warm-up already ran in this login attempt");
-    }
+        state.zhs_exam_sso_ready()
+    };
 
     // Rebuild the client from the merged captures: `jar_from_records` preserves
     // cookie domains, so `studentexam-api` / `taurusexam-api` requests carry
@@ -601,7 +741,7 @@ async fn finish_zhs_login(
         Ok(warm_client) => match warm_client.login_user().await {
             Ok(warm_user) => {
                 log::info!(
-                    "zhihuishu exam warm-up merged: {} cookies",
+                    "zhihuishu exam SSO merged: {} cookies, ready={sso_ready}",
                     session_cookies.len()
                 );
                 client = warm_client;
@@ -622,16 +762,23 @@ async fn finish_zhs_login(
         }
     }
 
-    // The shared-course list endpoint is best effort; a failure must not block
-    // the session. The UI offers the study-page URL fallback in that case.
-    let courses = match client.list_courses().await {
-        Ok(courses) => courses,
-        Err(error) => {
-            log::warn!("zhihuishu course list unavailable after login: {error:#}");
-            Vec::new()
-        }
-    };
-
+    if courses.is_empty() {
+        courses = match client.list_courses().await {
+            Ok(courses) => courses,
+            Err(error) => {
+                log::warn!("zhihuishu course list unavailable after login: {error:#}");
+                Vec::new()
+            }
+        };
+    }
+    // Safety net: even if the DOM probe/cookie poll missed the readiness signal,
+    // an exam-engine JSESSIONID in the final set means the SSO actually worked.
+    let sso_ready = sso_ready
+        || session_cookies.iter().any(|cookie| {
+            cookie.name == "JSESSIONID"
+                && (cookie.domain.contains("studentexam") || cookie.domain.contains("taurusexam"))
+        });
+    state.set_zhs_exam_sso_ready(sso_ready);
     if !state.mark_login_succeeded() {
         return Ok(());
     }
