@@ -1890,7 +1890,7 @@ async fn exam_flow_lists_finals_and_grows_the_bank_from_submission() {
         .submitted_answers(&submitted[0], &paper)
         .await
         .expect("submitted answers");
-    let mut bank = ZhsAnswerBank::builtin();
+    let mut bank = ZhsAnswerBank::default();
     let recorded = bank.record_submitted(&paper, &answers, 1_794_219_638);
     assert_eq!(recorded, 3, "all mock questions are full marks");
     assert_eq!(bank.len(), 3);
