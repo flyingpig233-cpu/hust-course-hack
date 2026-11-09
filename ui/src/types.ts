@@ -351,7 +351,14 @@ export type JobProgress =
 // ---- Zhihuishu (知到) DTOs -------------------------------------------------
 // Mirrors `src-tauri/src/zhihuishu.rs`; camelCase over the IPC boundary.
 
+/** Which Zhihuishu course list produced the course. Only `shared` supports
+ * video/meet/exam; the others are list-only in the GUI. */
+export type ZhsCourseKind = "shared" | "ai" | "school" | "other";
+
 export interface ZhsCourse {
+  kind: ZhsCourseKind;
+  /** Opaque id for POLYMAS/agent courses whose numeric ids are absent. */
+  externalId: string | null;
   recruitId: number;
   courseId: number;
   classId: number | null;

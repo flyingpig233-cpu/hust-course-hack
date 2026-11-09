@@ -53,6 +53,7 @@ import {
   renderZhsCourseError,
   renderZhsHome,
   renderZhsLoading,
+  renderZhsUnsupportedCourse,
   updateZhsLoading,
 } from "./views/zhs-course";
 import {
@@ -62,6 +63,8 @@ import {
 import { openZhsExamModal } from "./views/zhs-exam";
 import {
   zhsCompletedVideos,
+  zhsCourseKey,
+  zhsCourseKindLabel,
   zhsCourseLabel,
   zhsTotalVideos,
 } from "./zhs";
@@ -150,9 +153,13 @@ function updateSidebar(): void {
     selectedId = store.hust.selectedId;
   } else if (session && platform === "zhihuishu") {
     courses = store.zhs.courses.map((course) => ({
-      id: String(course.courseId),
+      id: zhsCourseKey(course),
       name: zhsCourseLabel(course),
-      meta: `recruit ${course.recruitId}`,
+      meta:
+        course.kind === "shared"
+          ? `recruit ${course.recruitId}`
+          : `${zhsCourseKindLabel(course)} · 只读`,
+      group: zhsCourseKindLabel(course),
     }));
     selectedId = store.zhs.selectedId;
   } else if (session) {
@@ -502,16 +509,19 @@ function findZhsCourse(reference: string): ZhsCourse | null {
   return (
     store.zhs.courses.find(
       (course) =>
+        zhsCourseKey(course) === reference ||
         String(course.courseId) === reference ||
         String(course.recruitId) === reference ||
+        (course.externalId !== null && course.externalId === reference) ||
         zhsCourseLabel(course) === reference,
     ) ?? null
   );
 }
 
 function upsertZhsCourse(course: ZhsCourse): void {
+  const key = zhsCourseKey(course);
   const index = store.zhs.courses.findIndex(
-    (item) => item.recruitId === course.recruitId,
+    (item) => zhsCourseKey(item) === key && item.kind === course.kind,
   );
   if (index >= 0) {
     store.zhs.courses[index] = course;
@@ -525,7 +535,7 @@ async function loadZhsCourseList(): Promise<void> {
     store.zhs.courses = await api.zhsListCourses();
     if (store.zhs.courses.length === 0) {
       toast(
-        "知到没有返回可用的共享课。可粘贴学习页链接（含 recruitAndCourseId）手动添加。",
+        "知到没有返回课程。可粘贴学习页链接（含 recruitAndCourseId）手动添加共享课。",
         "info",
       );
     }
@@ -566,12 +576,30 @@ async function selectZhsCourse(courseId: string): Promise<void> {
   }
   const course = findZhsCourse(courseId);
   if (!course) return;
-  if (store.zhs.selectedId === courseId && store.zhs.detail) {
+  const key = zhsCourseKey(course);
+  if (course.kind !== "shared") {
+    // Non-shared courses are discovery-only: show a read-only info panel.
+    store.zhs.selectedId = key;
+    store.zhs.view = "course";
+    store.zhs.detail = null;
+    store.zhs.examSummary = null;
+    store.zhs.meets = [];
+    store.zhs.meetProgress.clear();
+    updateSidebar();
+    renderZhsUnsupportedCourse(main, course, () => {
+      store.zhs.selectedId = null;
+      store.zhs.view = "home";
+      updateSidebar();
+      showHome();
+    });
+    return;
+  }
+  if (store.zhs.selectedId === key && store.zhs.detail) {
     store.zhs.view = "course";
     showZhsCourseView();
     return;
   }
-  store.zhs.selectedId = courseId;
+  store.zhs.selectedId = key;
   store.zhs.view = "course";
   store.zhs.detail = null;
   store.zhs.examSummary = null;

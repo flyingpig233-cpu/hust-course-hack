@@ -7,12 +7,47 @@
 
 use crate::{events::JobProgress, state::AppState};
 use hust_course_hack::zhihuishu::{
-    ZhsChapter, ZhsClient, ZhsCourse, ZhsCourseDetail, ZhsExceptionStatus, ZhsLesson, ZhsMeet,
-    ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetWatchOptions, ZhsProgress, ZhsProgressStage, ZhsVideo,
-    ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
+    ZhsChapter, ZhsClient, ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus,
+    ZhsLesson, ZhsMeet, ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetWatchOptions, ZhsProgress,
+    ZhsProgressStage, ZhsVideo, ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+
+/// Append one diagnostic line for failed watch targets to
+/// `%APPDATA%\hust-course-hack\logs\zhs-watch.log` (no cookies/secretStr).
+fn watch_log(_app: &AppHandle, message: impl AsRef<str>) {
+    use std::io::Write;
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let Some(appdata) = std::env::var_os("APPDATA") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(appdata)
+        .join("hust-course-hack")
+        .join("logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let path = dir.join("zhs-watch.log");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let line: String = message
+        .as_ref()
+        .chars()
+        .map(|ch| if ch == '\n' || ch == '\r' { ' ' } else { ch })
+        .take(800)
+        .collect();
+    if let Ok(_guard) = LOCK.lock()
+        && let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+    {
+        let _ = writeln!(file, "[{stamp}] {line}");
+    }
+}
 
 /// Job id for the shared-course video queue.
 pub const ZHS_WATCH_JOB: &str = "zhs-watch";
@@ -128,6 +163,12 @@ fn coverage(value: Option<f64>, fallback: f64) -> f64 {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ZhsCourseDto {
+    /// Which list endpoint produced this course (`shared` / `ai` / `school` /
+    /// `other`). Only `shared` supports the video/meet/exam protocols.
+    pub kind: ZhsCourseKind,
+    /// Opaque id for sources without a numeric `courseId` (POLYMAS agent
+    /// courses); `course_id` is `0` for them.
+    pub external_id: Option<String>,
     pub recruit_id: u64,
     pub course_id: u64,
     pub class_id: Option<u64>,
@@ -146,6 +187,8 @@ pub struct ZhsCourseDto {
 impl From<ZhsCourse> for ZhsCourseDto {
     fn from(course: ZhsCourse) -> Self {
         Self {
+            kind: course.kind,
+            external_id: course.external_id,
             recruit_id: course.recruit_id,
             course_id: course.course_id,
             class_id: course.class_id,
@@ -427,9 +470,12 @@ pub struct ZhsMeetWatchSummaryDto {
 #[tauri::command]
 pub async fn zhs_list_courses(state: State<'_, AppState>) -> Result<Vec<ZhsCourseDto>, String> {
     let client = zhs_client(&state)?;
-    let courses = client.list_courses().await.map_err(|error| {
-        format!("知到课程列表接口暂不可用：{error:#}；可粘贴学习页链接手动添加课程")
-    })?;
+    // All course types: shared, AI 智课, in-school wisdom courses and the
+    // micro/flipped/B2C "other" sources. Only `shared` supports video/meet/exam.
+    let courses = client.list_all_courses().await;
+    if courses.is_empty() {
+        return Err("知到没有返回任何课程；可稍后刷新，或粘贴学习页链接手动添加共享课".to_string());
+    }
     state.set_zhs_courses(courses.clone());
     Ok(courses.into_iter().map(ZhsCourseDto::from).collect())
 }
@@ -452,6 +498,7 @@ pub async fn zhs_add_course(
         .resolve_course(reference)
         .await
         .map_err(|error| format!("解析知到课程失败：{error:#}"))?;
+    ensure_shared_course(&course)?;
     state.upsert_zhs_course(course.clone());
     Ok(course.into())
 }
@@ -597,6 +644,50 @@ pub async fn zhs_watch_videos(
     }
 
     let summary = summarize_watch(total, &outcomes, options.dry_run);
+    if !options.dry_run {
+        for (offset, outcome) in outcomes.iter().enumerate() {
+            if !matches!(
+                outcome.state,
+                ZhsWatchState::Failed | ZhsWatchState::CircuitBroken
+            ) {
+                continue;
+            }
+            match targets.get(offset) {
+                Some(target) => watch_log(
+                    &app,
+                    format!(
+                        "FAIL videoId={} lessonVideoId={} label={} state={} error={}",
+                        target.video_id,
+                        target.lesson_video_id,
+                        target.label,
+                        watch_state_key(outcome.state),
+                        outcome.message
+                    ),
+                ),
+                None => watch_log(
+                    &app,
+                    format!(
+                        "FAIL label={} state={} error={}",
+                        outcome.label,
+                        watch_state_key(outcome.state),
+                        outcome.message
+                    ),
+                ),
+            }
+        }
+        watch_log(
+            &app,
+            format!(
+                "SUMMARY course={} total={} ok={} skipped={} failed={} cancelled={}",
+                course.label(),
+                summary.total,
+                summary.ok,
+                summary.skipped,
+                summary.failed,
+                summary.cancelled
+            ),
+        );
+    }
     Ok(summary)
 }
 
@@ -854,14 +945,28 @@ async fn find_course(
         return Err("课程参数为空".to_string());
     }
     if let Some(course) = state.zhs_course(reference) {
+        ensure_shared_course(&course)?;
         return Ok(course);
     }
     let course = client
         .resolve_course(reference)
         .await
         .map_err(|error| format!("解析知到课程失败：{error:#}"))?;
+    ensure_shared_course(&course)?;
     state.upsert_zhs_course(course.clone());
     Ok(course)
+}
+
+/// Only 共享课 courses have the video/meet/exam protocol implemented; AI 智课,
+/// 校内智慧课程 and other sources are list-only for now.
+fn ensure_shared_course(course: &ZhsCourse) -> Result<(), String> {
+    if course.kind == ZhsCourseKind::Shared {
+        return Ok(());
+    }
+    Err(format!(
+        "{}暂不支持秒刷与详情，仅支持列表查看",
+        course.kind.label()
+    ))
 }
 
 fn summarize_watch(
