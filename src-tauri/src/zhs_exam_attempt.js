@@ -53,6 +53,12 @@
       .toLowerCase();
   }
 
+  function escapeHtml(text) {
+    return String(text == null ? '' : text).replace(/[&<>"]/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
+    });
+  }
+
   function invoke(cmd, args) {
     var internals = window.__TAURI_INTERNALS__;
     if (!internals || typeof internals.invoke !== 'function') {
@@ -75,7 +81,9 @@
   var statusNode = null;
   var logNode = null;
   var startButton = null;
+  var tolerantButton = null;
   var stopButton = null;
+  var unresolvedNode = null;
 
   function ensureOverlay() {
     if (overlay && overlay.isConnected) return;
@@ -88,8 +96,8 @@
         'right:18px',
         'bottom:18px',
         'z-index:2147483647',
-        'width:360px',
-        'max-height:70vh',
+        'width:380px',
+        'max-height:76vh',
         'overflow:auto',
         'padding:12px 14px',
         'border-radius:12px',
@@ -102,20 +110,26 @@
     overlay.innerHTML =
       '<div style="font-weight:700;margin-bottom:6px">知到 · 网页作答</div>' +
       '<div id="__zhs_a_status" style="opacity:.9;min-height:36px;white-space:pre-wrap">等待进入试卷页…</div>' +
-      '<div style="display:flex;gap:8px;margin:10px 0">' +
-      '<button id="__zhs_a_start" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#2563eb;color:#fff">开始自动作答</button>' +
+      '<div id="__zhs_a_unresolved" style="display:none;margin:8px 0;padding:8px;border-radius:8px;background:#3f1d1d;font-size:12px;max-height:140px;overflow:auto"></div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">' +
+      '<button id="__zhs_a_start" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#2563eb;color:#fff">开始自动作答（全解析）</button>' +
+      '<button id="__zhs_a_tolerant" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#b91c1c;color:#fff;display:none">容错试做并提交（未解析题任选首项，会得低分）</button>' +
       '<button id="__zhs_a_stop" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#374151;color:#fff">停止</button>' +
       '</div>' +
       '<div id="__zhs_a_log" style="opacity:.75;font-size:12px;max-height:180px;overflow:auto"></div>' +
-      '<div style="opacity:.6;margin-top:8px">若出现滑块验证，请先在窗口内手动完成；不会自动提交未解析完整的计划。</div>';
+      '<div style="opacity:.6;margin-top:8px">若出现滑块验证，请先在窗口内手动完成。严格模式只在计划完整时提交；容错试做会把未解析题任选首项，用于先拿低分再采集 AI解析重做。</div>';
     document.documentElement.appendChild(overlay);
     statusNode = overlay.querySelector('#__zhs_a_status');
     logNode = overlay.querySelector('#__zhs_a_log');
     startButton = overlay.querySelector('#__zhs_a_start');
+    tolerantButton = overlay.querySelector('#__zhs_a_tolerant');
     stopButton = overlay.querySelector('#__zhs_a_stop');
+    unresolvedNode = overlay.querySelector('#__zhs_a_unresolved');
     startButton.addEventListener('click', function () {
-      if (!A.plan || !A.plan.complete || A.running) return;
-      void runAnswering();
+      startMode('strict');
+    });
+    tolerantButton.addEventListener('click', function () {
+      startMode('tolerant');
     });
     stopButton.addEventListener('click', function () {
       A.stopped = true;
@@ -414,28 +428,52 @@
       });
       A.plan = plan;
       A.planned = true;
+      var unresolved = plan.unresolved || [];
+      if (unresolvedNode) {
+        if (unresolved.length) {
+          unresolvedNode.style.display = 'block';
+          unresolvedNode.innerHTML =
+            '未解析 ' +
+            unresolved.length +
+            ' 题（容错试做会任选首项，会得低分）：<br>' +
+            unresolved
+              .slice(0, 20)
+              .map(function (item) {
+                return '· ' + escapeHtml(item.stem || item.questionId);
+              })
+              .join('<br>');
+        } else {
+          unresolvedNode.style.display = 'none';
+          unresolvedNode.innerHTML = '';
+        }
+      }
+      updatePlanButtons();
       if (plan.complete) {
         setStatus(
           '已解析 ' +
             plan.resolved +
             ' / ' +
             plan.total +
-            ' 题，计划完整。确认后点击「开始自动作答」。',
+            ' 题，计划完整。确认后点击「开始自动作答（全解析）」。',
         );
-        log('全部题目命中答案库，可自动作答。');
+        log('全部题目命中答案库，可严格自动作答。');
       } else {
-        var names = (plan.unresolved || []).slice(0, 5).map(function (item) {
-          return '· ' + (item.stem || item.questionId);
-        });
         setStatus(
           '已解析 ' +
             plan.resolved +
             ' / ' +
             plan.total +
             ' 题，仍有 ' +
-            (plan.unresolved || []).length +
-            ' 题没有答案，已禁止自动提交。\n请先关闭窗口，对已提交试卷采集 AI解析，或在主窗口「手动导入」。\n' +
-            names.join('\n'),
+            unresolved.length +
+            ' 题没有答案。\n严格模式已隐藏。可点红色「容错试做」先提交低分，随后对这场采集 AI解析，再重做满分。',
+        );
+        log(
+          '未解析题目 id：' +
+            unresolved
+              .map(function (item) {
+                return item.questionId;
+              })
+              .join(', '),
         );
       }
     } catch (error) {
@@ -452,44 +490,126 @@
     return null;
   }
 
-  async function runAnswering() {
-    if (A.running || !A.plan || !A.plan.complete) return;
+  function updatePlanButtons() {
+    if (!A.plan || !startButton || !tolerantButton) return;
+    if (A.running) {
+      startButton.style.display = 'none';
+      tolerantButton.style.display = 'none';
+      return;
+    }
+    startButton.style.display = A.plan.complete ? 'inline-block' : 'none';
+    tolerantButton.style.display = A.plan.complete ? 'none' : 'inline-block';
+  }
+
+  async function startMode(mode) {
+    if (A.running || !A.plan) return;
+    if (mode === 'strict' && !A.plan.complete) return;
+    if (mode === 'tolerant') {
+      var unresolvedCount = (A.plan.unresolved || []).length;
+      var ok = window.confirm(
+        '容错试做会把 ' +
+          unresolvedCount +
+          ' 道未解析题任选首项（多选只选一项），本次提交会得低分。\n' +
+          '目的：先让这场试卷变成「已提交」，之后才能采集 AI解析。\n\n' +
+          '本次会真实提交并可能消耗一次尝试机会。确认开始？',
+      );
+      if (!ok) return;
+    }
+    void runAnswering(mode);
+  }
+
+  async function runAnswering(mode) {
+    if (A.running) return;
     A.running = true;
     A.stopped = false;
     ensureOverlay();
-    setStatus('开始自动作答…');
+    updatePlanButtons();
+    var tolerant = mode === 'tolerant';
     var total = A.questions.length;
+    var fallbackCount = 0;
+    setStatus(tolerant ? '开始容错试做：未解析题将任选首项…' : '开始自动作答…');
+
     for (var i = 0; i < A.questions.length; i += 1) {
       if (A.stopped) {
         setStatus('已停止：未提交。请手动检查并决定是否继续。');
         A.running = false;
+        updatePlanButtons();
         return;
       }
       var question = A.questions[i];
-      var answers = A.plan.answers[question.questionId] || [];
+      var answers = (A.plan.answers[question.questionId] || []).slice();
+      var fallback = false;
       if (!answers.length) {
-        setStatus('第 ' + (i + 1) + ' 题没有可用答案，已停止且未提交。');
-        A.running = false;
-        return;
+        if (!tolerant) {
+          setStatus('第 ' + (i + 1) + ' 题没有可用答案，已停止且未提交。');
+          A.running = false;
+          updatePlanButtons();
+          return;
+        }
+        if (!question.options.length) {
+          setStatus('第 ' + (i + 1) + ' 题在页面中找不到选项，已停止且未提交。');
+          A.running = false;
+          updatePlanButtons();
+          return;
+        }
+        // Tolerant mode: exactly one option (multi-select also gets one).
+        answers = [question.options[0].content];
+        fallback = true;
+        fallbackCount += 1;
+        log(
+          '[容错] 第 ' +
+            (i + 1) +
+            ' 题未解析，任选首项：' +
+            question.options[0].content.slice(0, 30),
+        );
       }
       // Re-read the live DOM in case the page re-rendered.
       var live = readQuestions()[0];
       if (live && live.questionId === question.questionId) {
         question = live;
       }
-      setStatus('作答 ' + (i + 1) + ' / ' + total + '：' + question.stem.slice(0, 30));
-      log('[' + (i + 1) + '/' + total + '] ' + question.stem.slice(0, 40));
+      setStatus(
+        (fallback ? '容错作答 ' : '作答 ') +
+          (i + 1) +
+          ' / ' +
+          total +
+          '：' +
+          question.stem.slice(0, 30),
+      );
+      log(
+        '[' +
+          (i + 1) +
+          '/' +
+          total +
+          ']' +
+          (fallback ? '[容错首项]' : '') +
+          ' ' +
+          question.stem.slice(0, 40),
+      );
       for (var a = 0; a < answers.length; a += 1) {
         if (!clickOption(question, answers[a])) {
-          setStatus(
-            '第 ' +
-              (i + 1) +
-              ' 题找不到选项「' +
-              answers[a] +
-              '」，已停止且未提交；可在窗口内手动完成。',
-          );
-          A.running = false;
-          return;
+          if (tolerant && !fallback && question.options.length) {
+            log('[容错] 第 ' + (i + 1) + ' 题题库选项未匹配，改选首项');
+            if (!clickOption(question, question.options[0].content)) {
+              setStatus('第 ' + (i + 1) + ' 题选项点击失败，已停止且未提交。');
+              A.running = false;
+              updatePlanButtons();
+              return;
+            }
+            fallback = true;
+            fallbackCount += 1;
+          } else {
+            setStatus(
+              '第 ' +
+                (i + 1) +
+                ' 题找不到选项「' +
+                answers[a] +
+                '」，已停止且未提交；可在窗口内手动完成。',
+            );
+            A.running = false;
+            updatePlanButtons();
+            return;
+          }
         }
         await sleep(rand(250, 600));
       }
@@ -499,6 +619,7 @@
         if (!next) {
           setStatus('找不到「下一题」按钮，已停止且未提交；请在窗口内手动完成剩余题目。');
           A.running = false;
+          updatePlanButtons();
           return;
         }
         var previous = {
@@ -511,6 +632,7 @@
         if (!moved) {
           setStatus('点击「下一题」后页面没有变化，已停止且未提交。');
           A.running = false;
+          updatePlanButtons();
           return;
         }
       }
@@ -519,6 +641,7 @@
     if (A.stopped) {
       setStatus('已停止：未提交。');
       A.running = false;
+      updatePlanButtons();
       return;
     }
 
@@ -528,6 +651,7 @@
     if (!submit) {
       setStatus('找不到「提交作业」按钮，已停止且未提交；请手动检查后提交。');
       A.running = false;
+      updatePlanButtons();
       return;
     }
     clickNode(submit);
@@ -547,13 +671,28 @@
         examId: CTX.examId,
         score: score,
       });
-      setStatus(
-        '已提交！' +
-          (result.score === null ? '' : '得分 ' + result.score + ' / ' + result.total_score + '；') +
-          '写入答案库 ' +
-          result.recorded_to_bank +
-          ' 题。可关闭窗口。',
-      );
+      var scoreText =
+        result.score === null
+          ? '（成绩待刷新）'
+          : '得分 ' + result.score + ' / ' + result.total_score;
+      if (tolerant) {
+        setStatus(
+          '容错试做已提交！' +
+            scoreText +
+            '（未解析 ' +
+            fallbackCount +
+            ' 题任选首项，会得低分）\n\n' +
+            '下一步：关闭本窗口 → 在作业列表「已提交」找到这场 → 点击「采集 AI解析」→ 采集完成后「网页重做」提交满分。',
+        );
+      } else {
+        setStatus(
+          '已提交！' +
+            scoreText +
+            '；写入答案库 ' +
+            result.recorded_to_bank +
+            ' 题。可关闭窗口。',
+        );
+      }
     } catch (error) {
       setStatus(
         '已提交，但回读成绩失败：' +
@@ -562,6 +701,7 @@
       );
     }
     A.running = false;
+    updatePlanButtons();
   }
 
   // ---- boot --------------------------------------------------------------
