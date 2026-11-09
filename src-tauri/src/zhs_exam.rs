@@ -19,8 +19,8 @@ use anyhow::{Context, Result};
 use hust_course_hack::{
     cookie::CookieRecord,
     zhihuishu::{
-        ZhsAnswerBank, ZhsBankEntry, ZhsExamClient, ZhsExamOption, ZhsExamPaper, ZhsExamPlan,
-        ZhsExamQuestion, ZhsFinalExam, ZhsHomework, ZhsSubmittedAnswer, plan_exam,
+        ZhsAnswerBank, ZhsBankEntry, ZhsCourse, ZhsExamClient, ZhsExamOption, ZhsExamPaper,
+        ZhsExamPlan, ZhsExamQuestion, ZhsFinalExam, ZhsHomework, ZhsSubmittedAnswer, plan_exam,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,8 @@ const BANK_FILE: &str = "zhihuishu-answer-bank.json";
 const HARVEST_SCRIPT: &str = include_str!("zhs_exam_harvest.js");
 /// Injected attempt script (dohomework page: manual slider, then auto answer).
 const ATTEMPT_SCRIPT: &str = include_str!("zhs_exam_attempt.js");
+/// Injected redo script (exam list page: 已提交 tab → 申请重做 → confirm).
+const REDO_SCRIPT: &str = include_str!("zhs_exam_redo.js");
 /// Loading/error/diagnostic bootstrap injected into the exam window before any
 /// navigation. It guarantees the window is never blank white and bridges JS
 /// errors to the file log.
@@ -936,42 +938,109 @@ pub struct ZhsRedoResultDto {
     pub message: String,
 }
 
-/// Request a redo of a submitted homework so it can be answered again.
+/// Result event for the webview-driven redo flow.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZhsRedoEventDto {
+    pub exam_id: String,
+    pub ok: bool,
+    pub reason: String,
+}
+
+/// Request a redo through the exam-list webview.
 ///
-/// The platform's `applyRedo` request parameters are still being captured; this
-/// command validates the local preconditions and returns an actionable error
-/// until the core exposes the request. The UI then disables the button with a
-/// tooltip instead of silently failing.
+/// The platform's `student/applyRedo` API is a dead end (it returns `rt:0`
+/// without moving the attempt); the working browser flow is the list page
+/// click sequence. This opens the exam list with the course
+/// `recruitAndCourseId` secret and the injected [`REDO_SCRIPT`] switches to
+/// 已提交, clicks 申请重做 and confirms the dialog. The script reports back
+/// through [`zhs_exam_redo_result`], which emits `zhs-exam-redo`; on success the
+/// window is destroyed and the UI refreshes + opens the attempt window.
+///
+/// Finals are never redone (single attempt, list-only).
 #[tauri::command]
 pub async fn zhs_exam_redo(
     app: AppHandle,
     state: State<'_, AppState>,
     recruit_id: u64,
     course_id: u64,
-    exam_id: String,
+    exam_name_or_id: String,
 ) -> Result<ZhsRedoResultDto, String> {
     let client = exam_client(&state)?;
-    ensure_not_final(&client, recruit_id, course_id, &exam_id).await?;
-    let homework = find_homework(&client, recruit_id, course_id, &exam_id).await?;
+    let homework = find_homework_ref(&client, recruit_id, course_id, &exam_name_or_id).await?;
+    ensure_not_final(&client, recruit_id, course_id, &homework.exam_id).await?;
     if homework.state != Some(1) && homework.achieve.is_none() {
         return Err("该作业尚未提交，无需申请重做；直接点「网页作答」即可。".to_string());
     }
     if homework.back_num == Some(0) {
         return Err("平台显示剩余重做次数为 0，无法申请重做。".to_string());
     }
+    let secret = state
+        .zhs_course(&course_id.to_string())
+        .map(|course| course.secret_or_derive())
+        .unwrap_or_else(|| {
+            ZhsCourse {
+                recruit_id,
+                course_id,
+                ..Default::default()
+            }
+            .course_secret()
+        });
+    let url = exam_list_url(&secret)?;
+    let context_json = serde_json::json!({
+        "mode": "redo",
+        "windowLabel": EXAM_WINDOW_LABEL,
+        "recruitId": recruit_id,
+        "courseId": course_id,
+        "examId": homework.exam_id,
+        "stuExamId": homework.stu_exam_id,
+        "targetName": homework.name,
+    });
+    let script = format!(
+        "window.__ZHS_EXAM_CTX__ = {};\n{}\n{}",
+        context_json, DIAGNOSTIC_SCRIPT, REDO_SCRIPT
+    );
     exam_log(
         &app,
         format!(
-            "redo requested: {} (examId={}, stuExamId={}, backNum={:?})",
-            homework.name, homework.exam_id, homework.stu_exam_id, homework.back_num
+            "redo requested via webview: {} (examId={}, backNum={:?})",
+            homework.name, homework.exam_id, homework.back_num
         ),
     );
-    Err(
-        "平台「申请重做」接口参数仍在抓包确认中（applyRedo 尚未接入），暂不可用；接入后会自动刷新列表并打开作答窗口。当前请先用「网页作答」。"
-            .to_string(),
-    )
+    open_exam_window(&app, url, "知到 · 申请重做", script)?;
+    Ok(ZhsRedoResultDto {
+        started: true,
+        message: "已打开考试列表窗口，正在自动申请重做…".to_string(),
+    })
 }
 
+/// Result reported by the injected redo script (also closes the window on
+/// success so the UI can refresh and open the attempt window).
+#[tauri::command]
+pub async fn zhs_exam_redo_result(
+    app: AppHandle,
+    exam_id: String,
+    ok: bool,
+    reason: String,
+) -> Result<(), String> {
+    let reason_log: String = reason.chars().take(300).collect();
+    exam_log(
+        &app,
+        format!("redo result: examId={exam_id} ok={ok} reason={reason_log}"),
+    );
+    let _ = app.emit(
+        "zhs-exam-redo",
+        ZhsRedoEventDto {
+            exam_id,
+            ok,
+            reason,
+        },
+    );
+    if ok && let Some(window) = app.get_webview_window(EXAM_WINDOW_LABEL) {
+        let _ = window.destroy();
+    }
+    Ok(())
+}
 /// Stub hook for the 网易易盾 click-character captcha solver.
 ///
 /// The attempt script detects the captcha, calls this command and falls back to
@@ -1394,7 +1463,81 @@ fn fuzzy_resolve(bank: &ZhsAnswerBank, question: &ZhsExamQuestion) -> Option<Vec
     }
 }
 
-/// Reject the one-attempt final exam (list-only in the GUI)./// Reject the one-attempt final exam (list-only in the GUI).
+/// Like [`find_homework`] but accepts the exam name as well (the redo UI passes
+/// `name` because it is what the list webview shows).
+async fn find_homework_ref(
+    client: &ZhsExamClient,
+    recruit_id: u64,
+    course_id: u64,
+    reference: &str,
+) -> Result<ZhsHomework, String> {
+    for submitted in [false, true] {
+        let list = client
+            .list_homework(recruit_id, course_id, submitted)
+            .await
+            .map_err(|error| format!("读取知到作业列表失败：{error:#}"))?;
+        if let Some(homework) = list
+            .iter()
+            .find(|item| item.exam_id == reference || item.name == reference)
+        {
+            return Ok(homework.clone());
+        }
+    }
+    // Truncated/renamed titles: accept a containment match as the last resort.
+    for submitted in [false, true] {
+        let list = client
+            .list_homework(recruit_id, course_id, submitted)
+            .await
+            .map_err(|error| format!("读取知到作业列表失败：{error:#}"))?;
+        if let Some(homework) = list.into_iter().find(|item| {
+            !reference.trim().is_empty()
+                && (item.name.contains(reference) || reference.contains(item.name.as_str()))
+        }) {
+            return Ok(homework);
+        }
+    }
+    Err(format!(
+        "未找到作业「{reference}」，请先在作业/考试弹窗点「刷新」后再试"
+    ))
+}
+
+/// Exam list URL used by the webview redo flow.
+fn exam_list_url(secret: &str) -> Result<Url, String> {
+    let encoded = base64_encode(secret);
+    let raw = format!(
+        "https://onlineexamh5new.zhihuishu.com/stuExamWeb.html#/webExamList?recruitId={encoded}"
+    );
+    Url::parse(&raw).map_err(|error| format!("申请重做页地址无效：{error}"))
+}
+
+/// Minimal base64 encoder (the exam list expects the secret base64-encoded, and
+/// the GUI crate intentionally has no extra codec dependency).
+fn base64_encode(input: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let value = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((value >> 18) & 63) as usize] as char);
+        out.push(TABLE[((value >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((value >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(value & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Reject the one-attempt final exam (list-only in the GUI).
 async fn ensure_not_final(
     client: &ZhsExamClient,
     recruit_id: u64,

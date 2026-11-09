@@ -768,10 +768,17 @@ export interface ZhsExamSummary {
   finalExamSubmitted: number;
 }
 
-/** Result of a 申请重做 request. */
+/** Result of a 申请重做 request (the flow runs in the exam-list webview). */
 export interface ZhsRedoResult {
   started: boolean;
   message: string;
+}
+
+/** Payload of the `zhs-exam-redo` event (injected list script finished). */
+export interface ZhsRedoEvent {
+  examId: string;
+  ok: boolean;
+  reason: string;
 }
 
 export interface ZhsAiEntry {

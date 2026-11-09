@@ -1977,7 +1977,7 @@ export const mockApi = {
   async zhsExamRedo(): Promise<ZhsRedoResult> {
     requireZhsSession();
     throw new Error(
-      "演示模式不支持申请重做；真实平台参数仍在抓包确认中（applyRedo），接入后会自动刷新并打开作答窗口。",
+      "演示模式不支持申请重做；真实环境会打开考试列表窗口，自动点击「申请重做」并在成功后刷新列表、打开作答窗口。",
     );
   },
   // ---- Ulearning (优学院) demo backend ----------------------------------

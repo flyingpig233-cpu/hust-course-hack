@@ -1,4 +1,4 @@
-import { api, onZhsExamAi, onZhsExamResult } from "../api";
+import { api, onZhsExamAi, onZhsExamRedo, onZhsExamResult } from "../api";
 import type { ToastTone } from "../dom";
 import { errorText, esc, openModal, qs } from "../dom";
 import { icon } from "../icons";
@@ -135,6 +135,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
   let examSummary: ZhsExamSummary | null = options.summary ?? null;
   let redoUnsupported = false;
   let redoBusy = false;
+  let pendingRedo: ZhsHomework | null = null;
   const listeners: Array<() => void> = [];
   const recentToasts = new Map<string, number>();
   let recentAuthHintAt = 0;
@@ -312,49 +313,40 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     }
   }
 
-  /** 申请重做: on success refresh the lists and immediately open the attempt window. */
+  /** 申请重做: the list webview performs the click sequence and reports an event. */
   async function openRedo(homework: ZhsHomework): Promise<void> {
-    if (redoBusy || redoUnsupported) return;
+    if (redoBusy) return;
     if (homework.backNum === 0) {
       notify("平台显示剩余重做次数为 0，无法申请重做。", "info");
       return;
     }
     const ok = window.confirm(
       `申请重做：${homework.name}\n\n` +
-        `申请成功后平台会恢复一次作答机会，并自动打开作答窗口（仍需在窗口内完成滑块验证）。\n` +
+        `会打开考试列表窗口，自动切到「已提交」并点击「申请重做」→「确定」。\n` +
+        `成功后自动刷新列表并打开作答窗口（窗口内仍需手动完成滑块/安全验证）。\n` +
         `是否继续？`,
     );
     if (!ok) return;
     redoBusy = true;
-    notify("正在申请重做…", "info");
+    pendingRedo = homework;
     try {
       const result = await api.zhsExamRedo(
         options.recruitId,
         options.courseId,
-        homework.examId,
+        homework.name || homework.examId,
       );
-      notify(result.message || "已申请重做，正在打开作答窗口…", "success");
-      pending = null;
-      submitted = null;
-      tab = "pending";
-      for (const button of tabs) {
-        button.classList.toggle("is-active", button.dataset.tab === "pending");
-      }
-      view = "list";
-      await loadList(true);
-      await openAttempt(homework, false);
+      notify(result.message || "已打开考试列表窗口，正在自动申请重做…", "info");
     } catch (error) {
+      pendingRedo = null;
+      redoBusy = false;
       const message = errorText(error);
       if (/抓包|暂不可用|applyRedo|待确认|不支持/.test(message)) {
         redoUnsupported = true;
       }
       notify(message, "error");
       if (view === "list") render();
-    } finally {
-      redoBusy = false;
     }
   }
-
   async function openHarvest(homework: ZhsHomework): Promise<void> {
     const ok = window.confirm(
       `打开 AI解析采集窗口？\n\n` +
@@ -816,6 +808,39 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       .then((stop) => listeners.push(stop))
       .catch(() => undefined);
   }
+
+  void onZhsExamRedo((event) => {
+    if (closed) return;
+    const homework = pendingRedo;
+    pendingRedo = null;
+    redoBusy = false;
+    if (!event.ok) {
+      notify(
+        `申请重做失败：${event.reason || "未知原因"}（窗口已保留，可查看诊断面板和日志）`,
+        "error",
+      );
+      render();
+      return;
+    }
+    notify("申请重做成功，正在刷新列表并打开作答窗口…", "success");
+    pending = null;
+    submitted = null;
+    tab = "pending";
+    for (const button of tabs) {
+      button.classList.toggle("is-active", button.dataset.tab === "pending");
+    }
+    view = "list";
+    void (async () => {
+      await loadList(true);
+      const list = currentList();
+      const target =
+        list?.homework.find((item) => item.examId === event.examId) ??
+        homework;
+      if (target) await openAttempt(target, false);
+    })();
+  })
+    .then((stop) => listeners.push(stop))
+    .catch(() => undefined);
 
   void onZhsExamResult((event) => {
     if (closed) return;
