@@ -330,7 +330,7 @@ pub struct ZhsMeetVideo {
 }
 
 /// Replay attendance progress of one meet course.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ZhsMeetProgress {
     /// Total number of one-minute slots in the replay.
     pub total_minutes: u32,
@@ -340,6 +340,56 @@ pub struct ZhsMeetProgress {
     pub watched_count: usize,
     /// Watched coverage in percent (0-100).
     pub percent: u32,
+    /// Whether the meet requirement is complete. A signed (签到完成) meeting is
+    /// complete even when replay minutes are missing.
+    pub completed: bool,
+    /// Sign-in / attendance state from `checkLiveHomeAuth`.
+    #[serde(default)]
+    pub attendance: ZhsMeetAttendance,
+}
+
+/// Sign-in (签到) attendance state of one meet course.
+///
+/// For the measured course **签到完成 == 回放完成**: the platform marks the
+/// replay requirement as satisfied when `signInStatus == "2"`, even when the
+/// replay-minute list is empty. `signed == true` therefore means both
+/// attendance and replay completion, and [`ZhsMeetProgress`] reports it as
+/// 100%/completed. The other raw fields are kept for future edge cases where a
+/// course may distinguish attendance from replay watching.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ZhsMeetAttendance {
+    /// Whether the platform reports the meeting as signed/attended
+    /// (`signInStatus == "2"`).
+    pub signed: bool,
+    /// Raw `signInStatus` value (`"2"` = signed).
+    pub sign_status: Option<String>,
+    /// Raw `openStatus` value.
+    pub open_status: Option<String>,
+    /// Raw `courseLeaveStatus` value.
+    pub course_leave_status: Option<String>,
+    /// Raw `courseEndStatus` value.
+    pub course_end_status: Option<String>,
+    /// Full response object, for callers that need platform-specific fields.
+    pub raw: serde_json::Value,
+}
+
+impl ZhsMeetAttendance {
+    /// Whether the attendance endpoint returned a real payload (as opposed to
+    /// the default used when the call failed).
+    pub fn known(&self) -> bool {
+        !self.raw.is_null()
+    }
+
+    /// Chinese label for CLI/UI output.
+    pub fn label(&self) -> &'static str {
+        if !self.known() {
+            "未知（考勤接口不可用）"
+        } else if self.signed {
+            "已签到（签到已完成）"
+        } else {
+            "未签到"
+        }
+    }
 }
 
 impl ZhsMeetProgress {
@@ -358,7 +408,28 @@ impl ZhsMeetProgress {
             watched_minutes,
             watched_count,
             percent,
+            completed: false,
+            attendance: ZhsMeetAttendance::default(),
         }
+    }
+
+    /// Mark a signed meeting as fully completed (签到完成 == 回放完成).
+    ///
+    /// The platform stops requiring replay minutes once the sign-in is done, so
+    /// report 100% and `completed = true`; keep the real `watched_minutes` list
+    /// for diagnostics instead of inventing watched slots.
+    pub fn mark_completed_by_attendance(mut self) -> Self {
+        if self.attendance.signed {
+            self.completed = true;
+            self.percent = 100;
+            self.watched_count = self.total_minutes as usize;
+        }
+        self
+    }
+
+    /// Whether attendance (签到) satisfies the meet requirement.
+    pub fn attendance_satisfied(&self) -> bool {
+        self.attendance.signed
     }
 }
 

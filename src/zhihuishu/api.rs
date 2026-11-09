@@ -31,7 +31,7 @@ use url::Url;
 use super::{
     AI_COURSE_LIST_PATH, APPCOMM_USER_BASE, B2C_BASE, B2C_COURSE_LIST_PATH, COURSE_LIST_PATH,
     HIKE_COURSE_LIST_PATH, HIKE_TEACHING_BASE, IM_BASE, IM_LIVE_VIDEOS_PATH, LIVE_BASE,
-    LIVE_REFERER, LOGIN_USER_INFO_PATH, MEET_EXCEPTION_PATH, MEET_HISTORY_PATH,
+    LIVE_REFERER, LOGIN_USER_INFO_PATH, MEET_AUTH_PATH, MEET_EXCEPTION_PATH, MEET_HISTORY_PATH,
     MEET_LIST_FALLBACK_PATH, MEET_LIST_PATH, MEET_SUBMIT_PATH, MICRO_COURSE_LIST_PATH,
     MODULE_COURSE_LIST, MODULE_MEET, MODULE_VIDEO, ONLINE_BASE, ONLINE_REFERER,
     ONLINE_SERVICE_BASE, ONLINE_SERVICE_REFERER, POLYMAS_BASE, POLYMAS_COURSE_LIST_PATH,
@@ -44,9 +44,9 @@ use super::{
     crypto::{self, ModuleKeyCache},
     meet::{self, ZhsMeetWatchOptions},
     models::{
-        ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus, ZhsMeet, ZhsMeetProgress,
-        ZhsMeetVideo, ZhsPrelearningNote, ZhsUser, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions,
-        ZhsWatchOutcome,
+        ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus, ZhsMeet, ZhsMeetAttendance,
+        ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote, ZhsUser, ZhsVideoStudy, ZhsVideoTarget,
+        ZhsWatchOptions, ZhsWatchOutcome,
     },
     watch,
 };
@@ -350,6 +350,37 @@ fn strip_jsonp(text: &str) -> Result<&str> {
 
 fn json_array(value: &Value) -> Option<&Vec<Value>> {
     value.as_array()
+}
+
+/// Parse a `checkLiveHomeAuth` payload into [`ZhsMeetAttendance`].
+///
+/// The real response is a flat object; tolerate an `rt`/`data` wrapper as well.
+/// `signInStatus == "2"` means 已签到/考勤完成.
+fn parse_meet_attendance(value: &Value) -> ZhsMeetAttendance {
+    let source = value
+        .get("rt")
+        .filter(|inner| inner.is_object())
+        .or_else(|| value.get("data").filter(|inner| inner.is_object()))
+        .unwrap_or(value);
+    let field = |key: &str| {
+        source
+            .get(key)
+            .and_then(|value| match value {
+                Value::String(text) => Some(text.trim().to_string()),
+                Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+    };
+    let sign_status = field("signInStatus");
+    ZhsMeetAttendance {
+        signed: sign_status.as_deref() == Some("2"),
+        sign_status,
+        open_status: field("openStatus"),
+        course_leave_status: field("courseLeaveStatus"),
+        course_end_status: field("courseEndStatus"),
+        raw: value.clone(),
+    }
 }
 
 /// Parse a `getWatchHistory` payload (`rt` string, array or nested object).
@@ -2004,12 +2035,81 @@ impl ZhsClient {
         serde_json::from_str(strip_jsonp(&text)?).context("replay video list is not JSON")
     }
 
+    /// Sign-in (签到) attendance state of one meet course.
+    ///
+    /// The replay page calls `im.zhihuishu.com/live/checkLiveHomeAuth` as a
+    /// JSONP GET; `signInStatus == "2"` means 已签到/考勤完成. This is the
+    /// authoritative completion signal when the replay-minute list is missing.
+    pub async fn meet_attendance(&self, meet: &ZhsMeet) -> Result<ZhsMeetAttendance> {
+        let user = self.current_user().await?;
+        let url = format!("{}{MEET_AUTH_PATH}", self.endpoints.im);
+        let response = self
+            .http
+            .get(&url)
+            .query(&[
+                ("s", unix_millis().to_string()),
+                ("liveCourseId", meet.live_id.to_string()),
+                ("courseId", meet.course_id.to_string()),
+                ("recruitId", meet.recruit_id.to_string()),
+                ("userId", user.user_id.to_string()),
+                ("callback", "checkLiveHomeAuth".to_string()),
+            ])
+            .header(REFERER, LIVE_REFERER)
+            .header(ORIGIN, origin_of(LIVE_REFERER))
+            .header(USER_AGENT, ZHS_USER_AGENT)
+            .send()
+            .await
+            .map_err(strip_error_url)
+            .context("failed to fetch the meet attendance state")?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(strip_error_url)
+            .context("failed to read the meet attendance state")?;
+        if !status.is_success() {
+            bail!("meet attendance returned HTTP {status}");
+        }
+        let value: Value = serde_json::from_str(strip_jsonp(&text)?)
+            .context("meet attendance response is not JSON")?;
+        Ok(parse_meet_attendance(&value))
+    }
+
     /// Replay attendance progress of one meet course.
+    ///
+    /// Fetches both the replay-minute history and the 签到 state. A signed
+    /// meeting is complete even when replay minutes are missing (the original
+    /// false-negative bug); in that case replay errors are downgraded to an
+    /// empty history instead of failing the status call.
     pub async fn meet_progress(&self, meet: &ZhsMeet) -> Result<ZhsMeetProgress> {
-        let total_secs = self.meet_duration_secs(meet).await?;
-        let total_minutes = total_secs.div_ceil(60).max(1) as u32;
-        let watched = self.meet_watch_history(meet).await?;
-        Ok(ZhsMeetProgress::new(total_minutes, watched))
+        let attendance = match self.meet_attendance(meet).await {
+            Ok(attendance) => attendance,
+            Err(error) => {
+                log::warn!("读取见面课「{}」考勤失败：{error:#}", meet.label());
+                ZhsMeetAttendance::default()
+            }
+        };
+        let mut progress = if attendance.signed {
+            let total_minutes = match self.meet_duration_secs(meet).await {
+                Ok(total_secs) => total_secs.div_ceil(60).max(1) as u32,
+                Err(error) => {
+                    log::debug!(
+                        "见面课「{}」已签到但回放时长不可用（{error:#}），按 0 分钟处理",
+                        meet.label()
+                    );
+                    0
+                }
+            };
+            let watched = self.meet_watch_history(meet).await.unwrap_or_default();
+            ZhsMeetProgress::new(total_minutes, watched)
+        } else {
+            let total_secs = self.meet_duration_secs(meet).await?;
+            let total_minutes = total_secs.div_ceil(60).max(1) as u32;
+            let watched = self.meet_watch_history(meet).await?;
+            ZhsMeetProgress::new(total_minutes, watched)
+        };
+        progress.attendance = attendance;
+        Ok(progress.mark_completed_by_attendance())
     }
 
     /// Watched minute numbers of one meet replay.
@@ -2621,6 +2721,46 @@ fn collect_video_ids(value: &Value, out: &mut Vec<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_meet_attendance_signed_unsigned_and_wrapped() {
+        let signed = serde_json::json!({
+            "signInStatus": "2",
+            "openStatus": "2",
+            "courseLeaveStatus": "2",
+            "auth": "-1",
+            "courseEndStatus": "1"
+        });
+        let attendance = parse_meet_attendance(&signed);
+        assert!(attendance.signed);
+        assert!(attendance.known());
+        assert_eq!(attendance.sign_status.as_deref(), Some("2"));
+        assert_eq!(attendance.label(), "已签到（签到已完成）");
+
+        let unsigned = serde_json::json!({"signInStatus": "1"});
+        let attendance = parse_meet_attendance(&unsigned);
+        assert!(!attendance.signed);
+        assert_eq!(attendance.label(), "未签到");
+
+        // Numeric status and an `rt` wrapper are tolerated.
+        let wrapped = serde_json::json!({"rt": {"signInStatus": 2}});
+        assert!(parse_meet_attendance(&wrapped).signed);
+
+        let unknown = ZhsMeetAttendance::default();
+        assert!(!unknown.known());
+        assert_eq!(unknown.label(), "未知（考勤接口不可用）");
+    }
+
+    #[test]
+    fn signed_attendance_marks_progress_completed() {
+        let mut progress = ZhsMeetProgress::new(120, vec![]);
+        progress.attendance.signed = true;
+        let progress = progress.mark_completed_by_attendance();
+        assert!(progress.completed);
+        assert_eq!(progress.percent, 100);
+        assert_eq!(progress.watched_count, 120);
+        assert_eq!(progress.watched_minutes.len(), 0);
+    }
 
     #[test]
     fn cookie_header_authenticates_exam_hosts() {
