@@ -81,6 +81,26 @@ const DIAGNOSTIC_SCRIPT: &str = r##"
     if (el) el.remove();
   };
 
+  window.__ZHS_SHOW_LOGIN_PROMPT__ = function (text) {
+    var host = root();
+    if (!host) return;
+    var old = document.getElementById('__zhs_login_prompt');
+    if (old) old.remove();
+    var banner = document.createElement('div');
+    banner.id = '__zhs_login_prompt';
+    banner.setAttribute(
+      'style',
+      'position:fixed;top:0;left:0;right:0;z-index:2147483647;padding:10px 16px;background:#1d4ed8;color:#fff;font:13px/1.6 "Microsoft YaHei",system-ui,sans-serif;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.25)',
+    );
+    banner.textContent = String(text || '需要在本窗口登录一次知到，登录后会自动继续');
+    host.appendChild(banner);
+  };
+
+  window.__ZHS_HIDE_LOGIN_PROMPT__ = function () {
+    var el = document.getElementById('__zhs_login_prompt');
+    if (el) el.remove();
+  };
+
   window.__ZHS_SHOW_ERROR__ = function (title, detail) {
     var host = root();
     if (!host) return;
@@ -1764,6 +1784,17 @@ fn show_exam_error(window: &tauri::WebviewWindow, title: &str, detail: &str) {
     }
 }
 
+/// Render the non-blocking "please log in in this window" banner.
+fn show_exam_login_prompt(window: &tauri::WebviewWindow, text: &str) {
+    let Ok(text) = serde_json::to_string(text) else {
+        return;
+    };
+    let script = format!(
+        "if (window.__ZHS_SHOW_LOGIN_PROMPT__) {{ window.__ZHS_SHOW_LOGIN_PROMPT__({text}); }}"
+    );
+    let _ = window.eval(script);
+}
+
 async fn exam_sleep(ms: u64) {
     let _ = tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(Duration::from_millis(ms));
@@ -1811,6 +1842,11 @@ fn open_exam_window(
     let loaded_for_load = Arc::clone(&loaded);
     let count_for_load = Arc::clone(&injected);
     let expected_host = exam_url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let recovering = Arc::new(AtomicBool::new(false));
+    let recovery_rounds = Arc::new(AtomicUsize::new(0));
+    let recovering_load = Arc::clone(&recovering);
+    let rounds_load = Arc::clone(&recovery_rounds);
+    let target_url_load = exam_url.clone();
     let initial_script = format!("{DIAGNOSTIC_SCRIPT}\n{script}");
     exam_log(
         app,
@@ -1842,22 +1878,107 @@ fn open_exam_window(
 
             let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
             let path = url.path().to_ascii_lowercase();
-            if host.contains("login")
+            let login_page = host.contains("login")
                 || host.starts_with("passport.")
                 || host.starts_with("pass.")
                 || path.contains("login")
-                || path.contains("passport")
-            {
+                || path.contains("passport");
+            if login_page {
                 exam_log(&app_load, format!("login redirect detected: {url}"));
-                show_exam_error(
-                    &window,
-                    "会话未注入/已过期，请重新登录知到",
-                    &format!(
-                        "页面被重定向到登录页：{url}\n\n请关闭本窗口，回主界面重新登录知到后再试；若刚刚登录过，请确认登录窗口已完成考试域名预热。"
-                    ),
+                if recovering_load.load(Ordering::SeqCst) {
+                    exam_log(&app_load, "still waiting for the one-time manual login");
+                    return;
+                }
+                let rounds = rounds_load.fetch_add(1, Ordering::SeqCst) + 1;
+                if rounds > 3 {
+                    exam_log(
+                        &app_load,
+                        format!("login recovery exceeded 3 rounds (last {url})"),
+                    );
+                    show_exam_error(
+                        &window,
+                        "需要重新登录知到",
+                        &format!(
+                            "自动恢复登录已尝试 {rounds} 次仍未获得考试引擎会话。\n最后地址：{url}\n\n请关闭本窗口，回主界面重新登录知到后再试；日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log"
+                        ),
+                    );
+                    return;
+                }
+                recovering_load.store(true, Ordering::SeqCst);
+                exam_log(
+                    &app_load,
+                    format!("starting in-window login recovery (round {rounds})"),
                 );
+                let _ = window.eval(
+                    "if (window.__ZHS_HIDE_LOADING__) window.__ZHS_HIDE_LOADING__();",
+                );
+                show_exam_login_prompt(
+                    &window,
+                    "需要在本窗口登录一次知到，登录后会自动继续（无需关闭窗口）",
+                );
+                let keep_login_page = host.starts_with("login.")
+                    || host.starts_with("passport.")
+                    || host.starts_with("pass.");
+                if !keep_login_page
+                    && let Ok(portal) =
+                        Url::parse("https://onlineweb.zhihuishu.com/onlinestuh5")
+                {
+                    exam_log(&app_load, "login recovery: opening the normal portal");
+                    let _ = window.navigate(portal);
+                }
                 return;
             }
+
+            if recovering_load.load(Ordering::SeqCst) && host == expected_host {
+                // The platform redirected straight back to the target after the
+                // manual login: merge the new host cookies and continue.
+                recovering_load.store(false, Ordering::SeqCst);
+                let _ = window.eval(
+                    "if (window.__ZHS_HIDE_LOGIN_PROMPT__) window.__ZHS_HIDE_LOGIN_PROMPT__();",
+                );
+                exam_log(
+                    &app_load,
+                    format!("login recovery finished on target host: {url}"),
+                );
+            } else if recovering_load.load(Ordering::SeqCst) {
+                // Logged-in portal page: merge cookies, then resume the target.
+                exam_log(
+                    &app_load,
+                    format!("login recovery page reached: {url}; resuming the intended target"),
+                );
+                let app_c = app_merge.clone();
+                let target = target_url_load.clone();
+                let recovering_c = Arc::clone(&recovering_load);
+                tauri::async_runtime::spawn(async move {
+                    let app_for_read = app_c.clone();
+                    let records = tauri::async_runtime::spawn_blocking(move || {
+                        app_for_read
+                            .get_webview_window(EXAM_WINDOW_LABEL)
+                            .and_then(|window| read_exam_window_cookies(&window).ok())
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    if let Some(records) = records
+                        && !records.is_empty()
+                    {
+                        app_c.state::<AppState>().merge_zhs_cookies(records);
+                    }
+                    recovering_c.store(false, Ordering::SeqCst);
+                    if let Some(window) = app_c.get_webview_window(EXAM_WINDOW_LABEL) {
+                        let _ = window.eval(
+                            "if (window.__ZHS_HIDE_LOGIN_PROMPT__) window.__ZHS_HIDE_LOGIN_PROMPT__();",
+                        );
+                        exam_log(
+                            &app_c,
+                            format!("login recovery: navigating back to {target}"),
+                        );
+                        let _ = window.navigate(target);
+                    }
+                });
+                return;
+            }
+
             if host != expected_host {
                 exam_log(
                     &app_load,
@@ -1871,7 +1992,7 @@ fn open_exam_window(
                         "考试页加载失败"
                     },
                     &format!(
-                        "页面跳转到了非预期地址：{url}\n期望主机：{expected_host}\n\n请关闭本窗口，回主界面重新登录知到后再试；可点「重新加载」重试。"
+                        "页面跳转到了非预期地址：{url}\n期望主机：{expected_host}\n\n可关闭本窗口后重新登录知到，或点「重新加载」重试。"
                     ),
                 );
                 return;
