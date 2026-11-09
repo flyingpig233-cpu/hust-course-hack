@@ -7,6 +7,7 @@
 
 use hust_course_hack::{
     CourseSummary, SmartCourseClient,
+    cookie::CookieRecord,
     ulearning::{UlCourse, UlearningClient},
     zhihuishu::{ZhsClient, ZhsCourse},
 };
@@ -64,6 +65,10 @@ pub struct HustSession {
 pub struct ZhsSession {
     pub client: ZhsClient,
     pub courses: Vec<ZhsCourse>,
+    /// Cookies captured by the login window. Kept in Rust memory only and used
+    /// to inject the session into the isolated exam WebView2 profile; cookie
+    /// values never cross the IPC boundary.
+    pub cookies: Vec<CookieRecord>,
 }
 
 /// Ulearning session.
@@ -143,6 +148,18 @@ impl AppState {
         match self.read_session().as_ref()?.client {
             SessionClient::Hust(_) | SessionClient::Ulearning(_) => None,
             SessionClient::Zhihuishu(ref zhs) => Some(zhs.client.clone()),
+        }
+    }
+
+    /// Cookies captured at Zhihuishu login, for the isolated exam webview.
+    ///
+    /// The values stay inside the process; only the exam window's WebView2
+    /// cookie manager receives them.
+    pub fn zhs_cookies(&self) -> Vec<CookieRecord> {
+        let session = self.read_session();
+        match session.as_ref().map(|s| &s.client) {
+            Some(SessionClient::Zhihuishu(zhs)) => zhs.cookies.clone(),
+            _ => Vec::new(),
         }
     }
 

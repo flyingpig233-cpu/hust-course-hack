@@ -2905,3 +2905,243 @@ details[open] > .tree-summary > .tree-chevron {
 .ul-section-head .badge {
   margin-left: auto;
 }
+
+/* Zhihuishu homework / exam ---------------------------------------------- */
+
+.exam-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.exam-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.exam-tab {
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.exam-tab.is-active {
+  background: var(--ink);
+  color: #fff;
+}
+
+.exam-toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.exam-body {
+  margin-top: 8px;
+}
+
+.exam-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.exam-card.is-final {
+  border-color: #f3d9b5;
+  background: #fffaf2;
+}
+
+.exam-card-main {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.exam-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.exam-card h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.exam-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.exam-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exam-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.exam-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 18px 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.exam-view-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.exam-view-title {
+  font-weight: 700;
+}
+
+.exam-question-list {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.exam-question {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.exam-question.is-answer {
+  border-color: #bfe6d3;
+  background: #f4fcf8;
+}
+
+.exam-question.is-wrong {
+  border-color: #f3c9c9;
+  background: #fdf6f6;
+}
+
+.exam-question-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.exam-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.exam-kind {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.exam-stem {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.exam-options {
+  display: grid;
+  gap: 6px;
+}
+
+.exam-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.exam-option.is-answer {
+  background: var(--good-soft);
+  color: var(--good);
+  font-weight: 600;
+}
+
+.exam-option.is-muted {
+  color: var(--muted);
+}
+
+.exam-option-id {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.exam-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 8px;
+  color: var(--muted);
+}
+
+.exam-hint {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.exam-import-area {
+  width: 100%;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.exam-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}

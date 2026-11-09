@@ -22,13 +22,22 @@ import type {
   UlWatchSummary,
   WatchRequest,
   WatchSummary,
+  ZhsAiEntry,
+  ZhsAnswerResult,
+  ZhsBankInfo,
   ZhsCourse,
   ZhsCourseDetail,
+  ZhsExamAiEvent,
+  ZhsExamList,
+  ZhsExamPaper,
+  ZhsExamPlan,
+  ZhsExamResultEvent,
   ZhsExceptionStatus,
   ZhsMeet,
   ZhsMeetProgress,
   ZhsMeetWatchRequest,
   ZhsMeetWatchSummary,
+  ZhsRecordAiResult,
   ZhsWatchRequest,
   ZhsWatchSummary,
 } from "./types";
@@ -71,6 +80,69 @@ const tauriApi = {
     invoke<ZhsExceptionStatus>("zhs_exception_status", { courseId }),
   zhsCancelJob: () => invoke<void>("zhs_cancel_job"),
 
+  // ---- Zhihuishu homework / exam ---------------------------------------
+  zhsExamList: (recruitId: number, courseId: number, submitted: boolean) =>
+    invoke<ZhsExamList>("zhs_exam_list", { recruitId, courseId, submitted }),
+  zhsExamPaper: (
+    recruitId: number,
+    courseId: number,
+    examId: string,
+    submitted: boolean,
+  ) =>
+    invoke<ZhsExamPaper>("zhs_exam_paper", {
+      recruitId,
+      courseId,
+      examId,
+      submitted,
+    }),
+  zhsExamPlan: (recruitId: number, courseId: number, examId: string) =>
+    invoke<ZhsExamPlan>("zhs_exam_plan", { recruitId, courseId, examId }),
+  zhsExamAnswer: (
+    recruitId: number,
+    courseId: number,
+    examId: string,
+    dryRun: boolean,
+  ) =>
+    invoke<ZhsAnswerResult>("zhs_exam_answer", {
+      recruitId,
+      courseId,
+      examId,
+      dryRun,
+    }),
+  zhsExamBankInfo: () => invoke<ZhsBankInfo>("zhs_exam_bank_info"),
+  zhsExamRecordAi: (
+    recruitId: number,
+    courseId: number,
+    examId: string,
+    entries: ZhsAiEntry[],
+  ) =>
+    invoke<ZhsRecordAiResult>("zhs_exam_record_ai", {
+      recruitId,
+      courseId,
+      examId,
+      entries,
+    }),
+  zhsExamOpenCheckWindow: (
+    recruitId: number,
+    courseId: number,
+    examId: string,
+  ) =>
+    invoke<void>("zhs_exam_open_check_window", {
+      recruitId,
+      courseId,
+      examId,
+    }),
+  zhsExamOpenAttemptWindow: (
+    recruitId: number,
+    courseId: number,
+    examId: string,
+  ) =>
+    invoke<void>("zhs_exam_open_attempt_window", {
+      recruitId,
+      courseId,
+      examId,
+    }),
+
   // ---- Ulearning (优学院) -----------------------------------------------
   ulListCourses: () => invoke<UlCourse[]>("ul_list_courses"),
   ulCourseDetail: (courseId: string) =>
@@ -109,4 +181,24 @@ export async function onLoginClosed(
 ): Promise<() => void> {
   if (!isTauri) return demoOn("login-closed", handler);
   return listen("login-closed", () => handler());
+}
+
+/** The AI-analysis harvest window persisted texts into the answer bank. */
+export async function onZhsExamAi(
+  handler: (event: ZhsExamAiEvent) => void,
+): Promise<() => void> {
+  if (!isTauri) return demoOn("zhs-exam-ai", handler);
+  return listen<ZhsExamAiEvent>("zhs-exam-ai", (event) =>
+    handler(event.payload),
+  );
+}
+
+/** The webview attempt finished and the backend re-read the score. */
+export async function onZhsExamResult(
+  handler: (event: ZhsExamResultEvent) => void,
+): Promise<() => void> {
+  if (!isTauri) return demoOn("zhs-exam-result", handler);
+  return listen<ZhsExamResultEvent>("zhs-exam-result", (event) =>
+    handler(event.payload),
+  );
 }

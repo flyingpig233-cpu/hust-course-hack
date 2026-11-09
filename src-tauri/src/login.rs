@@ -399,7 +399,11 @@ async fn finish_zhs_login(
     );
     state.set_session(Session {
         info: info.clone(),
-        client: SessionClient::Zhihuishu(ZhsSession { client, courses }),
+        client: SessionClient::Zhihuishu(ZhsSession {
+            client,
+            courses,
+            cookies,
+        }),
     });
     let _ = app.emit("session-changed", info);
     close_login_window(app);

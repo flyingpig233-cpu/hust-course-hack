@@ -6,6 +6,7 @@ mod login;
 mod state;
 mod ulearning;
 mod zhihuishu;
+mod zhs_exam;
 
 use state::AppState;
 
@@ -48,6 +49,16 @@ pub fn run() {
             ulearning::ul_check,
             ulearning::ul_watch,
             ulearning::ul_cancel_job,
+            zhs_exam::zhs_exam_list,
+            zhs_exam::zhs_exam_paper,
+            zhs_exam::zhs_exam_plan,
+            zhs_exam::zhs_exam_answer,
+            zhs_exam::zhs_exam_bank_info,
+            zhs_exam::zhs_exam_record_ai,
+            zhs_exam::zhs_exam_open_check_window,
+            zhs_exam::zhs_exam_open_attempt_window,
+            zhs_exam::zhs_exam_webview_plan,
+            zhs_exam::zhs_exam_webview_submitted,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HUST Course Hack");

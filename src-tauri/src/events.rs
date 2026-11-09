@@ -139,4 +139,13 @@ pub enum JobProgress {
         /// `completion_status` observed by the verification read.
         completion_status: Option<i64>,
     },
+    /// One step of the Zhihuishu homework/exam answer queue.
+    ZhsExamProgress {
+        /// `saving`, `submitting`, or `verifying`.
+        stage: String,
+        done: usize,
+        total: usize,
+        label: String,
+        message: String,
+    },
 }
