@@ -28,6 +28,7 @@
     planned: false,
     questions: [],
     plan: null,
+    captchaTried: false,
   };
   window.__ZHS_ATTEMPT__ = A;
 
@@ -112,12 +113,12 @@
       '<div id="__zhs_a_status" style="opacity:.9;min-height:36px;white-space:pre-wrap">等待进入试卷页…</div>' +
       '<div id="__zhs_a_unresolved" style="display:none;margin:8px 0;padding:8px;border-radius:8px;background:#3f1d1d;font-size:12px;max-height:140px;overflow:auto"></div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">' +
-      '<button id="__zhs_a_start" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#2563eb;color:#fff">开始自动作答（全解析）</button>' +
+      '<button id="__zhs_a_start" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#2563eb;color:#fff">自动作答并提交</button>' +
       '<button id="__zhs_a_tolerant" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#b91c1c;color:#fff;display:none">容错试做并提交（未解析题任选首项，会得低分）</button>' +
       '<button id="__zhs_a_stop" style="all:unset;cursor:pointer;padding:6px 12px;border-radius:8px;background:#374151;color:#fff">停止</button>' +
       '</div>' +
       '<div id="__zhs_a_log" style="opacity:.75;font-size:12px;max-height:180px;overflow:auto"></div>' +
-      '<div style="opacity:.6;margin-top:8px">若出现滑块验证，请先在窗口内手动完成。严格模式只在计划完整时提交；容错试做会把未解析题任选首项先提交本次，之后可再用「网页重做」提交。</div>';
+      '<div style="opacity:.6;margin-top:8px">若出现滑块/安全验证（网易易盾），请先在窗口内手动完成；通过后自动继续。严格模式只在计划完整时提交；容错试做会把未解析题任选首项先提交本次，之后可再用「网页重做」提交。</div>';
     document.documentElement.appendChild(overlay);
     statusNode = overlay.querySelector('#__zhs_a_status');
     logNode = overlay.querySelector('#__zhs_a_log');
@@ -428,6 +429,49 @@
     return false;
   }
 
+  // ---- captcha -----------------------------------------------------------
+
+  /** 网易易盾 click-character captcha detection (no coordinate clicking). */
+  function captchaVisible() {
+    if (document.querySelector('.yidun_bg-img, .yidun_popup, [class*="yidun" i]')) {
+      return true;
+    }
+    var text = clean(document.body ? document.body.innerText : '');
+    return /请完成安全验证|请点击.*验证|安全验证/.test(text);
+  }
+
+  /**
+   * Ask the backend stub to solve the captcha. It currently returns
+   * `unsupported`, so the user completes it once manually; the polling loop
+   * continues automatically afterwards. We never click random coordinates.
+   */
+  async function handleCaptchaIfPresent() {
+    if (!captchaVisible()) {
+      A.captchaTried = false;
+      return false;
+    }
+    if (A.captchaTried) return true;
+    A.captchaTried = true;
+    setStatus('检测到安全验证，正在自动处理…');
+    log('检测到安全验证（网易易盾），尝试自动处理');
+    try {
+      await invoke('zhs_exam_solve_captcha', {
+        windowLabel: CTX.windowLabel || '',
+        pngBase64: '',
+      });
+      log('验证码求解器返回成功');
+    } catch (error) {
+      log(
+        '自动处理验证码不可用：' +
+          (error && error.message ? error.message : String(error)),
+      );
+      setStatus(
+        '检测到安全验证：自动处理暂不可用，请在窗口内手动完成一次验证；通过后会自动继续读取试卷。',
+      );
+    }
+    return true;
+  }
+
   // ---- plan --------------------------------------------------------------
 
   async function loadPlan() {
@@ -444,6 +488,12 @@
     var questions = [];
     while (Date.now() < deadline) {
       if (A.stopped) return;
+      if (captchaVisible()) {
+        await handleCaptchaIfPresent();
+        await sleep(1500);
+        continue;
+      }
+      A.captchaTried = false;
       questions = readQuestions();
       if (questions.length > 0) break;
       await sleep(2000);
@@ -500,7 +550,7 @@
             plan.resolved +
             ' / ' +
             plan.total +
-            ' 题，计划完整。确认后点击「开始自动作答（全解析）」。',
+            ' 题，计划完整。确认后点击「自动作答并提交」。',
         );
         log('全部题目命中答案库，可严格自动作答。');
       } else {
@@ -721,14 +771,40 @@
         result.score === null
           ? '（成绩待刷新）'
           : '得分 ' + result.score + ' / ' + result.total_score;
+      var wrong = result.wrongQuestions || [];
+      var wrongText =
+        wrong.length === 0
+          ? '\n全部题目满分。'
+          : '\n未得满分 ' +
+            wrong.length +
+            ' 题（不会自动重试）：\n' +
+            wrong
+              .slice(0, 8)
+              .map(function (item, index) {
+                return (
+                  '· ' +
+                  (item.stem || item.questionId).slice(0, 36) +
+                  '（' +
+                  item.score +
+                  '/' +
+                  item.fullScore +
+                  '）'
+                );
+              })
+              .join('\n') +
+            (wrong.length > 8 ? '\n…' : '');
+      wrong.slice(0, 20).forEach(function (item) {
+        log('未满分：' + (item.stem || item.questionId).slice(0, 40));
+      });
       if (tolerant) {
         setStatus(
           '容错试做已提交！' +
             scoreText +
             '（未解析 ' +
             fallbackCount +
-            ' 题任选首项，会得低分）\n\n' +
-            '下一步：关闭本窗口 → 在作业列表「已提交」找到这场 → 点击「网页重做」并提交。',
+            ' 题任选首项，会得低分）' +
+            wrongText +
+            '\n\n下一步：关闭本窗口 → 在作业列表「已提交」找到这场 → 点击「网页重做」并提交。',
         );
       } else {
         setStatus(
@@ -736,7 +812,8 @@
             scoreText +
             '；写入答案库 ' +
             result.recorded_to_bank +
-            ' 题。可关闭窗口。',
+            ' 题。' +
+            wrongText,
         );
       }
     } catch (error) {

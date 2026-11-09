@@ -22,6 +22,7 @@ import type {
   UlWatchSummary,
   ZhsCourse,
   ZhsCourseDetail,
+  ZhsExamSummary,
   ZhsMeet,
   ZhsMeetProgress,
   ZhsMeetWatchSummary,
@@ -109,6 +110,7 @@ const store = {
     courses: [] as ZhsCourse[],
     selectedId: null as string | null,
     detail: null as ZhsCourseDetail | null,
+    examSummary: null as ZhsExamSummary | null,
     meets: [] as ZhsMeet[],
     meetProgress: new Map<number, ZhsMeetProgress>(),
     view: "home" as ZhsView,
@@ -268,6 +270,7 @@ async function activateSession(info: SessionInfo, announce: boolean): Promise<vo
     courses: [],
     selectedId: null,
     detail: null,
+    examSummary: null,
     meets: [],
     meetProgress: new Map(),
     view: "home",
@@ -571,6 +574,7 @@ async function selectZhsCourse(courseId: string): Promise<void> {
   store.zhs.selectedId = courseId;
   store.zhs.view = "course";
   store.zhs.detail = null;
+  store.zhs.examSummary = null;
   store.zhs.meets = [];
   store.zhs.meetProgress.clear();
   updateSidebar();
@@ -594,6 +598,10 @@ async function loadZhsDetail(
   let unlisten: (() => void) | null = null;
   let detail: ZhsCourseDetail | null = null;
   let failure: string | null = null;
+  // Silent failure = no stats card; the course detail must not be blocked.
+  const summaryPromise = api
+    .zhsExamSummary(course.recruitId, course.courseId)
+    .catch(() => null);
 
   try {
     unlisten = await onJobProgress((progress) => {
@@ -603,6 +611,7 @@ async function loadZhsDetail(
     });
     detail = await api.zhsCourseDetail(String(course.courseId));
     store.zhs.detail = detail;
+    store.zhs.examSummary = await summaryPromise;
     upsertZhsCourse(detail.course);
   } catch (error) {
     failure = errorText(error);
@@ -714,9 +723,10 @@ function showZhsCourseView(): void {
         recruitId: course.recruitId,
         courseId: course.courseId,
         courseName: zhsCourseLabel(course),
+        summary: store.zhs.examSummary,
         onToast: (message, tone) => toast(message, tone),
       }),
-  });
+  }, store.zhs.examSummary);
 }
 
 async function loadZhsMeets(course: ZhsCourse): Promise<void> {
@@ -1120,6 +1130,7 @@ async function disconnect(): Promise<void> {
   store.zhs.courses = [];
   store.zhs.selectedId = null;
   store.zhs.detail = null;
+  store.zhs.examSummary = null;
   store.zhs.meets = [];
   store.zhs.meetProgress.clear();
   store.zhs.view = "home";

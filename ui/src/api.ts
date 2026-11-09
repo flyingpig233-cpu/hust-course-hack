@@ -32,6 +32,9 @@ import type {
   ZhsExamPaper,
   ZhsExamPlan,
   ZhsExamResultEvent,
+  ZhsExamSummary,
+  ZhsRedoEvent,
+  ZhsRedoResult,
   ZhsExceptionStatus,
   ZhsMeet,
   ZhsMeetProgress,
@@ -142,6 +145,18 @@ const tauriApi = {
       courseId,
       examId,
     }),
+  zhsExamSummary: (recruitId: number, courseId: number) =>
+    invoke<ZhsExamSummary>("zhs_exam_summary", { recruitId, courseId }),
+  zhsExamRedo: (
+    recruitId: number,
+    courseId: number,
+    examNameOrId: string,
+  ) =>
+    invoke<ZhsRedoResult>("zhs_exam_redo", {
+      recruitId,
+      courseId,
+      examNameOrId,
+    }),
 
   // ---- Ulearning (优学院) -----------------------------------------------
   ulListCourses: () => invoke<UlCourse[]>("ul_list_courses"),
@@ -189,6 +204,16 @@ export async function onZhsExamAi(
 ): Promise<() => void> {
   if (!isTauri) return demoOn("zhs-exam-ai", handler);
   return listen<ZhsExamAiEvent>("zhs-exam-ai", (event) =>
+    handler(event.payload),
+  );
+}
+
+/** The webview redo flow finished (success or a selector failure). */
+export async function onZhsExamRedo(
+  handler: (event: ZhsRedoEvent) => void,
+): Promise<() => void> {
+  if (!isTauri) return demoOn("zhs-exam-redo", handler);
+  return listen<ZhsRedoEvent>("zhs-exam-redo", (event) =>
     handler(event.payload),
   );
 }
