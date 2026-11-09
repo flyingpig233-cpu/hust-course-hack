@@ -870,6 +870,132 @@ pub async fn zhs_exam_js_error(
     log::warn!("zhihuishu exam window js error ({window_label}): {message}");
     Ok(())
 }
+// ---- Homework / exam summary and redo --------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZhsExamSummaryDto {
+    /// Homework + unit-test / meet-quiz papers for this course.
+    pub homework_total: usize,
+    pub homework_submitted: usize,
+    /// Average score of the submitted papers that already have a score.
+    pub average_score: Option<f64>,
+    pub final_exam_count: usize,
+    /// Finals whose remaining attempts dropped to zero (platform has no direct
+    /// submitted flag; `faStudentExamRemainCount == 0` is the closest signal).
+    pub final_exam_submitted: usize,
+}
+
+/// Stat-strip summary for the course page and the exam modal header.
+#[tauri::command]
+pub async fn zhs_exam_summary(
+    state: State<'_, AppState>,
+    recruit_id: u64,
+    course_id: u64,
+) -> Result<ZhsExamSummaryDto, String> {
+    let client = exam_client(&state)?;
+    let pending = client
+        .list_homework(recruit_id, course_id, false)
+        .await
+        .map_err(|error| format!("读取作业列表失败：{error:#}"))?;
+    let submitted = client
+        .list_homework(recruit_id, course_id, true)
+        .await
+        .map_err(|error| format!("读取已提交作业失败：{error:#}"))?;
+    let finals = client
+        .list_final_exams(recruit_id, course_id)
+        .await
+        .unwrap_or_default();
+    let scores: Vec<f64> = submitted
+        .iter()
+        .filter_map(|homework| homework.score.or(homework.achieve))
+        .collect();
+    let average_score = if scores.is_empty() {
+        None
+    } else {
+        let sum: f64 = scores.iter().sum();
+        Some((sum / scores.len() as f64 * 10.0).round() / 10.0)
+    };
+    let final_exam_submitted = finals
+        .iter()
+        .filter(|final_exam| final_exam.remain_count == Some(0))
+        .count();
+    Ok(ZhsExamSummaryDto {
+        homework_total: pending.len() + submitted.len(),
+        homework_submitted: submitted.len(),
+        average_score,
+        final_exam_count: finals.len(),
+        final_exam_submitted,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZhsRedoResultDto {
+    pub started: bool,
+    pub message: String,
+}
+
+/// Request a redo of a submitted homework so it can be answered again.
+///
+/// The platform's `applyRedo` request parameters are still being captured; this
+/// command validates the local preconditions and returns an actionable error
+/// until the core exposes the request. The UI then disables the button with a
+/// tooltip instead of silently failing.
+#[tauri::command]
+pub async fn zhs_exam_redo(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    recruit_id: u64,
+    course_id: u64,
+    exam_id: String,
+) -> Result<ZhsRedoResultDto, String> {
+    let client = exam_client(&state)?;
+    ensure_not_final(&client, recruit_id, course_id, &exam_id).await?;
+    let homework = find_homework(&client, recruit_id, course_id, &exam_id).await?;
+    if homework.state != Some(1) && homework.achieve.is_none() {
+        return Err("该作业尚未提交，无需申请重做；直接点「网页作答」即可。".to_string());
+    }
+    if homework.back_num == Some(0) {
+        return Err("平台显示剩余重做次数为 0，无法申请重做。".to_string());
+    }
+    exam_log(
+        &app,
+        format!(
+            "redo requested: {} (examId={}, stuExamId={}, backNum={:?})",
+            homework.name, homework.exam_id, homework.stu_exam_id, homework.back_num
+        ),
+    );
+    Err(
+        "平台「申请重做」接口参数仍在抓包确认中（applyRedo 尚未接入），暂不可用；接入后会自动刷新列表并打开作答窗口。当前请先用「网页作答」。"
+            .to_string(),
+    )
+}
+
+/// Stub hook for the 网易易盾 click-character captcha solver.
+///
+/// The attempt script detects the captcha, calls this command and falls back to
+/// asking the user to complete it manually in the window; it never clicks random
+/// coordinates. A real solver can be wired here later (the PNG bytes are already
+/// part of the contract).
+#[tauri::command]
+pub async fn zhs_exam_solve_captcha(
+    app: AppHandle,
+    window_label: String,
+    png_base64: String,
+) -> Result<(), String> {
+    exam_log(
+        &app,
+        format!(
+            "captcha solve requested: window={window_label} png_bytes={}",
+            png_base64.len()
+        ),
+    );
+    Err(
+        "未接入网易易盾点击验证码求解器；请在窗口内手动完成一次验证，通过后会自动继续。"
+            .to_string(),
+    )
+}
 // ---- Webview-driven attempt ------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -908,6 +1034,16 @@ pub struct ZhsWebviewPlanDto {
     pub unresolved: Vec<ZhsWebviewUnresolvedDto>,
 }
 
+/// One question whose submitted answer did not earn full marks.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZhsWrongQuestionDto {
+    pub question_id: String,
+    pub stem: String,
+    pub score: f64,
+    pub full_score: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ZhsWebviewResultDto {
@@ -917,6 +1053,9 @@ pub struct ZhsWebviewResultDto {
     pub correct_count: usize,
     pub question_count: usize,
     pub recorded_to_bank: usize,
+    /// Questions that did not earn full marks (shown to the user; the app never
+    /// auto-retries because attempts are limited).
+    pub wrong_questions: Vec<ZhsWrongQuestionDto>,
     pub message: String,
 }
 
@@ -1060,6 +1199,7 @@ pub async fn zhs_exam_webview_submitted(
             correct_count: 0,
             question_count: 0,
             recorded_to_bank: 0,
+            wrong_questions: Vec::new(),
             message: "已提交；平台列表尚未刷新，稍后可在「已提交」中查看成绩".to_string(),
         });
     };
@@ -1082,6 +1222,7 @@ pub async fn zhs_exam_webview_submitted(
         .collect();
     let mut correct_count = 0usize;
     let mut summed = 0.0f64;
+    let mut wrong_questions = Vec::new();
     for question in paper.questions() {
         let item_score = by_id
             .get(question.id.as_str())
@@ -1090,16 +1231,33 @@ pub async fn zhs_exam_webview_submitted(
         summed += item_score;
         if question.score > 0 && item_score + 0.001 >= question.score as f64 {
             correct_count += 1;
+        } else {
+            wrong_questions.push(ZhsWrongQuestionDto {
+                question_id: question.id.clone(),
+                stem: question.stem.clone(),
+                score: item_score,
+                full_score: question.score,
+            });
         }
     }
+    // `homework.score` comes from the platform after grading and is authoritative
+    // when present; the per-question sum is the fallback/check-sheet total.
+    let authoritative_score = homework.score.or(Some(summed));
+    let wrong_count = wrong_questions.len();
+    let message = if wrong_count == 0 {
+        "已提交：全部题目满分，已写入答案库".to_string()
+    } else {
+        format!("已提交：{wrong_count} 题未得满分（尝试次数有限，不会自动重试）")
+    };
     let result = ZhsWebviewResultDto {
         submitted: true,
-        score: score.or(Some(summed)),
+        score: score.or(authoritative_score),
         total_score: paper.total_score,
         correct_count,
         question_count: paper.question_count(),
         recorded_to_bank,
-        message: "已提交并写入答案库（仅满分题）".to_string(),
+        wrong_questions,
+        message,
     };
     let _ = app.emit("zhs-exam-result", &result);
     Ok(result)

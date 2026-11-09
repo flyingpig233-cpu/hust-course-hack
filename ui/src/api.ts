@@ -32,6 +32,8 @@ import type {
   ZhsExamPaper,
   ZhsExamPlan,
   ZhsExamResultEvent,
+  ZhsExamSummary,
+  ZhsRedoResult,
   ZhsExceptionStatus,
   ZhsMeet,
   ZhsMeetProgress,
@@ -138,6 +140,14 @@ const tauriApi = {
     examId: string,
   ) =>
     invoke<void>("zhs_exam_open_attempt_window", {
+      recruitId,
+      courseId,
+      examId,
+    }),
+  zhsExamSummary: (recruitId: number, courseId: number) =>
+    invoke<ZhsExamSummary>("zhs_exam_summary", { recruitId, courseId }),
+  zhsExamRedo: (recruitId: number, courseId: number, examId: string) =>
+    invoke<ZhsRedoResult>("zhs_exam_redo", {
       recruitId,
       courseId,
       examId,

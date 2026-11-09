@@ -738,6 +738,14 @@ export interface ZhsRecordAiResult {
   path: string;
 }
 
+/** One question that did not earn full marks after a submission. */
+export interface ZhsWrongQuestion {
+  questionId: string;
+  stem: string;
+  score: number;
+  fullScore: number;
+}
+
 /** Payload of the `zhs-exam-result` event (webview attempt finished). */
 export interface ZhsExamResultEvent {
   submitted: boolean;
@@ -746,6 +754,23 @@ export interface ZhsExamResultEvent {
   correctCount: number;
   questionCount: number;
   recordedToBank: number;
+  /** Non-full-mark questions; the app never auto-retries (attempts are limited). */
+  wrongQuestions: ZhsWrongQuestion[];
+  message: string;
+}
+
+/** Homework / final-exam stats for one shared course. */
+export interface ZhsExamSummary {
+  homeworkTotal: number;
+  homeworkSubmitted: number;
+  averageScore: number | null;
+  finalExamCount: number;
+  finalExamSubmitted: number;
+}
+
+/** Result of a 申请重做 request. */
+export interface ZhsRedoResult {
+  started: boolean;
   message: string;
 }
 

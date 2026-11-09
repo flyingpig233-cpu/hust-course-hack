@@ -8,6 +8,7 @@ import type {
   SessionInfo,
   ZhsCourse,
   ZhsCourseDetail,
+  ZhsExamSummary,
   ZhsWatchSummary,
 } from "../types";
 import {
@@ -246,6 +247,7 @@ export function renderZhsCourse(
   main: HTMLElement,
   detail: ZhsCourseDetail,
   handlers: ZhsCourseHandlers,
+  examSummary: ZhsExamSummary | null = null,
 ): void {
   main.onchange = null;
   main.onclick = null;
@@ -303,6 +305,26 @@ export function renderZhsCourse(
         },
         { label: "待处理", value: String(pending), foot: "可秒刷的小节视频" },
         { label: "章节", value: String(detail.chapters.length), foot: `${lessons} 节课` },
+        ...(examSummary
+          ? [
+              {
+                label: "作业/测验",
+                value: `${examSummary.homeworkSubmitted} / ${examSummary.homeworkTotal}`,
+                foot:
+                  examSummary.averageScore === null
+                    ? "已完成（暂无平均分）"
+                    : `已完成 · 平均 ${examSummary.averageScore} 分`,
+              },
+              {
+                label: "期末",
+                value:
+                  examSummary.finalExamCount === 0
+                    ? "—"
+                    : `${examSummary.finalExamSubmitted} / ${examSummary.finalExamCount}`,
+                foot: "已完成 / 全部（不自动提交）",
+              },
+            ]
+          : []),
       ])}
 
       ${

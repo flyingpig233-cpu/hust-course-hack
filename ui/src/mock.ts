@@ -35,7 +35,9 @@ import type {
   ZhsExamPaper,
   ZhsExamPlan,
   ZhsExamQuestion,
+  ZhsExamSummary,
   ZhsExceptionStatus,
+  ZhsRedoResult,
   ZhsMeet,
   ZhsMeetOutcome,
   ZhsMeetProgress,
@@ -1960,6 +1962,22 @@ export const mockApi = {
     requireZhsSession();
     throw new Error(
       "演示模式不支持打开网页作答窗口（滑块验证需要真实知到会话）；可用「看试卷 / 手动导入 / 题库统计」体验只读流程。",
+    );
+  },
+  async zhsExamSummary(): Promise<ZhsExamSummary> {
+    requireZhsSession();
+    return {
+      homeworkTotal: 5,
+      homeworkSubmitted: 3,
+      averageScore: 87.5,
+      finalExamCount: 1,
+      finalExamSubmitted: 0,
+    };
+  },
+  async zhsExamRedo(): Promise<ZhsRedoResult> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持申请重做；真实平台参数仍在抓包确认中（applyRedo），接入后会自动刷新并打开作答窗口。",
     );
   },
   // ---- Ulearning (优学院) demo backend ----------------------------------

@@ -7,6 +7,7 @@ import type {
   ZhsBankInfo,
   ZhsExamList,
   ZhsExamPaper,
+  ZhsExamSummary,
   ZhsHomework,
 } from "../types";
 
@@ -14,6 +15,8 @@ export interface ZhsExamModalOptions {
   recruitId: number;
   courseId: number;
   courseName: string;
+  /** Course-page stat summary (fetched in parallel with the course detail). */
+  summary?: ZhsExamSummary | null;
   onToast(message: string, tone?: ToastTone): void;
 }
 
@@ -80,6 +83,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         <div class="eyebrow">知到 · 作业与考试</div>
         <h2>作业 / 单元测试 / 期末</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
+        <p class="modal-sub" id="zhs-exam-summary"></p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
@@ -128,6 +132,9 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
   let lastAttempt: ZhsHomework | null = null;
   let justSubmitted: ZhsHomework | null = null;
   let justHarvested = false;
+  let examSummary: ZhsExamSummary | null = options.summary ?? null;
+  let redoUnsupported = false;
+  let redoBusy = false;
   const listeners: Array<() => void> = [];
   const recentToasts = new Map<string, number>();
   let recentAuthHintAt = 0;
@@ -148,6 +155,32 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       return;
     }
     options.onToast(message, tone);
+  }
+
+  function summaryText(summary: ZhsExamSummary): string {
+    const average =
+      summary.averageScore === null ? "—" : `${summary.averageScore}`;
+    return (
+      `作业/测验 ${summary.homeworkSubmitted} / ${summary.homeworkTotal} 已完成` +
+      ` · 平均 ${average} 分` +
+      ` · 期末 ${summary.finalExamSubmitted} / ${summary.finalExamCount} 已完成`
+    );
+  }
+
+  function renderSummaryLine(): void {
+    const el = qs<HTMLElement>("#zhs-exam-summary", content);
+    if (!el) return;
+    el.textContent = examSummary ? summaryText(examSummary) : "";
+  }
+
+  async function refreshSummary(): Promise<void> {
+    try {
+      examSummary = await api.zhsExamSummary(options.recruitId, options.courseId);
+      renderSummaryLine();
+      render();
+    } catch {
+      // Stats are best effort; the 作业/考试 list stays usable without them.
+    }
   }
 
   const close = openModal(content, {
@@ -205,6 +238,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     } finally {
       busy = false;
       render();
+      void refreshSummary();
     }
   }
 
@@ -245,14 +279,19 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
     }
   }
 
-  async function openAttempt(homework: ZhsHomework): Promise<void> {
-    const ok = window.confirm(
+  async function openAttempt(
+    homework: ZhsHomework,
+    askConfirm = true,
+  ): Promise<void> {
+    const ok =
+      !askConfirm ||
+      window.confirm(
       `打开网页作答窗口：${homework.name}\n\n` +
-        `1. 窗口会加载平台「作答」页；若出现滑块验证，请先在窗口内手动完成（只此一次）。\n` +
+        `1. 窗口会加载平台「作答」页；若出现滑块/安全验证（网易易盾），请先在窗口内手动完成（只此一次，自动继续）。\n` +
         `2. 完成后脚本会读取题目并向本地答案库请求计划，窗口内显示「已解析 X/Y 题」和未解析列表。\n` +
         `3. 计划完整：点「开始自动作答（全解析）」严格提交；计划不完整：点红色「容错试做」（未解析题任选首项，会得低分）先提交，之后在「已提交」点「网页重做」重新提交。\n\n` +
         `真实提交可能消耗一次尝试机会。确认打开窗口？`,
-    );
+      );
     if (!ok) return;
     try {
       await api.zhsExamOpenAttemptWindow(
@@ -270,6 +309,49 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       submitted = null;
     } catch (error) {
       notify(errorText(error), "error");
+    }
+  }
+
+  /** 申请重做: on success refresh the lists and immediately open the attempt window. */
+  async function openRedo(homework: ZhsHomework): Promise<void> {
+    if (redoBusy || redoUnsupported) return;
+    if (homework.backNum === 0) {
+      notify("平台显示剩余重做次数为 0，无法申请重做。", "info");
+      return;
+    }
+    const ok = window.confirm(
+      `申请重做：${homework.name}\n\n` +
+        `申请成功后平台会恢复一次作答机会，并自动打开作答窗口（仍需在窗口内完成滑块验证）。\n` +
+        `是否继续？`,
+    );
+    if (!ok) return;
+    redoBusy = true;
+    notify("正在申请重做…", "info");
+    try {
+      const result = await api.zhsExamRedo(
+        options.recruitId,
+        options.courseId,
+        homework.examId,
+      );
+      notify(result.message || "已申请重做，正在打开作答窗口…", "success");
+      pending = null;
+      submitted = null;
+      tab = "pending";
+      for (const button of tabs) {
+        button.classList.toggle("is-active", button.dataset.tab === "pending");
+      }
+      view = "list";
+      await loadList(true);
+      await openAttempt(homework, false);
+    } catch (error) {
+      const message = errorText(error);
+      if (/抓包|暂不可用|applyRedo|待确认|不支持/.test(message)) {
+        redoUnsupported = true;
+      }
+      notify(message, "error");
+      if (view === "list") render();
+    } finally {
+      redoBusy = false;
     }
   }
 
@@ -422,6 +504,17 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
                           )}">${icon("copy", 13)} 手动导入</button>`
                        : ""
                    }
+                   <button class="btn btn-sm btn-ghost" data-act="redo" data-id="${esc(
+                     item.examId,
+                   )}" ${
+                     redoUnsupported || item.backNum === 0 ? "disabled" : ""
+                   } title="${
+                     redoUnsupported
+                       ? "平台重做接口参数待确认，暂不可用"
+                       : item.backNum === 0
+                         ? "剩余重做次数为 0"
+                         : "申请一次重做，成功后自动打开作答窗口"
+                   }">${icon("refresh", 13)} 申请重做</button>
                    <button class="btn btn-sm ${
                      retakePrimary ? "btn-primary" : "btn-ghost"
                    }" data-act="attempt" data-id="${esc(item.examId)}">${icon(
@@ -564,6 +657,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         view = "import";
         render();
       } else if (act === "attempt" && item) void openAttempt(item);
+      else if (act === "redo" && item) void openRedo(item);
       else if (act === "final-hint") {
         notify(
           "期末考试只有 1 次机会，GUI 仅列出、不自动提交，也不读取未提交试卷（读取会开始计时）。请在平台网页端自行参加。",
@@ -725,12 +819,21 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
 
   void onZhsExamResult((event) => {
     if (closed) return;
+    const wrong = event.wrongQuestions ?? [];
+    const wrongHint =
+      wrong.length === 0
+        ? ""
+        : `；错 ${wrong.length} 题：${wrong
+            .slice(0, 3)
+            .map((question) => question.stem || question.questionId)
+            .join("、")}${wrong.length > 3 ? "…" : ""}（不会自动重试）`;
     notify(
       event.score === null
-        ? "网页作答已提交（成绩待平台刷新）"
-        : `网页作答已提交：${event.score} 分，正确 ${event.correctCount}/${event.questionCount} 题。下一步：点「重做并提交」重新作答。`,
-      event.correctCount === event.questionCount ? "success" : "info",
+        ? `网页作答已提交（成绩待平台刷新）${wrongHint}`
+        : `网页作答已提交：${event.score} 分，正确 ${event.correctCount}/${event.questionCount} 题${wrongHint}。下一步：点「重做并提交」重新作答。`,
+      wrong.length === 0 ? "success" : "info",
     );
+    void refreshSummary();
     const homework = lastAttempt;
     lastAttempt = null;
     pending = null;
