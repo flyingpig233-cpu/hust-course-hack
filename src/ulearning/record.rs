@@ -13,6 +13,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     cipher,
@@ -22,6 +23,23 @@ use super::{
 
 /// Client-side study time cap used by the player (`min(studyTime, 1000)`).
 const STUDY_TIME_CAP: i64 = 1000;
+
+/// Length of one fabricated playback interval in `startEndTimeList`, in seconds.
+///
+/// The platform's anti-cheat accepts a completed report only when
+/// `startEndTimeList` contains **real epoch timestamps** for the played
+/// intervals. The old payload sent `[{ "startTime": 0, "endTime": duration }]`,
+/// which the server flags as 刷课 (sync returns `2`). We therefore fabricate a
+/// plausible timeline that ends a couple of seconds ago and covers the whole
+/// video, split into player-like chunks.
+const PLAY_INTERVAL_SECS: i64 = 300;
+
+fn unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Build the `ItemStudyRecordUpdateDTO` for one planned section.
 pub fn build_record_payload(section: &UlSectionPlan, study_start_time: i64) -> Result<Value> {
@@ -36,6 +54,8 @@ pub fn build_record_payload(section: &UlSectionPlan, study_start_time: i64) -> R
     }
 
     let mut page_records = Vec::with_capacity(section.pages.len());
+    let now = unix_seconds();
+    let mut earliest_video_start: Option<i64> = None;
     for planned in &section.pages {
         let page = &planned.page;
         if page.relation_id <= 0 {
@@ -64,16 +84,28 @@ pub fn build_record_payload(section: &UlSectionPlan, study_start_time: i64) -> R
             if video.video_id <= 0 || video.duration_secs <= 0 {
                 bail!("视频信息不完整（videoid/time 为空），拒绝猜测");
             }
+            // Match the player's report shape: epoch-based playback intervals
+            // that end shortly before "now" and cover the whole duration.
+            let video_end = (now - 2).max(0);
+            let video_start = (video_end - video.duration_secs).max(0);
+            earliest_video_start = Some(match earliest_video_start {
+                Some(existing) => existing.min(video_start),
+                None => video_start,
+            });
+            let mut intervals = Vec::new();
+            let mut cursor = video_start;
+            while cursor < video_end {
+                let next = (cursor + PLAY_INTERVAL_SECS).min(video_end);
+                intervals.push(json!({ "startTime": cursor, "endTime": next }));
+                cursor = next;
+            }
             videos.push(json!({
                 "videoid": video.video_id,
                 "current": video.duration_secs,
                 "status": 1,
                 "recordTime": video.duration_secs,
                 "time": video.duration_secs,
-                "startEndTimeList": [{
-                    "startTime": 0,
-                    "endTime": video.duration_secs
-                }],
+                "startEndTimeList": intervals,
             }));
         }
 
@@ -117,6 +149,7 @@ pub fn build_record_payload(section: &UlSectionPlan, study_start_time: i64) -> R
     } else {
         100
     };
+    let study_start_time = earliest_video_start.unwrap_or(study_start_time);
     Ok(json!({
         "itemid": section.section_id,
         "autoSave": 1,
@@ -215,7 +248,6 @@ mod tests {
         assert_eq!(payload["autoSave"], json!(1));
         assert_eq!(payload["withoutOld"], Value::Null);
         assert_eq!(payload["complete"], json!(1));
-        assert_eq!(payload["studyStartTime"], json!(1_794_062_059));
         assert_eq!(payload["score"], json!(100));
         let pages = payload["pageStudyRecordDTOList"].as_array().unwrap();
         assert_eq!(pages.len(), 1);
@@ -235,10 +267,24 @@ mod tests {
         assert_eq!(video["status"], json!(1));
         assert_eq!(video["recordTime"], json!(1326));
         assert_eq!(video["time"], json!(1326));
-        assert_eq!(
-            video["startEndTimeList"],
-            json!([{"startTime": 0, "endTime": 1326}])
-        );
+        // `startEndTimeList` must be a real epoch timeline (the platform flags
+        // the old `0..duration` timeline as 刷课).
+        let intervals = video["startEndTimeList"].as_array().unwrap();
+        assert!(!intervals.is_empty());
+        let first_start = intervals
+            .first()
+            .and_then(|item| item["startTime"].as_i64())
+            .unwrap();
+        let last_end = intervals
+            .last()
+            .and_then(|item| item["endTime"].as_i64())
+            .unwrap();
+        assert!(first_start > 1_700_000_000, "epoch start expected");
+        assert_eq!(payload["studyStartTime"], json!(first_start));
+        assert_eq!(last_end - first_start, 1326);
+        for pair in intervals.windows(2) {
+            assert_eq!(pair[0]["endTime"], pair[1]["startTime"]);
+        }
     }
 
     #[test]
