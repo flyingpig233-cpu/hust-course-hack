@@ -2070,6 +2070,12 @@ export const mockApi = {
       "演示模式不支持申请重做；真实环境会打开考试列表窗口，自动点击「申请重做」并在成功后刷新列表、打开作答窗口。",
     );
   },
+  async zhsExamOpenExamLogin(): Promise<void> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持打开考试系统登录窗口；真实环境会使用持久考试配置打开考试列表，首次在该窗口登录一次即可。",
+    );
+  },
   // ---- Ulearning (优学院) demo backend ----------------------------------
   // Like the Zhihuishu demo, every job below is dry-run only.
   async ulListCourses(): Promise<UlCourse[]> {

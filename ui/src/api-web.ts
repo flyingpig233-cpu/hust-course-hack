@@ -219,6 +219,7 @@ export const webApi: Backend = {
   zhsExamOpenAttemptWindow: unsupported,
   zhsExamSummary: unsupported,
   zhsExamRedo: unsupported,
+  zhsExamOpenExamLogin: unsupported,
   ulListCourses: unsupported,
   ulCourseDetail: unsupported,
   ulCheck: unsupported,

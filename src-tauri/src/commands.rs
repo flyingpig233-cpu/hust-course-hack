@@ -162,10 +162,6 @@ pub fn session_info(state: State<'_, AppState>) -> Option<SessionInfo> {
 pub fn disconnect(state: State<'_, AppState>) {
     state.clear_session();
     state.set_zhs_exam_sso_ready(false);
-    // The shared login profile is only valid for the session that created it.
-    if let Some(dir) = state.take_zhs_webview_dir() {
-        crate::login::cleanup_login_dir(dir);
-    }
 }
 
 #[tauri::command]

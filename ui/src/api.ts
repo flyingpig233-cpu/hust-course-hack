@@ -158,6 +158,8 @@ const tauriApi = {
       courseId,
       examNameOrId,
     }),
+  zhsExamOpenExamLogin: (recruitId: number, courseId: number) =>
+    invoke<void>("zhs_exam_open_exam_login", { recruitId, courseId }),
 
   // ---- Ulearning (优学院) -----------------------------------------------
   ulListCourses: () => invoke<UlCourse[]>("ul_list_courses"),
