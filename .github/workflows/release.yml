@@ -147,6 +147,11 @@ jobs:
           cp "$NSIS_SRC" "$DEST/$(basename "$NSIS_SRC" | tr ' ' '-')"
           cp "$MSI_SRC" "$DEST/$(basename "$MSI_SRC" | tr ' ' '-')"
           cp "$CLI_SRC" "$DEST/hust-course-hack.exe"
+
+          # 浏览器助手脚本：与 v0.2.0 的资产保持一致，可直接导入 Tampermonkey
+          cp userscripts/hust-course-video-helper.user.js "$DEST/"
+          cp userscripts/zhihuishu-miaoshua.user.js "$DEST/"
+          cp userscripts/ulearning-miaoshua.user.js "$DEST/"
           ls -l "$DEST"
 
       - name: Package the CLI into a zip
@@ -154,7 +159,7 @@ jobs:
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
           $zip = "release-assets/hust-course-hack_${ver}_cli_windows_x64.zip"
-          Compress-Archive -Path release-assets/hust-course-hack.exe -DestinationPath $zip -Force
+          Compress-Archive -Path release-assets/hust-course-hack.exe, README.md -DestinationPath $zip -Force
           Remove-Item release-assets/hust-course-hack.exe
           Get-ChildItem release-assets | Select-Object Name, Length
 
@@ -179,7 +184,10 @@ jobs:
             printf '| 平台 | 文件 | 说明 |\n| --- | --- | --- |\n'
             printf '| Windows x64 | `%s` | 图形界面安装器（NSIS），一般用户选这个 |\n' "$NSIS"
             printf '| Windows x64 | `%s` | MSI 安装包，适合需要 MSI 部署的环境 |\n' "$MSI"
-            printf '| 命令行 | `%s` | 解压后运行 `hust-course-hack.exe --help` |\n\n' "$CLI"
+            printf '| 命令行 | `%s` | 解压后运行 `hust-course-hack.exe --help`（含 README） |\n' "$CLI"
+            printf '| 浏览器助手 | `hust-course-video-helper.user.js` | 学在华科大：视频、文档在浏览器内完成（Tampermonkey） |\n'
+            printf '| 浏览器助手 | `zhihuishu-miaoshua.user.js` | 知到：视频与见面课回放（Tampermonkey） |\n'
+            printf '| 浏览器助手 | `ulearning-miaoshua.user.js` | 优学院：视频与章节练习（Tampermonkey） |\n\n'
             printf '安装包未做代码签名，Windows 可能提示“未知发布者”。WebView2 Runtime 在 Windows 10/11 上通常已自带。\n\n'
             printf '## 校验\n\n上面这些文件的 SHA-256 在 `SHA256SUMS.txt` 里。\n\n'
             printf '## 变更\n\n'
@@ -197,7 +205,7 @@ jobs:
           set -euo pipefail
           cd release-assets
           # 显式列后缀：避免重跑时把上一次的 SHA256SUMS.txt 也算进去
-          sha256sum *.exe *.msi *.zip >SHA256SUMS.txt
+          sha256sum *.exe *.msi *.zip *.user.js >SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # 发布失败时也能从这次 run 的 artifacts 里把安装包捞出来

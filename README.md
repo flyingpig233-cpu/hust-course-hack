@@ -96,16 +96,17 @@ npm run tauri build    # 生产：构建安装包
 # 1. 同时改四处版本号（不一致时 release workflow 会在构建前失败）：
 #    Cargo.toml / src-tauri/Cargo.toml / src-tauri/tauri.conf.json / package.json
 # 2. 提交并打 tag，推送即触发构建
-git commit -am "release: v0.3.1"
-git tag v0.3.1
+git commit -am "release: v0.3.2"
+git tag v0.3.2
 git push origin main --tags
 ```
 
 也可以在 Actions 页面手动触发 `Release`：tag 留空则用 `v<当前版本>`，勾选
 “只创建草稿 Release”只建草稿不对外发布。Release 资产包含
 `HUST-Course-Hack_<版本>_x64-setup.exe`（NSIS）、同版本 `.msi`、
-`hust-course-hack_<版本>_cli_windows_x64.zip` 和 `SHA256SUMS.txt`。
-构建产物同时作为 workflow artifact 保留 7 天，发布失败也能从那次 run 里下载。
+`hust-course-hack_<版本>_cli_windows_x64.zip`（CLI + README）、三个浏览器助手脚本
+（`hust-course-video-helper` / `zhihuishu-miaoshua` / `ulearning-miaoshua`）和
+`SHA256SUMS.txt`。构建产物同时作为 workflow artifact 保留 7 天，发布失败也能从那次 run 里下载。
 
 界面能力（连接页可选择三个平台：学在华科大 / 知到（智慧树）/ 优学院（U学），各自独立登录窗口与
 课程页；所有写操作默认试运行，真实执行需勾选风险确认）：
