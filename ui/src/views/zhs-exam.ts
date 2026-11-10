@@ -133,12 +133,13 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
           <button class="exam-tab" data-tab="submitted">已提交</button>
         </div>
         <div class="exam-toolbar-actions">
+          <button class="btn btn-sm btn-ghost" data-action="exam-login">${icon("shield", 13)} 登录考试系统</button>
           <button class="btn btn-sm btn-ghost" data-action="bank">${icon("document", 13)} 题库统计</button>
           <button class="btn btn-sm btn-ghost" data-action="refresh">${icon("refresh", 13)} 刷新</button>
         </div>
       </div>
       <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} <span>使用顺序：<strong>网页作答</strong>（窗口内手动完成滑块验证）→ 计划完整时直接自动提交；不完整时点红色 <strong>容错试做</strong>（未解析题任选首项，会得低分）→ 之后在「已提交」点 <strong>网页重做</strong> 重新作答并提交。严格模式（计划完整）才会自动提交；期末仅列出、不自动提交。</span>
+        ${icon("alert", 14)} <span>使用顺序：<strong>网页作答</strong>（窗口内手动完成滑块验证）→ 计划完整时直接自动提交；不完整时点红色 <strong>容错试做</strong>（未解析题任选首项，会得低分）→ 之后在「已提交」点 <strong>网页重做</strong> 重新作答并提交。严格模式（计划完整）才会自动提交；期末仅列出、不自动提交。首次使用请先点「登录考试系统」在窗口内登录一次。</span>
       </div>
       <div id="zhs-exam-body" class="exam-body"></div>
     </div>
@@ -156,6 +157,9 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
   );
   const refreshButton = content.querySelector<HTMLButtonElement>(
     "[data-action='refresh']",
+  );
+  const examLoginButton = content.querySelector<HTMLButtonElement>(
+    "[data-action='exam-login']",
   );
 
   let tab: Tab = "pending";
@@ -241,6 +245,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
   }
   bankButton?.addEventListener("click", () => void loadBank());
   refreshButton?.addEventListener("click", () => void loadList(true));
+  examLoginButton?.addEventListener("click", () => void openExamLogin());
 
   function setTab(next: Tab): void {
     tab = next;
@@ -279,6 +284,19 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
       busy = false;
       render();
       void refreshSummary();
+    }
+  }
+
+  /** Open the persistent-profile login window for a one-time exam-system login. */
+  async function openExamLogin(): Promise<void> {
+    try {
+      await api.zhsExamOpenExamLogin(options.recruitId, options.courseId);
+      notify(
+        "已打开考试系统登录窗口：首次请在窗口内登录一次，之后考试/重做窗口不再需要登录。",
+        "info",
+      );
+    } catch (error) {
+      notify(errorText(error), "error");
     }
   }
 

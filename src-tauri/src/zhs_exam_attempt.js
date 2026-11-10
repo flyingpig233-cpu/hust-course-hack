@@ -165,6 +165,9 @@
   }
 
   function profileLabel() {
+    if (window.__ZHS_PROFILE_PERSISTENT__) {
+      return '持久考试配置（首次需在窗口内登录一次）';
+    }
     if (window.__ZHS_PROFILE_SHARED__) {
       return '共享登录配置（无需注入 Cookie）';
     }

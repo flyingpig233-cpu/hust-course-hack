@@ -40,13 +40,12 @@ use url::Url;
 pub const LOGIN_LABEL: &str = "login";
 const LOGIN_DIR_PREFIX: &str = "hust-course-hack-login-";
 
-/// WebView2/Chromium args for the login and shared-profile exam windows.
+/// WebView2/Chromium args for the login and persistent exam windows.
 ///
 /// The CAS chain (`onlineexamh5new → studentexam-api/gologin → passport`) is
 /// cross-site, so third-party cookie blocking is disabled explicitly (plus the
 /// wry defaults, which must be repeated when custom args are used). Windows-only
-/// setting; both windows that share the login profile use the same args, as
-/// WebView2 requires identical browser arguments for a shared user-data folder.
+/// setting; every window that uses a given user-data folder keeps the same args.
 pub(crate) const WEBVIEW2_EXAM_BROWSER_ARGS: &str =
     "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,ThirdPartyCookieBlocking";
 
@@ -142,14 +141,6 @@ pub fn open_login_window(app: &AppHandle, platform: Platform) -> Result<(), Stri
             "已关闭{other}的登录窗口，请再次点击连接{}",
             platform.label()
         ));
-    }
-
-    // Logging into another platform means the stored Zhihuishu exam profile is
-    // no longer useful; delete it now so it does not linger in %TEMP%.
-    if platform != Platform::Zhihuishu
-        && let Some(dir) = state.take_zhs_webview_dir()
-    {
-        cleanup_login_dir(dir);
     }
 
     let config = login_config(platform);
@@ -530,26 +521,6 @@ fn capture_sso_cookies(
     )
 }
 
-/// Red error panel inside the login window (the login window has no diagnostic
-/// bootstrap script, so this is built here).
-fn show_login_window_error(window: &tauri::WebviewWindow, title: &str, detail: &str) {
-    let Ok(title) = serde_json::to_string(title) else {
-        return;
-    };
-    let Ok(detail) = serde_json::to_string(detail) else {
-        return;
-    };
-    let script = format!(
-        "(function(){{var old=document.getElementById('__zhs_login_error');if(old)old.remove();\
-         var p=document.createElement('div');p.id='__zhs_login_error';\
-         p.setAttribute('style','position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.96);color:#e5e7eb;font:14px/1.7 \\\"Microsoft YaHei\\\",system-ui,sans-serif;padding:44px;box-sizing:border-box;overflow:auto');\
-         var h=document.createElement('h2');h.textContent={title};h.style.color='#fca5a5';h.style.margin='0 0 14px';\
-         var d=document.createElement('div');d.textContent={detail};d.style.whiteSpace='pre-wrap';d.style.fontSize='13px';\
-         p.appendChild(h);p.appendChild(d);document.documentElement.appendChild(p);}})();"
-    );
-    let _ = window.eval(script);
-}
-
 /// Poll the login webview until the exam list shows authenticated content.
 ///
 /// Every poll is logged with the current URL and marker. Ready requires both a
@@ -621,11 +592,11 @@ fn wait_for_authenticated_exam(
     false
 }
 
-/// Complete the exam-engine SSO during login.
+/// Complete the exam-engine SSO during login as a best-effort optimization.
 ///
-/// Navigates the login webview to the exam list and requires authenticated
-/// content. A passport/login redirect keeps the window there with a banner for
-/// one extra login (up to two rounds) before re-navigating and verifying again.
+/// The exam windows use their own persistent profile and handle a one-time
+/// manual login themselves; this attempt only avoids that step when the CAS SSO
+/// happens to succeed in the login webview.
 fn complete_exam_sso(
     app: &AppHandle,
     base: Vec<CookieRecord>,
@@ -657,7 +628,6 @@ fn complete_exam_sso(
         ),
     );
 
-    // Phase 1: automatic SSO. Ready only on authenticated content, not cookies.
     if wait_for_authenticated_exam(
         app,
         &window,
@@ -669,87 +639,8 @@ fn complete_exam_sso(
         return (best, true);
     }
 
-    let current = window.url().ok();
-    if !current.as_ref().is_some_and(is_login_url) {
-        let url_text = current
-            .as_ref()
-            .map(|url| url.to_string())
-            .unwrap_or_default();
-        let marker = login_window_authenticated_marker(&window);
-        exam_log(
-            app,
-            format!(
-                "login SSO: exam list did not show authenticated content; final url={url_text} marker={marker}"
-            ),
-        );
-        show_login_window_error(
-            &window,
-            "知到考试系统验证失败",
-            &format!(
-                "考试页已打开，但没有检测到已登录的作业/测验内容。\n\n最后地址：{url_text}\n内容标记：{marker}\n日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log\n\n请关闭窗口后重新登录知到重试。"
-            ),
-        );
-        std::thread::sleep(Duration::from_secs(8));
-        return (best, false);
-    }
-
-    // Phase 2: manual login in this window, then re-verify (up to 2 rounds).
-    let mut rounds = 0u32;
-    while rounds < 2 {
-        rounds += 1;
-        show_login_window_prompt(
-            &window,
-            "知到考试系统需要一次额外登录（与本窗口同一账号），登录后会自动继续",
-        );
-        exam_log(
-            app,
-            format!("login SSO: waiting for the extra login (round {rounds})"),
-        );
-        let wait_start = std::time::Instant::now();
-        loop {
-            let current = window.url().ok();
-            if !current.as_ref().is_some_and(is_login_url) {
-                break;
-            }
-            if wait_start.elapsed() > Duration::from_secs(300) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-        if wait_start.elapsed() > Duration::from_secs(300) {
-            exam_log(app, "login SSO: manual login timeout");
-            break;
-        }
-        exam_log(
-            app,
-            format!("login SSO: extra login finished; re-navigating exam list (round {rounds})"),
-        );
-        if window.navigate(exam_url.clone()).is_err() {
-            break;
-        }
-        if wait_for_authenticated_exam(
-            app,
-            &window,
-            &expected_host,
-            Duration::from_secs(25),
-            &mut best,
-        ) {
-            show_login_window_prompt(&window, "考试系统验证完成，正在进入…");
-            exam_log(
-                app,
-                format!(
-                    "login SSO: authenticated exam list marker found after manual login (+{}ms)",
-                    started.elapsed().as_millis()
-                ),
-            );
-            return (best, true);
-        }
-        if !window.url().ok().as_ref().is_some_and(is_login_url) {
-            // No marker and no login page: another manual round cannot help.
-            break;
-        }
-    }
-
+    // Non-blocking fallback: the persistent exam window asks for one manual
+    // login when needed instead of stalling the whole login flow here.
     let current = window
         .url()
         .ok()
@@ -759,18 +650,9 @@ fn complete_exam_sso(
     exam_log(
         app,
         format!(
-            "login SSO: manual login rounds failed; final url={current} marker={marker} (+{}ms)",
-            started.elapsed().as_millis()
+            "login SSO: auto SSO not ready; exam windows will ask for a one-time login (final url={current} marker={marker})"
         ),
     );
-    show_login_window_error(
-        &window,
-        "知到考试系统验证失败",
-        &format!(
-            "额外登录后仍未检测到已登录的考试列表内容。\n\n最后地址：{current}\n内容标记：{marker}\n日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log\n\n请关闭窗口后重新登录知到重试。"
-        ),
-    );
-    std::thread::sleep(Duration::from_secs(8));
     (best, false)
 }
 
@@ -942,17 +824,8 @@ async fn finish_zhs_login(
         }),
     });
     let _ = app.emit("session-changed", info);
-    if sso_ready {
-        // Reuse this WebView2 profile for exam windows: CAS/SSO state is in the
-        // profile itself and cannot be reproduced by injecting cookies.
-        if let Some(old) = state.adopt_zhs_webview_dir() {
-            cleanup_login_dir(old);
-        }
-        exam_log(
-            app,
-            "login: keeping the login WebView2 profile for exam windows",
-        );
-    }
+    // The login profile is temporary per AGENTS.md; exam windows use their own
+    // persistent app-data profile instead.
     close_login_window(app);
     Ok(())
 }

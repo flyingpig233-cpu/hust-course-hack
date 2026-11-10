@@ -14,12 +14,8 @@
 //! Cookie values and the harvested analysis text never cross the IPC boundary in
 //! the other direction either: the UI only sees counts and question stems.
 
-use crate::{
-    events::JobProgress,
-    login::{LOGIN_LABEL, WEBVIEW2_EXAM_BROWSER_ARGS},
-    state::AppState,
-};
-use anyhow::{Context, Result};
+use crate::{events::JobProgress, login::WEBVIEW2_EXAM_BROWSER_ARGS, state::AppState};
+use anyhow::Result;
 use hust_course_hack::{
     cookie::CookieRecord,
     zhihuishu::{
@@ -46,8 +42,6 @@ use url::Url;
 
 /// Label of the isolated exam webview window.
 pub const EXAM_WINDOW_LABEL: &str = "zhs-exam";
-/// Temporary WebView2 data-directory prefix (removed on window destroy).
-const EXAM_DIR_PREFIX: &str = "hust-course-hack-zhexam-";
 /// Exam check page (`/checkHomework/<recruit>/<stuExamId>/<examId>/<courseId>/<schoolId>`).
 const EXAM_CHECK_BASE: &str =
     "https://onlineexamh5new.zhihuishu.com/stuExamWeb.html#/webExamList/checkHomework";
@@ -64,6 +58,8 @@ const HARVEST_SCRIPT: &str = include_str!("zhs_exam_harvest.js");
 const ATTEMPT_SCRIPT: &str = include_str!("zhs_exam_attempt.js");
 /// Injected redo script (exam list page: 已提交 tab → 申请重做 → confirm).
 const REDO_SCRIPT: &str = include_str!("zhs_exam_redo.js");
+/// Injected pre-authorization script (persistent-profile exam login window).
+const EXAM_LOGIN_SCRIPT: &str = include_str!("zhs_exam_login.js");
 /// Loading/error/diagnostic bootstrap injected into the exam window before any
 /// navigation. It guarantees the window is never blank white and bridges JS
 /// errors to the file log.
@@ -83,6 +79,21 @@ const DIAGNOSTIC_SCRIPT: &str = r##"
   window.__ZHS_HIDE_LOADING__ = function () {
     var el = document.getElementById('__zhs_loading_panel');
     if (el) el.remove();
+  };
+
+  window.__ZHS_OPEN_EXAM_LOGIN__ = function () {
+    try {
+      var ctx = window.__ZHS_EXAM_CTX__ || {};
+      var internals = window.__TAURI_INTERNALS__;
+      if (internals && typeof internals.invoke === 'function') {
+        internals.invoke('zhs_exam_open_exam_login', {
+          recruitId: ctx.recruitId,
+          courseId: ctx.courseId,
+        });
+      }
+    } catch (e) {
+      /* ignore */
+    }
   };
 
   window.__ZHS_SHOW_LOGIN_PROMPT__ = function (text) {
@@ -120,12 +131,14 @@ const DIAGNOSTIC_SCRIPT: &str = r##"
       '<div id="__zhs_err_detail" style="white-space:pre-wrap;margin-bottom:18px;font-size:13px;opacity:.92"></div>' +
       '<div style="display:flex;gap:10px">' +
       '<button id="__zhs_err_reload" style="all:unset;cursor:pointer;padding:8px 18px;border-radius:8px;background:#2563eb;color:#fff">重新加载</button>' +
+      '<button id="__zhs_err_login" style="all:unset;cursor:pointer;padding:8px 18px;border-radius:8px;background:#059669;color:#fff">登录考试系统</button>' +
       '<button id="__zhs_err_copy" style="all:unset;cursor:pointer;padding:8px 18px;border-radius:8px;background:#374151;color:#fff">复制诊断</button>' +
       '</div>' +
       '<p style="opacity:.65;margin-top:20px;font-size:12.5px">诊断日志：%APPDATA%\\hust-course-hack\\logs\\zhs-exam.log</p>';
     host.appendChild(panel);
     document.getElementById('__zhs_err_detail').textContent = text;
     document.getElementById('__zhs_err_reload').onclick = function () { location.reload(); };
+    document.getElementById('__zhs_err_login').onclick = window.__ZHS_OPEN_EXAM_LOGIN__;
     document.getElementById('__zhs_err_copy').onclick = function () {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -151,12 +164,15 @@ const DIAGNOSTIC_SCRIPT: &str = r##"
     panel.innerHTML =
       '<div style="width:34px;height:34px;border:3px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:__zhs_spin 1s linear infinite;margin-bottom:14px"></div>' +
       '<div style="font-weight:700;font-size:16px">正在加载考试页…</div>' +
-      '<div style="opacity:.7;margin-top:6px;font-size:13px">正在注入登录会话并打开知到页面，请稍候。</div>' +
+      '<div style="opacity:.7;margin-top:6px;font-size:13px">正在打开知到页面；首次使用请在窗口内登录一次考试系统。</div>' +
+      '<button id="__zhs_loading_login" style="all:unset;cursor:pointer;margin-top:12px;padding:6px 14px;border-radius:8px;background:#2563eb;color:#fff">登录考试系统</button>' +
       '<div style="opacity:.5;margin-top:16px;font-size:12px">如长时间停留，请查看 %APPDATA%\\hust-course-hack\\logs\\zhs-exam.log</div>';
     var style = document.createElement('style');
     style.textContent = '@keyframes __zhs_spin{to{transform:rotate(360deg)}}';
     host.appendChild(style);
     host.appendChild(panel);
+    var loginLink = document.getElementById('__zhs_loading_login');
+    if (loginLink) loginLink.onclick = window.__ZHS_OPEN_EXAM_LOGIN__;
   }
 
   function report(kind, message) {
@@ -880,7 +896,6 @@ pub async fn zhs_exam_open_check_window(
     exam_id: String,
 ) -> Result<(), String> {
     let client = exam_client(&state)?;
-    ensure_exam_sso_ready(&state)?;
     let homework = find_homework(&client, recruit_id, course_id, &exam_id).await?;
     open_check_window(&app, recruit_id, course_id, &homework)
 }
@@ -992,7 +1007,6 @@ pub async fn zhs_exam_redo(
     exam_name_or_id: String,
 ) -> Result<ZhsRedoResultDto, String> {
     let client = exam_client(&state)?;
-    ensure_exam_sso_ready(&state)?;
     let homework = find_homework_ref(&client, recruit_id, course_id, &exam_name_or_id).await?;
     ensure_not_final(&client, recruit_id, course_id, &homework.exam_id).await?;
     if homework.state != Some(1) && homework.achieve.is_none() {
@@ -1091,6 +1105,44 @@ pub async fn zhs_exam_solve_captcha(
             .to_string(),
     )
 }
+/// Open the persistent-profile exam window at the exam list so the user can
+/// pre-authorize the exam system once. The same profile is reused by every
+/// attempt/check/redo window, so this is a one-time step.
+#[tauri::command]
+pub async fn zhs_exam_open_exam_login(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    recruit_id: u64,
+    course_id: u64,
+) -> Result<(), String> {
+    let secret = state
+        .zhs_course(&course_id.to_string())
+        .map(|course| course.secret_or_derive())
+        .unwrap_or_else(|| {
+            ZhsCourse {
+                recruit_id,
+                course_id,
+                ..Default::default()
+            }
+            .course_secret()
+        });
+    let url = exam_list_url(&secret)?;
+    let context_json = serde_json::json!({
+        "mode": "login",
+        "windowLabel": EXAM_WINDOW_LABEL,
+        "recruitId": recruit_id,
+        "courseId": course_id,
+    });
+    let script = format!(
+        "window.__ZHS_EXAM_CTX__ = {};\n{}\n{}",
+        context_json, DIAGNOSTIC_SCRIPT, EXAM_LOGIN_SCRIPT
+    );
+    exam_log(
+        &app,
+        format!("exam login window requested: recruit={recruit_id} course={course_id}"),
+    );
+    open_exam_window(&app, url, "知到 · 登录考试系统", script)
+}
 // ---- Webview-driven attempt ------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1169,7 +1221,6 @@ pub async fn zhs_exam_open_attempt_window(
     exam_id: String,
 ) -> Result<(), String> {
     let client = exam_client(&state)?;
-    ensure_exam_sso_ready(&state)?;
     ensure_not_final(&client, recruit_id, course_id, &exam_id).await?;
     let homework = find_homework(&client, recruit_id, course_id, &exam_id).await?;
     open_attempt_window(&app, recruit_id, course_id, &homework)
@@ -1359,18 +1410,6 @@ pub async fn zhs_exam_webview_submitted(
     Ok(result)
 }
 // ---- Helpers ---------------------------------------------------------------
-
-/// Exam/redo windows are only opened after the login flow completed the exam
-/// engine SSO; otherwise the window would stall on the passport redirect.
-fn ensure_exam_sso_ready(state: &AppState) -> Result<(), String> {
-    if state.zhs_exam_sso_ready() {
-        return Ok(());
-    }
-    Err(
-        "考试引擎会话尚未就绪（登录时未完成考试 SSO）。请回主界面重新登录知到一次，登录窗口会自动完成考试引擎验证后再打开考试窗口。"
-            .to_string(),
-    )
-}
 
 fn exam_client(state: &AppState) -> Result<ZhsExamClient, String> {
     let zhs = state
@@ -1852,45 +1891,16 @@ fn open_exam_window(
         }
     }
 
-    // Reuse the login window's WebView2 profile when available: the CAS/SSO
-    // state lives in the profile and cannot be reproduced by injecting cookies
-    // into a fresh one. Wait for the login window to release the profile first.
-    let mut shared_profile = app.state::<AppState>().zhs_webview_dir();
-    if shared_profile.is_some() && app.get_webview_window(LOGIN_LABEL).is_some() {
-        exam_log(
-            app,
-            "exam window: waiting for the login window to release the shared profile",
-        );
-        for _ in 0..60 {
-            if app.get_webview_window(LOGIN_LABEL).is_none() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    let using_shared = shared_profile.is_some() && app.get_webview_window(LOGIN_LABEL).is_none();
-    let data_dir = if using_shared {
-        let dir = shared_profile.take().expect("shared profile checked");
-        exam_log(
-            app,
-            format!(
-                "exam window: shared login profile={} (cookie injection skipped)",
-                dir.display()
-            ),
-        );
-        dir
-    } else {
-        exam_log(app, "exam window: temp profile + cookie injection");
-        exam_data_dir()
-    };
+    // One persistent profile under %LOCALAPPDATA% for every exam/redo window.
+    // A first run shows the normal login page inside the window; after one
+    // manual login the profile keeps the cookies across app restarts.
+    let data_dir = exam_profile_dir(app)?;
     let blank = Url::parse("about:blank").map_err(|error| format!("无效的空白页地址：{error}"))?;
-    let injected = Arc::new(AtomicUsize::new(0));
     let loaded = Arc::new(AtomicBool::new(false));
     let app_nav = app.clone();
     let app_load = app.clone();
     let app_merge = app.clone();
     let loaded_for_load = Arc::clone(&loaded);
-    let count_for_load = Arc::clone(&injected);
     let expected_host = exam_url.host_str().unwrap_or_default().to_ascii_lowercase();
     let open_started_load = open_started;
     let open_started_nav = open_started;
@@ -1899,7 +1909,6 @@ fn open_exam_window(
     let recovering_load = Arc::clone(&recovering);
     let rounds_load = Arc::clone(&recovery_rounds);
     let target_url_load = exam_url.clone();
-    let using_shared_load = using_shared;
     let initial_script = format!("{DIAGNOSTIC_SCRIPT}\n{script}");
     exam_log(
         app,
@@ -1914,8 +1923,8 @@ fn open_exam_window(
         .title(title)
         .inner_size(1180.0, 900.0)
         .min_inner_size(900.0, 640.0)
-        // Same args as the login window: WebView2 requires identical browser
-        // arguments for a shared user-data directory (the shared-profile case).
+        // Cross-site CAS chain needs third-party cookies; keep the args stable
+        // for the persistent profile.
         .additional_browser_args(WEBVIEW2_EXAM_BROWSER_ARGS)
         .data_directory(data_dir.clone())
         .initialization_script(initial_script)
@@ -1949,6 +1958,16 @@ fn open_exam_window(
             if login_page {
                 exam_log(&app_load, format!("login redirect detected: {url}"));
                 if recovering_load.load(Ordering::SeqCst) {
+                    // A navigation may have replaced the document; re-show the
+                    // banner on every login page so the user is never left
+                    // without instructions.
+                    let _ = window.eval(
+                        "if (window.__ZHS_HIDE_LOADING__) window.__ZHS_HIDE_LOADING__();",
+                    );
+                    show_exam_login_prompt(
+                        &window,
+                        "第一次需要在窗口内登录一次知到；登录后这个窗口会自动继续，且以后不再需要登录",
+                    );
                     exam_log(&app_load, "still waiting for the one-time manual login");
                     return;
                 }
@@ -1977,7 +1996,7 @@ fn open_exam_window(
                 );
                 show_exam_login_prompt(
                     &window,
-                    "需要在本窗口登录一次知到，登录后会自动继续（无需关闭窗口）",
+                    "第一次需要在窗口内登录一次知到；登录后这个窗口会自动继续，且以后不再需要登录",
                 );
                 let keep_login_page = host.starts_with("login.")
                     || host.starts_with("passport.")
@@ -1999,10 +2018,14 @@ fn open_exam_window(
                 let _ = window.eval(
                     "if (window.__ZHS_HIDE_LOGIN_PROMPT__) window.__ZHS_HIDE_LOGIN_PROMPT__();",
                 );
+                let marker = exam_page_authenticated_marker(&window);
                 exam_log(
                     &app_load,
-                    format!("login recovery finished on target host: {url}"),
+                    format!(
+                        "exam profile: login completed, persistent profile saved (marker={marker}, url={url})"
+                    ),
                 );
+                let _ = window.eval("window.__ZHS_PROFILE_PERSISTENT__ = true;");
             } else if recovering_load.load(Ordering::SeqCst) {
                 // Logged-in portal page: merge cookies, then resume the target.
                 exam_log(
@@ -2061,12 +2084,13 @@ fn open_exam_window(
                 return;
             }
 
-            // Expose the cookie/profile mode to the overlay scripts.
-            let count = count_for_load.load(Ordering::SeqCst);
-            let _ = window.eval(format!("window.__ZHS_INJECTED_COUNT__ = {count};"));
-            if using_shared_load {
-                let _ = window.eval("window.__ZHS_PROFILE_SHARED__ = true;");
-            }
+            // Expose the profile mode + authenticated marker to logs/scripts.
+            let _ = window.eval("window.__ZHS_PROFILE_PERSISTENT__ = true;");
+            let marker = exam_page_authenticated_marker(&window);
+            exam_log(
+                &app_load,
+                format!("exam profile: authenticated marker={marker} url={url}"),
+            );
 
             // Merge cookies set by the exam host back into the main session, so a
             // manual login performed inside this window also fixes the API client.
@@ -2088,118 +2112,42 @@ fn open_exam_window(
         });
 
     let window = builder.build().map_err(|error| {
-        if !using_shared {
-            cleanup_exam_dir(data_dir.clone());
-        }
-        exam_log(
-            app,
-            if using_shared {
-                format!("window build failed with the shared profile: {error}")
-            } else {
-                format!("window build failed: {error}")
-            },
-        );
+        exam_log(app, format!("window build failed: {error}"));
         format!("打开考试窗口失败：{error}")
     })?;
 
     let app_destroy = app.clone();
-    let data_dir_for_destroy = data_dir.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            if using_shared {
-                exam_log(&app_destroy, "window destroyed (shared login profile kept)");
-            } else {
-                exam_log(&app_destroy, "window destroyed (temporary profile cleaned)");
-                cleanup_exam_dir(data_dir_for_destroy.clone());
-            }
+            exam_log(
+                &app_destroy,
+                "exam window destroyed (persistent profile kept)",
+            );
         }
     });
     let _ = window.set_focus();
 
-    // Inject the session cookies into the window's own profile BEFORE the first
-    // navigation, then navigate, then enforce a page-load timeout.
-    let app_inject = app.clone();
-    let injected_count = Arc::clone(&injected);
+    // The persistent profile already carries any previous login. Navigate
+    // directly; a first run shows the normal login page inside this window and
+    // the recovery logic above resumes after one manual login.
+    let app_nav_task = app.clone();
     let loaded_for_watch = Arc::clone(&loaded);
     let nav_url = exam_url.clone();
     tauri::async_runtime::spawn(async move {
-        exam_sleep(180).await;
-        if using_shared {
-            exam_log(
-                &app_inject,
-                "cookie injection skipped: shared login profile already carries the exam SSO",
-            );
-        } else {
-            let cookies = app_inject.state::<AppState>().zhs_cookies();
-            let cookie_names = cookies
-                .iter()
-                .map(|cookie| cookie.name.as_str())
-                .collect::<Vec<_>>()
-                .join(",");
-            exam_log(
-                &app_inject,
-                format!(
-                    "cookie injection start: {} records (names: {cookie_names})",
-                    cookies.len()
-                ),
-            );
-            let Some(window) = app_inject.get_webview_window(EXAM_WINDOW_LABEL) else {
-                exam_log(&app_inject, "window disappeared before cookie injection");
-                return;
-            };
-            // WebView2 may not expose its core immediately after window creation;
-            // retry a few times before navigating anyway (the error panel shows if
-            // the session really is missing).
-            let mut injected_ok = false;
-            for attempt in 0..4 {
-                if attempt > 0 {
-                    exam_sleep(250).await;
-                }
-                let app_for_closure = app_inject.clone();
-                let holder = Arc::clone(&injected_count);
-                let cookies_for_closure = cookies.clone();
-                let result = window.with_webview(move |webview| {
-                    match inject_webview2_cookies(&webview, &cookies_for_closure) {
-                        Ok(count) => {
-                            holder.store(count, Ordering::SeqCst);
-                            exam_log(
-                                &app_for_closure,
-                                format!("cookie injection ok: {count} cookies"),
-                            );
-                        }
-                        Err(error) => {
-                            exam_log(
-                                &app_for_closure,
-                                format!("cookie injection attempt {attempt} failed: {error:#}"),
-                            );
-                        }
-                    }
-                });
-                if let Err(error) = result {
-                    exam_log(&app_inject, format!("with_webview failed: {error}"));
-                }
-                if injected_count.load(Ordering::SeqCst) > 0 {
-                    injected_ok = true;
-                    break;
-                }
-            }
-            if !injected_ok {
-                exam_log(
-                    &app_inject,
-                    "cookie injection did not succeed; navigating anyway (login redirect will show the error panel)",
-                );
-            }
-        }
+        exam_sleep(150).await;
+        let Some(window) = app_nav_task.get_webview_window(EXAM_WINDOW_LABEL) else {
+            return;
+        };
         match window.navigate(nav_url.clone()) {
             Ok(()) => exam_log(
-                &app_inject,
+                &app_nav_task,
                 format!(
                     "navigation requested (+{}ms): {nav_url}",
                     open_started_nav.elapsed().as_millis()
                 ),
             ),
             Err(error) => {
-                exam_log(&app_inject, format!("navigate failed: {error}"));
+                exam_log(&app_nav_task, format!("navigate failed: {error}"));
                 show_exam_error(
                     &window,
                     "考试页加载失败",
@@ -2212,12 +2160,12 @@ fn open_exam_window(
         if loaded_for_watch.load(Ordering::SeqCst) {
             return;
         }
-        exam_log(&app_inject, format!("page-load timeout for {nav_url}"));
+        exam_log(&app_nav_task, format!("page-load timeout for {nav_url}"));
         show_exam_error(
             &window,
             "考试页加载超时",
             &format!(
-                "{:?} 内没有收到考试页加载完成事件。\n\n目标地址：{nav_url}\n\n可能原因：网络问题、登录会话未注入、或页面被重定向。\n可点「重新加载」，或关闭窗口后重新登录知到。",
+                "{:?} 内没有收到考试页加载完成事件。\n\n目标地址：{nav_url}\n\n可能原因：网络问题或页面被重定向。\n可点「重新加载」；首次使用请点「登录考试系统」完成一次登录。",
                 EXAM_PAGE_LOAD_TIMEOUT
             ),
         );
@@ -2247,27 +2195,8 @@ fn exam_attempt_url(recruit_id: u64, course_id: u64, homework: &ZhsHomework) -> 
     Url::parse(&url_str).expect("the exam attempt URL is built from safe components")
 }
 
-fn exam_data_dir() -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!("{EXAM_DIR_PREFIX}{}-{stamp}", std::process::id()))
-}
-
-fn cleanup_exam_dir(path: PathBuf) {
-    std::thread::spawn(move || {
-        for _ in 0..20 {
-            if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(150));
-        }
-    });
-}
-
-/// Cookie URLs read from an exam window after every page load.
-fn exam_window_cookie_urls(window: &tauri::WebviewWindow) -> Vec<Url> {
+/// Read the exam window cookies for the exam hosts (blocking worker).
+fn read_exam_window_cookies(window: &tauri::WebviewWindow) -> anyhow::Result<Vec<CookieRecord>> {
     let mut urls = Vec::new();
     if let Ok(current) = window.url() {
         urls.push(current);
@@ -2281,13 +2210,6 @@ fn exam_window_cookie_urls(window: &tauri::WebviewWindow) -> Vec<Url> {
             urls.push(url);
         }
     }
-    urls
-}
-
-/// Read the exam window cookies (blocking worker; `cookies_for_url` deadlocks on
-/// the main thread on Windows).
-fn read_exam_window_cookies(window: &tauri::WebviewWindow) -> anyhow::Result<Vec<CookieRecord>> {
-    let urls = exam_window_cookie_urls(window);
     let mut records = Vec::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for url in urls {
@@ -2319,66 +2241,46 @@ fn read_exam_window_cookies(window: &tauri::WebviewWindow) -> anyhow::Result<Vec
     Ok(records)
 }
 
-/// Inject the captured Zhihuishu cookies into the window's WebView2 profile.
-#[cfg(windows)]
-fn inject_webview2_cookies(
-    webview: &tauri::webview::PlatformWebview,
-    cookies: &[CookieRecord],
-) -> Result<usize> {
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
-    use windows::core::{HSTRING, Interface};
+/// Persistent WebView2 profile for exam/redo windows.
+///
+/// A single profile under `%LOCALAPPDATA%\cn.edu.hust.coursehack\zhs-exam-webview`
+/// persists across app restarts; a first run shows the normal login page inside
+/// the window and one manual login authorizes every later exam window.
+fn exam_profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map_err(|error| format!("无法定位应用本地数据目录：{error}"))?;
+    let dir = base.join("zhs-exam-webview");
+    let first_run = !dir.exists();
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("无法创建考试 WebView2 配置目录：{error}"))?;
+    exam_log(
+        app,
+        format!("exam profile: path={} first_run={first_run}", dir.display()),
+    );
+    Ok(dir)
+}
 
-    let controller = webview.controller();
-    let core = unsafe { controller.CoreWebView2() }.context("WebView2 core is not ready")?;
-    // `ICoreWebView2CookieManager` hangs off `ICoreWebView2_2` (WebView2 1.0.864+).
-    let core: ICoreWebView2_2 = core
-        .cast()
-        .context("WebView2 ICoreWebView2_2 unsupported")?;
-    let manager = unsafe { core.CookieManager() }.context("WebView2 cookie manager unavailable")?;
-
-    for cookie in cookies {
-        let domain = cookie_domain(cookie);
-        let name = HSTRING::from(cookie.name.as_str());
-        let value = HSTRING::from(cookie.value.as_str());
-        let domain = HSTRING::from(domain.as_str());
-        let path = HSTRING::from(if cookie.path.is_empty() {
-            "/"
-        } else {
-            cookie.path.as_str()
-        });
-        let item = unsafe { manager.CreateCookie(&name, &value, &domain, &path) }
-            .context("CreateCookie failed")?;
-        unsafe {
-            let _ = item.SetIsHttpOnly(true);
-            let _ = item.SetIsSecure(cookie.secure);
-        }
-        if cookie.expires > 0 {
-            unsafe {
-                let _ = item.SetExpires(cookie.expires as f64);
-            }
-        }
-        unsafe { manager.AddOrUpdateCookie(&item) }.context("AddOrUpdateCookie failed")?;
+/// Authenticated-content marker for the exam list inside the exam window.
+fn exam_page_authenticated_marker(window: &tauri::WebviewWindow) -> bool {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let script = "(function(){try{var t=(document.body&&document.body.innerText)||'';\
+        return /单元测试|见面课测验|题目数量|申请重做/.test(t)?'true':'false';}catch(e){return 'false';}})();";
+    if window
+        .eval_with_callback(script, move |value| {
+            let _ = sender.send(value);
+        })
+        .is_err()
+    {
+        return false;
     }
-    Ok(cookies.len())
-}
-
-#[cfg(not(windows))]
-fn inject_webview2_cookies(
-    _webview: &tauri::webview::PlatformWebview,
-    _cookies: &[CookieRecord],
-) -> Result<usize> {
-    Err(anyhow::anyhow!(
-        "cookie injection is only implemented on Windows"
-    ))
-}
-
-fn cookie_domain(cookie: &CookieRecord) -> String {
-    let domain = cookie.domain.trim();
-    if domain.is_empty() {
-        ".zhihuishu.com".to_string()
-    } else if cookie.include_subdomains && !domain.starts_with('.') {
-        format!(".{domain}")
-    } else {
-        domain.to_string()
+    match receiver.recv_timeout(Duration::from_millis(800)) {
+        Ok(value) => {
+            let value = value.trim().trim_matches('"').to_ascii_lowercase();
+            value == "true" || value == "1"
+        }
+        Err(_) => false,
     }
 }
