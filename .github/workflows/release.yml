@@ -1,0 +1,239 @@
+name: Release
+
+# 打 tag `v*` 时构建 Windows x64 安装包（NSIS + MSI）和 CLI，并发布到 GitHub Releases。
+# 也可以在 Actions 页面手动运行：tag 留空则用 v<Cargo.toml 版本>，可勾选“存为草稿”。
+#
+# 发版流程：把 Cargo.toml / src-tauri/Cargo.toml / src-tauri/tauri.conf.json /
+# package.json 的版本号一起改掉，提交后 `git tag vX.Y.Z && git push origin vX.Y.Z`。
+# 四处的版本号不一致时本 workflow 会在构建前直接失败。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布标签（留空则用 v<当前版本>）'
+        required: false
+        default: ''
+      draft:
+        description: '只创建草稿 Release，不对外发布'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows x64 · build + publish
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # release notes 需要 tag 历史
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Resolve version and tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_from_toml() { grep -m1 '^version' "$1" | sed -E 's/.*"(.*)".*/\1/'; }
+          version_from_json() { grep -m1 '"version"' "$1" | sed -E 's/.*:[[:space:]]*"(.*)".*/\1/'; }
+
+          CARGO_VERSION=$(version_from_toml Cargo.toml)
+          GUI_VERSION=$(version_from_toml src-tauri/Cargo.toml)
+          CONF_VERSION=$(version_from_json src-tauri/tauri.conf.json)
+          NPM_VERSION=$(version_from_json package.json)
+
+          if [ "$CARGO_VERSION" != "$GUI_VERSION" ] ||
+            [ "$CARGO_VERSION" != "$CONF_VERSION" ] ||
+            [ "$CARGO_VERSION" != "$NPM_VERSION" ]; then
+            echo "版本号不一致：Cargo.toml=$CARGO_VERSION src-tauri/Cargo.toml=$GUI_VERSION" >&2
+            echo "tauri.conf.json=$CONF_VERSION package.json=$NPM_VERSION" >&2
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="${{ inputs.tag }}"
+            TAG="${TAG:-v$CARGO_VERSION}"
+          fi
+
+          case "$TAG" in
+          "v$CARGO_VERSION" | "v$CARGO_VERSION"-*) ;;
+          *)
+            echo "tag $TAG 与版本 $CARGO_VERSION 不匹配（应为 v$CARGO_VERSION）" >&2
+            exit 1
+            ;;
+          esac
+
+          echo "version=$CARGO_VERSION" >>"$GITHUB_OUTPUT"
+          echo "tag=$TAG" >>"$GITHUB_OUTPUT"
+          echo "version=$CARGO_VERSION tag=$TAG"
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      # 先把前端错误抖出来，再去等十几分钟的 Rust release 构建
+      - name: Type-check and build the UI
+        run: npm run build
+
+      # beforeBuildCommand（npm run build）会被 tauri build 再跑一次，代价可忽略
+      - name: Build desktop bundles (NSIS + MSI)
+        run: npx tauri build --bundles nsis,msi
+
+      - name: Build the CLI binary
+        run: cargo build --release -p hust-course-hack --bin hust-course-hack
+
+      - name: Stage release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ steps.meta.outputs.version }}"
+          DEST=release-assets
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+
+          # 这是 cargo workspace，tauri 的产物在仓库根 target/ 下；
+          # 兼容 src-tauri 独立构建时的 src-tauri/target/。
+          # 按版本号过滤，避免本地 target/ 里旧版本的安装包被误用。
+          first_asset() { # first_asset <bundle 子目录> <扩展名>
+            local sub=$1 ext=$2 base f
+            shopt -s nullglob
+            for base in target src-tauri/target; do
+              for f in "$base/release/bundle/$sub"/*_"$VER"_*"$ext"; do
+                printf '%s\n' "$f"
+                shopt -u nullglob
+                return 0
+              done
+            done
+            shopt -u nullglob
+            return 1
+          }
+
+          if ! NSIS_SRC=$(first_asset nsis -setup.exe) ||
+            ! MSI_SRC=$(first_asset msi .msi); then
+            echo "没有找到 $VER 的安装包" >&2
+            ls -R target/release/bundle 2>/dev/null >&2 || true
+            exit 1
+          fi
+
+          CLI_SRC=target/release/hust-course-hack.exe
+          if [ ! -f "$CLI_SRC" ]; then CLI_SRC=src-tauri/target/release/hust-course-hack.exe; fi
+
+          # 产物名带 productName 的空格，换成连字符方便下载
+          cp "$NSIS_SRC" "$DEST/$(basename "$NSIS_SRC" | tr ' ' '-')"
+          cp "$MSI_SRC" "$DEST/$(basename "$MSI_SRC" | tr ' ' '-')"
+          cp "$CLI_SRC" "$DEST/hust-course-hack.exe"
+          ls -l "$DEST"
+
+      - name: Package the CLI into a zip
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.meta.outputs.version }}"
+          $zip = "release-assets/hust-course-hack_${ver}_cli_windows_x64.zip"
+          Compress-Archive -Path release-assets/hust-course-hack.exe -DestinationPath $zip -Force
+          Remove-Item release-assets/hust-course-hack.exe
+          Get-ChildItem release-assets | Select-Object Name, Length
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ steps.meta.outputs.version }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          shopt -s nullglob
+          nsis_files=(release-assets/*-setup.exe)
+          msi_files=(release-assets/*.msi)
+          shopt -u nullglob
+          NSIS=$(basename "${nsis_files[0]:-missing}")
+          MSI=$(basename "${msi_files[0]:-missing}")
+          CLI="hust-course-hack_${VER}_cli_windows_x64.zip"
+
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)
+
+          {
+            printf '## 安装\n\n'
+            printf '| 平台 | 文件 | 说明 |\n| --- | --- | --- |\n'
+            printf '| Windows x64 | `%s` | 图形界面安装器（NSIS），一般用户选这个 |\n' "$NSIS"
+            printf '| Windows x64 | `%s` | MSI 安装包，适合需要 MSI 部署的环境 |\n' "$MSI"
+            printf '| 命令行 | `%s` | 解压后运行 `hust-course-hack.exe --help` |\n\n' "$CLI"
+            printf '安装包未做代码签名，Windows 可能提示“未知发布者”。WebView2 Runtime 在 Windows 10/11 上通常已自带。\n\n'
+            printf '## 校验\n\n上面这些文件的 SHA-256 在 `SHA256SUMS.txt` 里。\n\n'
+            printf '## 变更\n\n'
+            if [ -n "$PREV" ]; then
+              git log --no-merges --pretty='- %s (%h)' "$PREV..$TAG"
+            else
+              git log --no-merges --pretty='- %s (%h)' -20
+            fi
+          } >release-notes.md
+          cat release-notes.md
+
+      - name: Write SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          # 显式列后缀：避免重跑时把上一次的 SHA256SUMS.txt 也算进去
+          sha256sum *.exe *.msi *.zip >SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # 发布失败时也能从这次 run 的 artifacts 里把安装包捞出来
+      - name: Upload build output as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-release-assets
+          path: release-assets/*
+          retention-days: 7
+
+      - name: Publish GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          NAME="HUST Course Hack $TAG"
+          DRAFT="${{ inputs.draft }}"
+
+          CREATE_FLAGS=()
+          if [ "${DRAFT:-false}" = "true" ]; then CREATE_FLAGS+=(--draft); fi
+          if [ "$TAG" != "v${{ steps.meta.outputs.version }}" ]; then CREATE_FLAGS+=(--prerelease); fi
+
+          git fetch --tags --force --quiet
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，覆盖资产与说明"
+            gh release upload "$TAG" ./release-assets/* --clobber
+            gh release edit "$TAG" --title "$NAME" --notes-file release-notes.md
+          else
+            TARGET_FLAGS=()
+            if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "tag $TAG 不存在，从 $GITHUB_SHA 创建"
+              TARGET_FLAGS=(--target "$GITHUB_SHA")
+            fi
+            gh release create "$TAG" ./release-assets/* \
+              --title "$NAME" \
+              --notes-file release-notes.md \
+              "${CREATE_FLAGS[@]}" "${TARGET_FLAGS[@]}"
+          fi
