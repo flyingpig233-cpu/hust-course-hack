@@ -1,12 +1,6 @@
 import "./styles.css";
-import {
-  api,
-  onJobProgress,
-  onLoginClosed,
-  onSessionChanged,
-} from "./api";
+import { api, backendMode, onJobProgress, onLoginClosed, onSessionChanged, webConfig } from "./api";
 import { errorText, qs, toast } from "./dom";
-import { isTauri } from "./env";
 import { safeFileName } from "./format";
 import { platformMeta } from "./platforms";
 import { openExternal, pickSavePath } from "./platform";
@@ -97,6 +91,7 @@ const store = {
   session: null as SessionInfo | null,
   loginStatus: "idle" as LoginStatus,
   loginError: null as string | null,
+  tokenRequired: false,
   busy: false,
   hust: {
     courses: [] as CourseSummary[],
@@ -231,6 +226,7 @@ function showConnect(): void {
       showConnect();
     },
     onLogin: () => void startLogin(),
+    tokenRequired: store.tokenRequired,
   });
 }
 
@@ -298,7 +294,7 @@ async function startLogin(): Promise<void> {
   window.setTimeout(showConnect, 0);
   try {
     await api.openLoginWindow(store.platform);
-    if (store.session) return;
+    if (store.session || (store.loginStatus as LoginStatus) === "failed") return;
     store.loginStatus = "waiting";
     showConnect();
   } catch (error) {
@@ -1189,6 +1185,18 @@ async function disconnect(): Promise<void> {
 
 async function boot(): Promise<void> {
   updateSidebar();
+  try {
+    if (backendMode === "web") {
+      const config = await webConfig();
+      store.tokenRequired = config.tokenRequired;
+      store.hust.bankQuestions = config.bankQuestions;
+    } else {
+      store.hust.bankQuestions = (await api.answerBankInfo()).questions;
+    }
+  } catch (error) {
+    store.hust.bankQuestions = null;
+    if (backendMode === "web") toast(`课程助手服务不可用：${errorText(error)}`, "error");
+  }
   await subscribeAuthEvents();
   try {
     store.session = await api.sessionInfo();
@@ -1198,7 +1206,7 @@ async function boot(): Promise<void> {
 
   if (!store.session) {
     showConnect();
-    if (!isTauri) {
+    if (backendMode === "demo") {
       window.setTimeout(
         () => toast("演示模式：使用内置示例课程，不会访问真实平台", "info"),
         500,

@@ -677,6 +677,21 @@ code {
   margin-top: 10px;
 }
 
+/* Web connect form --------------------------------------------------------- */
+
+.connect-web-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.connect-web-form .field input {
+  background: var(--surface-2);
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
 .hint {
   font-size: 11.5px;
   color: var(--muted);

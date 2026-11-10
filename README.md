@@ -25,6 +25,45 @@ Rust 核心库 + CLI + Tauri 2 桌面 GUI，用于读取 `https://smartcourse.hu
 > CLI、桌面 GUI、网站版和浏览器助手四个入口；协议调研与分析报告见
 > `docs/ulearning/`、`docs/analysis/`。
 
+## 自部署网页版（server/）
+
+此自部署后端目前仅支持学在华科大的课程抓取、视频和测验；文档任务、知到及优学院请使用桌面版或 `website/` 独立网站版。
+
+`server/` 是一个 axum Web 服务（`hust-course-web`），把同一个 `SmartCourseClient` 包成
+HTTP API，让课程助手从浏览器直接使用——不需要桌面应用，也不需要油猴脚本：
+
+- 登录：与桌面版一致的统一身份认证。浏览器新窗口打开 `/login/`，服务器中转
+  `smartcourse.hust.edu.cn/passport` 及其跳转的 `pass.hust.edu.cn` CAS 官方页面（所有
+  URL 改写回代理，只允许 `*.hust.edu.cn`，账号密码由官方页面的脚本加密并只提交给学校
+  服务器）。CAS 回调落到 smartcourse 页面时，服务器从本次登录的独立 Cookie jar 中取出
+  会话 Cookie，用课程列表接口验证后建立服务端会话（与桌面登录窗口 `login.rs` 同一套
+  判定），返回“登录成功”页并自动关窗；前端轮询 `GET /api/login/status` 接管会话。会话
+  只保存在内存中，服务重启后需重新登录。
+- 任务：抓取课程、视频上报、测验提交都是后台任务（同一时间一个），前端轮询
+  `GET /api/jobs/current?cursor=N` 重放与 GUI 相同的进度事件，取消用
+  `POST /api/jobs/cancel`。
+- 访问控制：设置 `COURSEHACK_TOKEN`（或 `--token`）后，除 `GET /api/config` 外的所有
+  API 都要带 `X-Access-Token`（登录入口 `/login/` 用 `?t=` 校验，中转请求用登录 Cookie
+  关联）；对外只暴露 nginx 的一个路径前缀，服务本身只监听 127.0.0.1。
+- 前端：`ui/` 同一套代码，`npm run build:web` 以 `VITE_BACKEND=web` 模式构建出
+  `ui/dist-web`（base 为 `/course-hack/`），由 nginx 反代 `/course-hack/` 到本服务。
+
+```powershell
+cargo run -p hust-course-web -- --listen 127.0.0.1:8787 --web-dir ui/dist-web --token YOUR_TOKEN
+# --url-prefix 默认 /course-hack（nginx 反代时剥离的前缀）；根路径部署时传空字符串
+```
+
+服务器端部署（Ubuntu + nginx）：在宿主机用 rsproxy.cn 的 Rust 工具链
+`cargo build --release -p hust-course-web`，部署目录为 `/root/workspace/website/`
+（二进制与 `ui/dist-web` 在 `course-hack/` 下，与个人静态站点 `site/` 并列），用
+systemd（`NoNewPrivileges`、`ProtectSystem=strict`、`ProtectHome=read-only`、专用用户）
+常驻，nginx 的站点 root 指向 `site/` 并增加一个
+`location /course-hack/ { proxy_pass http://127.0.0.1:8787/; }`。服务用户要能读
+`/root` 下的路径（`/root` 需 711，资源目录 `a+rX`）。
+
+已知限制：CAS 页面的企业微信扫码登录依赖相对地址的轮询接口，经中转后不可用；
+请使用页面上的“密码登录”。
+
 ## 桌面 GUI（Tauri 2）
 
 ### 下载安装
@@ -44,6 +83,30 @@ npm install
 npm run tauri dev      # 开发：Vite + 桌面窗口
 npm run tauri build    # 生产：构建安装包
 ```
+
+### 发版（GitHub Actions）
+
+- `.github/workflows/ci.yml`：推到 `main` / 提 PR 时跑 `cargo fmt --check`、
+  `cargo clippy`、`cargo test`（核心库 + server）、前端 `ui/dist` 与网页版构建、
+  网站测试，以及 Windows 上 GUI crate 的 clippy。
+- `.github/workflows/release.yml`：打 `v*` tag 时在 `windows-latest` 上构建
+  NSIS + MSI 安装包和 CLI，自动创建 GitHub Release 并上传资产。
+
+```powershell
+# 1. 同时改四处版本号（不一致时 release workflow 会在构建前失败）：
+#    Cargo.toml / src-tauri/Cargo.toml / src-tauri/tauri.conf.json / package.json
+# 2. 提交并打 tag，推送即触发构建
+git commit -am "release: v0.3.2"
+git tag v0.3.2
+git push origin main --tags
+```
+
+也可以在 Actions 页面手动触发 `Release`：tag 留空则用 `v<当前版本>`，勾选
+“只创建草稿 Release”只建草稿不对外发布。Release 资产包含
+`HUST-Course-Hack_<版本>_x64-setup.exe`（NSIS）、同版本 `.msi`、
+`hust-course-hack_<版本>_cli_windows_x64.zip`（CLI + README）、三个浏览器助手脚本
+（`hust-course-video-helper` / `zhihuishu-miaoshua` / `ulearning-miaoshua`）和
+`SHA256SUMS.txt`。构建产物同时作为 workflow artifact 保留 7 天，发布失败也能从那次 run 里下载。
 
 界面能力（连接页可选择三个平台：学在华科大 / 知到（智慧树）/ 优学院（U学），各自独立登录窗口与
 课程页；所有写操作默认试运行，真实执行需勾选风险确认）：

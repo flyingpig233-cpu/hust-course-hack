@@ -1,5 +1,5 @@
+import { backendMode } from "../api";
 import { esc, toast } from "../dom";
-import { isTauri } from "../env";
 import { icon } from "../icons";
 import { platformMeta } from "../platforms";
 import type { Platform, SessionInfo } from "../types";
@@ -90,7 +90,7 @@ export function createSidebar(
           <div class="brand-sub">${esc(meta.brandSub)}</div>
         </div>
       </div>
-      ${isTauri ? "" : `<div class="demo-badge">${icon("spark", 12)} 演示模式</div>`}
+      ${backendMode === "tauri" ? "" : `<div class="demo-badge">${icon("spark", 12)} ${backendMode === "web" ? "网页版" : "演示模式"}</div>`}
       <div id="sidebar-session"></div>
       <div class="sidebar-nav">
         <div class="sidebar-nav-head">
@@ -105,7 +105,7 @@ export function createSidebar(
       </div>
       <div class="sidebar-footer">
         ${
-          state.platform === "hust"
+          state.platform === "hust" && backendMode !== "web"
             ? `<button class="sidebar-link" data-helper>${icon("copy", 15)} 浏览器助手脚本</button>`
             : ""
         }

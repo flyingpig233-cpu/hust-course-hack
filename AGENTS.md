@@ -15,8 +15,10 @@ Rust desktop app with a Tauri 2 GUI. Purpose: convenience operations for a targe
 The crawling core and the Tauri 2 desktop shell are implemented.
 
 - Root `Cargo.toml` is a workspace: the Rust edition 2024 library
-  (`hust_course_hack`), CLI binary (`hust-course-hack`), and the `src-tauri`
-  GUI crate (`hust-course-hack-gui`).
+  (`hust_course_hack`), CLI binary (`hust-course-hack`), the `src-tauri`
+  GUI crate (`hust-course-hack-gui`), and the `server` crate
+  (`hust-course-web`, an axum wrapper around the core library for the
+  self-hosted web version).
 - HTTP stack: `reqwest` (rustls, cookie jar) + `tokio`; HTML parsing: `scraper`.
 - `src/client.rs` — authenticated requests and the course crawl pipeline.
   `fetch_course_with_progress` reports per-knowledge-point progress and can be
@@ -145,6 +147,16 @@ The crawling core and the Tauri 2 desktop shell are implemented.
   `tests/zhs_mock.rs` runs the Zhihuishu video/meet flows against a local mock
   HTTP server that decrypts `secretStr`, and `src/ulearning/**` carries its own
   DES/payload/parser/plan unit tests. Default branch is `main`.
+- `.github/workflows/` — `ci.yml` (push/PR) runs `cargo fmt --check`, clippy and
+  tests for `hust-course-hack` + `hust-course-web`, builds `ui/dist`, the web
+  bundle (`VITE_BACKEND=web`) and `website/`, and lints the GUI crate on
+  `windows-latest` (`cargo test --workspace` cannot run there on Linux:
+  `src-tauri` needs WebKitGTK). `release.yml` builds the NSIS + MSI installers
+  and the CLI on a `v*` tag, stages them in `release-assets/`, and publishes a
+  GitHub Release with `gh release` (assets: `*-setup.exe`, `.msi`, CLI zip,
+  `SHA256SUMS.txt`); it fails before building when the version in `Cargo.toml`,
+  `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` or `package.json`
+  disagrees with the tag. `website-pages.yml` deploys the static site.
 
 ## Commands
 
@@ -174,6 +186,22 @@ Run from the repo root in PowerShell 5.1:
 - Do not commit platform credentials, cookies, tokens, or captured authenticated responses.
 - The HTTP stack is `reqwest` + `tokio`; keep new network code behind
   `SmartCourseClient` so tests can use fixtures instead of a live session.
+- `server/` (the web version) follows the same rules: it wraps only
+  `SmartCourseClient`, exposes the same camelCase DTOs as the Tauri commands,
+  keeps cookie values server-side (the browser only ever sees `cookieSource`
+  and `cookieCount`), runs one job at a time, and never persists sessions to
+  disk. The access passcode lives in `COURSEHACK_TOKEN` / `--token`, never in
+  the repo.
+- Web login goes through the official unified-auth relay
+  (`server/src/login.rs`): `/login/` proxies `smartcourse.hust.edu.cn/passport`
+  and the CAS pages on `pass.hust.edu.cn` with every URL rewritten back
+  through `/login/p?url=<encoded>`. The relay only fetches `*.hust.edu.cn`
+  over http/https, keeps one cookie jar per login attempt (replaced whenever
+  `/login/` is opened again), and captures the session exactly like the
+  desktop login window: when the flow lands on a smartcourse page that is not
+  `/passport` or `/sso/`, verify `list_courses_with_url` stayed on
+  `getStudyCourse` before adopting. Do not add cookie-paste or other
+  credential-entry endpoints to the web version.
 - Signed video URLs from `/ananas/status` expire; fetch them fresh instead of
   persisting them as permanent links.
 - Quiz submission tokens (`workAnswerId`, `workRelationId`, `enc_work`) are
@@ -237,6 +265,11 @@ Run from the repo root in PowerShell 5.1:
 - New Tauri plugins need both a Rust `.plugin(...)` registration and the
   matching permission in `src-tauri/capabilities/default.json`.
 - Tauri 2 is the agreed major version. Confirm before bumping majors.
+- Releases are cut from GitHub Actions, not from a local machine: bump the
+  version in `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`
+  and `package.json` together, then push a `vX.Y.Z` tag. Keep those four in
+  sync; `release.yml` refuses to build when they disagree with the tag. Never
+  commit build output (`ui/dist`, `release-assets/`) or installer binaries.
 - Zhihuishu protocol constants (module ids, fixed IV, XOR keys, API bases and
   paths) live in `src/zhihuishu/mod.rs`. Fetch the meet module key at runtime
   through the `c/has` handshake instead of hardcoding it, and keep the protocol
