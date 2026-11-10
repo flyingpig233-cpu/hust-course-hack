@@ -1,0 +1,24 @@
+[package]
+name = "hust-course-web"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+hust-course-hack = { path = ".." }
+percent-encoding = "2"
+rand = "0.9"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+  "brotli",
+  "charset",
+  "cookies",
+  "gzip",
+  "http2",
+  "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "sync", "fs"] }
+url = "2"

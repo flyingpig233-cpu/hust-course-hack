@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri"]
+members = ["src-tauri", "server"]
 resolver = "3"
 
 # ring's bundled C code fails to compile with the VS 2022 17.14 MSVC toolset when
