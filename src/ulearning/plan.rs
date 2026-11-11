@@ -285,7 +285,11 @@ async fn plan_section(
     } else {
         UlAction::Complete
     };
-    plan.study_start_time = Some(client.initialize_study(section.id).await);
+    // `studyStartTime` is fetched lazily right before submitting: initializing
+    // every planned section here would give them all the same timestamp (and
+    // the server sees many sections "started at once", which the anti-cheat
+    // flags after a couple of successful submissions).
+    plan.study_start_time = None;
     plan.note = plan.action.label().to_string();
     Ok(plan)
 }
@@ -345,10 +349,9 @@ pub async fn run_watch(
                 UlWatchState::DryRun,
                 section,
                 &format!(
-                    "预演：将提交 itemid={}（{}），studyStartTime={}",
+                    "预演：将提交 itemid={}（{}），studyStartTime=提交时获取",
                     section.section_id,
                     section.summary(),
-                    section.study_start_time.unwrap_or(0)
                 ),
             ));
             if !progress(UlProgress::new(
@@ -383,15 +386,12 @@ pub async fn run_watch(
             ));
             break;
         }
+        // Fetch a fresh server-issued `studyStartTime` for this section right
+        // before submitting, matching the player's initialize-then-study flow.
+        let study_start_time = client.initialize_study(section.section_id).await;
         let delay = random_delay(opts, &mut rng);
         tokio::time::sleep(delay).await;
 
-        let study_start_time = section.study_start_time.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0)
-        });
         let payload = match build_record_payload(section, study_start_time) {
             Ok(payload) => payload,
             Err(error) => {
