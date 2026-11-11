@@ -837,7 +837,25 @@
 
   // ---- boot --------------------------------------------------------------
 
+  function isLoginHost() {
+    var host = String(location.hostname || '').toLowerCase();
+    var href = String(location.href || '').toLowerCase();
+    return (
+      host.indexOf('login.') === 0 ||
+      host.indexOf('passport.') === 0 ||
+      host.indexOf('pass.') === 0 ||
+      href.indexOf('/passport') >= 0 ||
+      href.indexOf('login') >= 0
+    );
+  }
+
   function boot() {
+    // Leave the platform login page completely alone: the Rust side shows the
+    // one-time login banner and the user needs to click the QR/password widgets.
+    if (isLoginHost()) {
+      if (overlay && overlay.isConnected) overlay.remove();
+      return;
+    }
     ensureOverlay();
     if (!/dohomework/i.test(String(location.hash || ''))) {
       // `about:blank` while the Rust side injects cookies and navigates: keep

@@ -155,9 +155,28 @@ const DIAGNOSTIC_SCRIPT: &str = r##"
     };
   };
 
+  function isLoginPage() {
+    var host = String(location.hostname || '').toLowerCase();
+    var path = String(location.pathname || '').toLowerCase();
+    return (
+      host === 'login.zhihuishu.com' ||
+      host.indexOf('login.') === 0 ||
+      host.indexOf('passport.') === 0 ||
+      host.indexOf('pass.') === 0 ||
+      path.indexOf('/passport') === 0 ||
+      path.indexOf('login') === 0
+    );
+  }
+
   function showLoading() {
     var host = root();
     if (!host || document.getElementById('__zhs_error_panel') || document.getElementById('__zhs_loading_panel')) return;
+    // Never cover the platform's own login page: the user must be able to see
+    // and click its QR/password widgets while the window waits for login.
+    if (isLoginPage()) {
+      window.__ZHS_HIDE_LOADING__();
+      return;
+    }
     var panel = document.createElement('div');
     panel.id = '__zhs_loading_panel';
     panel.setAttribute('style', 'position:fixed;inset:0;z-index:2147483644;background:#f8fafc;color:#0f172a;font:15px/1.8 "Microsoft YaHei",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;box-sizing:border-box');
