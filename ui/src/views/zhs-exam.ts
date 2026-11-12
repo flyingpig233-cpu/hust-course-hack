@@ -119,8 +119,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">知到 · 作业与考试</div>
-        <h2>作业 / 单元测试 / 期末</h2>
+        <h2>作业与考试</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
         <p class="modal-sub" id="zhs-exam-summary"></p>
       </div>
@@ -139,7 +138,7 @@ export function openZhsExamModal(options: ZhsExamModalOptions): void {
         </div>
       </div>
       <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} <span>使用顺序：<strong>网页作答</strong>（窗口内手动完成滑块验证）→ 计划完整时直接自动提交；不完整时点红色 <strong>容错试做</strong>（未解析题任选首项，会得低分）→ 之后在「已提交」点 <strong>网页重做</strong> 重新作答并提交。严格模式（计划完整）才会自动提交；期末仅列出、不自动提交。首次使用请先点「登录考试系统」在窗口内登录一次。</span>
+        ${icon("alert", 14)} <span>网页作答时请完成验证；答案完整后将自动提交。容错试做可能影响成绩。期末考试仅供查看。首次使用请先登录考试系统。</span>
       </div>
       <div id="zhs-exam-body" class="exam-body"></div>
     </div>

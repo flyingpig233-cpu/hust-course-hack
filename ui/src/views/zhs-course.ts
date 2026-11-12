@@ -83,16 +83,13 @@ export function renderZhsHome(
               ? `<span class="course-kind-badge">${esc(
                   zhsCourseKindLabel(course),
                 )}</span>`
-              : `<span class="course-code">recruit ${esc(String(course.recruitId))}</span>`
+              : `<span class="course-code">共享课</span>`
           }
         </div>
         <h3>${esc(zhsCourseLabel(course))}</h3>
         <p class="course-card-meta">${esc(course.teacher || "知到课程")}${
           percent === null ? "" : ` · 进度 ${percent}%`
         }</p>
-        <span class="course-card-cta">${
-          readonly ? "查看信息" : "查看视频树"
-        } ${icon("chevron", 14)}</span>
       </button>
     `;
   };
@@ -472,123 +469,24 @@ export interface ZhsWatchModalOptions {
   onFinished(summary: ZhsWatchSummary): void;
 }
 
-type ZhsWatchScope = "all" | "limit";
-
-/**
- * Video completion dialog.
- *
- * Laid out as three numbered decisions — 范围 / 选项 / 模式 — because the
- * dry-run and the real run are the same plan but very different consequences.
- * Dry-run stays the default; the danger section and the confirmation checkbox
- * only appear (and only gate) the real path, and the primary button always says
- * which path it will take.
- */
+/** Video completion dialog: confirmation before submitting. */
 export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   const content = document.createElement("div");
-  content.className = "watch-modal zhs-watch-modal";
+  content.className = "watch-modal";
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">知到 · 视频课</div>
-        <h2>秒刷本课视频</h2>
+        <h2>完成视频</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <div class="watch-summary-strip">
-        <div class="watch-summary-cell">
-          <span>待处理</span>
-          <strong id="zhs-sum-pending">0</strong>
-        </div>
-        <div class="watch-summary-cell">
-          <span>已完成（平台记录）</span>
-          <strong id="zhs-sum-done">${options.videoCompleted}</strong>
-        </div>
-        <div class="watch-summary-cell">
-          <span>总计</span>
-          <strong id="zhs-sum-total">${options.videoTotal}</strong>
-        </div>
-        <p class="watch-summary-note" id="zhs-sum-note"></p>
-      </div>
+      <p>确认完成视频？此操作将向平台提交记录，可能影响账号或成绩。</p>
 
-      <section class="watch-section">
-        <header class="watch-section-head">
-          <h3>1. 范围</h3>
-          <p>这次要处理哪些小节视频</p>
-        </header>
-        <div class="watch-choice-row" id="zhs-scope">
-          <button type="button" class="watch-choice is-active" data-scope="all" aria-pressed="true">
-            <strong>全部待处理</strong>
-            <small>平台尚未记录完成的小节</small>
-          </button>
-          <button type="button" class="watch-choice" data-scope="limit" aria-pressed="false">
-            <strong>只处理前几个</strong>
-            <small>先跑一个小批量验证流程</small>
-          </button>
-        </div>
-        <label class="field" id="zhs-max-field" hidden>
-          <span>最多处理视频数</span>
-          <input id="zhs-watch-max" type="number" min="1" step="1" placeholder="例如 5" />
-          <em>按视频树顺序处理前 N 个</em>
-        </label>
-      </section>
-
-      <section class="watch-section">
-        <header class="watch-section-head">
-          <h3>2. 选项</h3>
-          <p>默认跳过平台已记录完成的小节，避免重复上报</p>
-        </header>
-        <label class="check switch-row">
-          <input id="zhs-watch-include" type="checkbox" />
-          <span>重新上报已完成的视频<em>开启后待处理范围会包含平台已完成的小节</em></span>
-        </label>
-        <label class="check switch-row">
-          <input id="zhs-watch-verify" type="checkbox" checked />
-          <span>每节上报后复核 watchState<em>更稳妥，但每节会多一次查询</em></span>
-        </label>
-      </section>
-
-      <section class="watch-section">
-        <header class="watch-section-head">
-          <h3>3. 模式</h3>
-          <p>试运行只在本地生成上报字段，不会发送任何请求</p>
-        </header>
-        <div class="watch-mode-row" id="zhs-mode">
-          <label class="watch-mode is-active" data-mode="dry">
-            <input type="radio" name="zhs-watch-mode" value="dry" checked />
-            <span>
-              <strong>试运行（默认）</strong>
-              <small>生成 sdsew / ewssw 字段，不发送</small>
-            </span>
-          </label>
-          <label class="watch-mode" data-mode="real">
-            <input type="radio" name="zhs-watch-mode" value="real" />
-            <span>
-              <strong>真实上报</strong>
-              <small>按平台协议逐节提交视频进度</small>
-            </span>
-          </label>
-        </div>
-      </section>
-
-      <section class="watch-danger" id="zhs-watch-danger" hidden>
-        <div class="watch-danger-head">${icon("alert", 15)} 真实执行风险确认</div>
-        <p>秒刷视频属于最高风险形态，可能触发平台风控或影响成绩判定。勾选并确认后才会真正发送上报请求。</p>
-        <label class="check switch-row risk-confirm">
-          <input id="zhs-watch-confirm" type="checkbox" />
-          <span>我确认已了解风险，按平台协议真实上报视频进度</span>
-        </label>
-      </section>
-
-      <details class="watch-tech">
-        <summary>技术细节（协议步骤）</summary>
-        <p>每个待处理小节：<code>prelearningNote</code> 获取 fresh noteId → <code>saveDatabaseIntervalTimeV2</code> 提交 <code>sdsew</code>/<code>ewssw</code>/<code>zwsds</code> →（可选）<code>queryStuyInfo</code> 复核 <code>watchState=1</code>。试运行只完成本地字段构造，不发送请求。</p>
-      </details>
-
-      <div class="watch-progress" id="zhs-watch-progress">
+      <div class="watch-progress" id="zhs-watch-progress" hidden>
         <div class="watch-status-row">
-          <span id="zhs-watch-status">准备就绪</span>
+          <span id="zhs-watch-status">就绪</span>
           <span id="zhs-watch-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="zhs-watch-fill" style="width:0%"></div></div>
@@ -599,7 +497,7 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
       <button class="btn btn-ghost" id="zhs-watch-copy" hidden>${icon("copy", 14)} 复制结果</button>
       <button class="btn btn-ghost" id="zhs-watch-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="zhs-watch-start">${icon("play", 15)} 开始试运行</button>
+      <button class="btn btn-primary" id="zhs-watch-start">${icon("play", 15)} 确认执行</button>
     </div>
   `;
 
@@ -607,139 +505,16 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   const countText = qs<HTMLElement>("#zhs-watch-count", content);
   const fill = qs<HTMLElement>("#zhs-watch-fill", content);
   const log = qs<HTMLElement>("#zhs-watch-log", content);
-  const pendingText = qs<HTMLElement>("#zhs-sum-pending", content);
-  const doneText = qs<HTMLElement>("#zhs-sum-done", content);
-  const totalText = qs<HTMLElement>("#zhs-sum-total", content);
-  const summaryNote = qs<HTMLElement>("#zhs-sum-note", content);
   const startButton = qs<HTMLButtonElement>("#zhs-watch-start", content);
   const stopButton = qs<HTMLButtonElement>("#zhs-watch-stop", content);
   const copyButton = qs<HTMLButtonElement>("#zhs-watch-copy", content);
-  const maxInput = qs<HTMLInputElement>("#zhs-watch-max", content);
-  const maxField = qs<HTMLElement>("#zhs-max-field", content);
-  const includeInput = qs<HTMLInputElement>("#zhs-watch-include", content);
-  const verifyInput = qs<HTMLInputElement>("#zhs-watch-verify", content);
-  const confirmInput = qs<HTMLInputElement>("#zhs-watch-confirm", content);
-  const danger = qs<HTMLElement>("#zhs-watch-danger", content);
-  const scopeButtons = Array.from(
-    content.querySelectorAll<HTMLButtonElement>("[data-scope]"),
-  );
-  const modeInputs = Array.from(
-    content.querySelectorAll<HTMLInputElement>("input[name='zhs-watch-mode']"),
-  );
-  const modeCards = Array.from(
-    content.querySelectorAll<HTMLElement>("[data-mode]"),
-  );
 
   let running = false;
   let closed = false;
   let unlisten: (() => void) | null = null;
   let targetTotal = 0;
-  /** Videos the plan skips because the platform already recorded them. */
-  let planSkipped = 0;
-  let scope: ZhsWatchScope = "all";
   const rows = new Map<number, HTMLElement>();
   let resultLines: string[] = [];
-
-  const dryRun = (): boolean =>
-    modeInputs.find((input) => input.checked)?.value !== "real";
-
-  const maxVideos = (): number | null => {
-    const raw = maxInput.value.trim();
-    if (!raw) return null;
-    const value = Math.floor(Number(raw));
-    return Number.isFinite(value) && value >= 1 ? value : null;
-  };
-
-  /** Videos eligible by options, before the scope limit. */
-  const eligibleVideos = (): number =>
-    includeInput.checked
-      ? options.videoTotal
-      : Math.max(0, options.videoTotal - options.videoCompleted);
-
-  /** Live count of the videos this plan would process. */
-  const plannedVideos = (): number => {
-    const eligible = eligibleVideos();
-    if (scope === "all") return eligible;
-    const max = maxVideos();
-    return max === null ? 0 : Math.min(eligible, max);
-  };
-
-  const syncUi = () => {
-    const dry = dryRun();
-    const pending = plannedVideos();
-    pendingText.textContent = String(pending);
-    doneText.textContent = String(options.videoCompleted);
-    totalText.textContent = String(options.videoTotal);
-
-    // The danger path only exists for a real run; the checkbox only gates it.
-    danger.hidden = dry;
-    danger.setAttribute("aria-hidden", dry ? "true" : "false");
-    if (dry) confirmInput.checked = false;
-    confirmInput.disabled = dry || running;
-
-    for (const button of scopeButtons) {
-      const active = button.dataset.scope === scope;
-      button.classList.toggle("is-active", active);
-      button.setAttribute("aria-pressed", active ? "true" : "false");
-      button.disabled = running;
-    }
-    for (const card of modeCards) {
-      const active = (card.dataset.mode === "real") !== dry;
-      card.classList.toggle("is-active", active);
-    }
-    maxField.hidden = scope !== "limit";
-    maxInput.disabled = running || scope !== "limit";
-    includeInput.disabled = running;
-    verifyInput.disabled = running;
-    for (const input of modeInputs) input.disabled = running;
-
-    const notes: string[] = [];
-    if (includeInput.checked) {
-      notes.push("已开启重新上报：待处理范围包含平台已完成的小节。");
-    }
-    if (scope === "limit") {
-      notes.push(
-        maxVideos() === null
-          ? "请输入要处理的数量（≥ 1）。"
-          : `只处理按顺序的前 ${pending} 个。`,
-      );
-    }
-    if (!dry && !confirmInput.checked) {
-      notes.push("真实执行前需要勾选下方风险确认。");
-    }
-    if (pending === 0) notes.push("没有待处理的视频。");
-    summaryNote.textContent = notes.join(" ");
-
-    if (running) return;
-    startButton.innerHTML = dry
-      ? `${icon("play", 15)} 开始试运行`
-      : `${icon("alert", 15)} 确认真实执行`;
-    const missingCount = scope === "limit" && maxVideos() === null;
-    startButton.disabled =
-      pending === 0 || missingCount || (!dry && !confirmInput.checked);
-    startButton.title = startButton.disabled
-      ? missingCount
-        ? "请先填写要处理的数量"
-        : pending === 0
-          ? "没有待处理的视频"
-          : "请勾选风险确认，或改回试运行"
-      : "";
-  };
-
-  for (const button of scopeButtons) {
-    button.addEventListener("click", () => {
-      const next = button.dataset.scope;
-      scope = next === "limit" ? "limit" : "all";
-      syncUi();
-      if (scope === "limit") maxInput.focus();
-    });
-  }
-  maxInput.addEventListener("input", syncUi);
-  includeInput.addEventListener("change", syncUi);
-  verifyInput.addEventListener("change", syncUi);
-  for (const input of modeInputs) input.addEventListener("change", syncUi);
-  confirmInput.addEventListener("change", syncUi);
-  syncUi();
 
   const close = openModal(content, {
     wide: true,
@@ -761,12 +536,9 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   };
 
   const setRunningUi = (busy: boolean) => {
-    running = busy;
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
     stopButton.hidden = !busy;
-    stopButton.disabled = false;
-    stopButton.innerHTML = `${icon("stop", 14)} 停止`;
-    syncUi();
   };
 
   const addRow = (index: number, label: string): HTMLElement => {
@@ -814,19 +586,15 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
     if (progress.kind === "zhsPlan") {
       if (progress.job !== "zhs-watch") return;
       targetTotal = progress.total;
-      planSkipped = progress.skipped;
       rows.clear();
       log.innerHTML = "";
       setProgress(0, progress.total);
-      pendingText.textContent = String(progress.total);
-      const skipped =
-        progress.skipped > 0 ? `，跳过（已完成）${progress.skipped} 个` : "";
       statusText.textContent =
         progress.total === 0
-          ? "没有待处理的视频"
+          ? "没有需要处理的视频"
           : progress.dryRun
-            ? `试运行：已计划 ${progress.total} 个视频${skipped}，不会发送请求`
-            : `真实执行：将上报 ${progress.total} 个视频${skipped}`;
+            ? `试运行 · ${progress.total} 个视频`
+            : `准备上报 ${progress.total} 个视频`;
       return;
     }
     if (progress.kind === "zhsStage") {
@@ -846,50 +614,29 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   const copyResults = async () => {
     if (resultLines.length === 0) return;
     const copied = await copyText(resultLines.join("\n"));
-    options.onToast(copied ? "结果已复制" : "复制失败，请手动选择日志", copied ? "success" : "error");
+    options.onToast(copied ? "结果已复制" : "复制失败", copied ? "success" : "error");
   };
   copyButton.addEventListener("click", () => void copyResults());
 
   const finish = (summary: ZhsWatchSummary) => {
+    running = false;
     setRunningUi(false);
     startButton.hidden = true;
     stopButton.hidden = true;
-    // A finished run is read-only; close and reopen the dialog to plan again.
-    for (const button of scopeButtons) button.disabled = true;
-    for (const input of [
-      maxInput,
-      includeInput,
-      verifyInput,
-      confirmInput,
-      ...modeInputs,
-    ]) {
-      input.disabled = true;
-    }
 
-    const skipped =
-      summary.skipped > 0 ? `，跳过（已完成）${summary.skipped} 个` : "";
-    const skippedPlan =
-      planSkipped > 0 ? `，跳过（已完成）${planSkipped} 个` : "";
     if (summary.cancelled) {
       statusText.textContent = "已取消";
       options.onToast("已取消视频秒刷", "info");
-      summaryNote.textContent = "本次执行已取消，完成度以刷新后的平台记录为准。";
     } else if (summary.dryRun) {
-      // `summary.skipped` counts the dry-run rows themselves, so report the
-      // plan's skip count (videos the platform already recorded) instead.
-      statusText.textContent = `试运行完成：已计划 ${summary.total} 个视频${skippedPlan}，未发送任何请求`;
-      summaryNote.textContent =
-        "试运行只生成上报字段。切换为真实上报并勾选风险确认后才会发送。";
-      options.onToast("试运行完成，没有发送视频上报", "success");
+      statusText.textContent = `试运行完成 · ${summary.total} 个视频`;
+      options.onToast("试运行完成", "success");
     } else if (summary.failed === 0 && summary.ok > 0) {
-      statusText.textContent = `完成：${summary.ok} 个已完成（平台记录）${skipped}`;
-      summaryNote.textContent = "正在按平台记录刷新完成度…";
-      options.onToast(`平台已记录 ${summary.ok} 个视频完成`, "success");
+      statusText.textContent = `完成：${summary.ok} 个已确认，${summary.skipped} 个跳过`;
+      options.onToast(`已完成 ${summary.ok} 个视频`, "success");
     } else {
-      statusText.textContent = `完成：${summary.ok} 个已完成（平台记录） · ${summary.failed} 个失败${skipped}`;
-      summaryNote.textContent = "正在按平台记录刷新完成度…";
+      statusText.textContent = `完成：${summary.ok} 个成功 · ${summary.failed} 个失败`;
       options.onToast(
-        `${summary.ok} 个成功，${summary.failed} 个失败，详见日志`,
+        `${summary.ok} 个成功，${summary.failed} 个失败`,
         summary.failed > 0 ? "error" : "info",
       );
     }
@@ -897,7 +644,8 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
     // Emit rows from the returned outcomes when the live events did not cover
     // them (for example a job that stopped before the first target event).
     summary.outcomes.forEach((outcome, offset) => {
-      const status = outcome.state === "circuit_broken" ? "failed" : outcome.state;
+      const status =
+        outcome.state === "circuit_broken" ? "failed" : outcome.state;
       if (!rows.has(offset + 1)) {
         applyTarget(offset + 1, outcome.label, status, outcome.message);
       }
@@ -920,24 +668,13 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
 
   startButton.addEventListener("click", async () => {
     if (running) return;
-    const dry = dryRun();
-    if (!dry && !confirmInput.checked) {
-      options.onToast("真实执行前必须勾选风险确认", "error");
-      return;
-    }
-    const max = maxVideos();
-    if (scope === "limit" && max === null) {
-      options.onToast("请输入要处理的数量（≥ 1）", "error");
-      return;
-    }
     running = true;
     rows.clear();
     log.innerHTML = "";
     resultLines = [];
-    planSkipped = 0;
     copyButton.hidden = true;
     setRunningUi(true);
-    statusText.textContent = "正在抓取视频树并复核平台完成状态…";
+    statusText.textContent = "正在加载视频…";
     setProgress(0, 0);
 
     unlisten = await onJobProgress(handleProgress);
@@ -949,21 +686,22 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
     try {
       const summary = await api.zhsWatchVideos({
         course: options.courseId,
-        dryRun: dry,
-        includeCompleted: includeInput.checked,
-        maxVideos: scope === "limit" ? max : null,
-        verify: verifyInput.checked,
+        dryRun: false,
+        includeCompleted: false,
+        maxVideos: null,
+        verify: true,
       });
       if (!closed) finish(summary);
     } catch (error) {
       if (closed) return;
+      running = false;
       setRunningUi(false);
-      const message = errorText(error);
+        const message = errorText(error);
       if (message.includes("已取消")) {
         statusText.textContent = "已取消";
         options.onToast("已取消视频秒刷", "info");
       } else {
-        statusText.textContent = "秒刷失败";
+        statusText.textContent = "执行失败";
         log.innerHTML = `<div class="watch-error">${esc(message)}</div>`;
         options.onToast(message, "error");
       }
@@ -977,7 +715,7 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.zhsCancelJob();
   });
 }
