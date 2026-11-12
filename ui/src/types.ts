@@ -336,12 +336,29 @@ export type JobProgress =
         | "circuit_broken";
       message: string | null;
       completionStatus: number | null;
+    }
+  // ---- Zhihuishu homework / exam job -----------------------------------
+  | {
+      kind: "zhsExamProgress";
+      /** `saving`, `submitting`, or `verifying`. */
+      stage: string;
+      done: number;
+      total: number;
+      label: string;
+      message: string;
     };
 
 // ---- Zhihuishu (知到) DTOs -------------------------------------------------
 // Mirrors `src-tauri/src/zhihuishu.rs`; camelCase over the IPC boundary.
 
+/** Which Zhihuishu course list produced the course. Only `shared` supports
+ * video/meet/exam; the others are list-only in the GUI. */
+export type ZhsCourseKind = "shared" | "ai" | "school" | "other";
+
 export interface ZhsCourse {
+  kind: ZhsCourseKind;
+  /** Opaque id for POLYMAS/agent courses whose numeric ids are absent. */
+  externalId: string | null;
   recruitId: number;
   courseId: number;
   classId: number | null;
@@ -387,6 +404,16 @@ export interface ZhsChapter {
 export interface ZhsCourseDetail {
   course: ZhsCourse;
   chapters: ZhsChapter[];
+  /** Total playable videos (small lessons) in the tree. */
+  totalVideos: number;
+  /**
+   * Videos the platform records as finished (`watchState == 1`).
+   *
+   * The backend recomputes this from `queryStuyInfo`; the `isStudied` flag on
+   * each video comes from `videolist`, which the platform does not refresh after
+   * a report, so prefer these counts over deriving them from the tree.
+   */
+  completedVideos: number;
 }
 
 export interface ZhsExceptionStatus {
@@ -411,11 +438,22 @@ export interface ZhsMeet {
   status: number | null;
 }
 
+/** Sign-in (签到) attendance state of one meet course. */
+export interface ZhsMeetAttendance {
+  signed: boolean;
+  signStatus: string | null;
+  /** Chinese label from the backend (`签到完成` / `未签到` / 未知). */
+  label: string;
+}
+
 export interface ZhsMeetProgress {
   totalMinutes: number;
   watchedMinutes: number[];
   watchedCount: number;
   percent: number;
+  /** A signed meeting already satisfies the replay requirement. */
+  completed: boolean;
+  attendance: ZhsMeetAttendance;
 }
 
 export type ZhsWatchState =
@@ -588,4 +626,188 @@ export interface UlWatchSummary {
   dryRun: boolean;
   outcomes: UlOutcome[];
   errors: string[];
+}
+
+// ---- Zhihuishu homework / exam DTOs ---------------------------------------
+// Mirrors `src-tauri/src/zhs_exam.rs`; camelCase over the IPC boundary. Correct
+// answers are represented by option **content**, never by ids (the platform
+// randomizes option order between attempts).
+
+export interface ZhsHomework {
+  stuExamId: string;
+  examId: string;
+  name: string;
+  state: number | null;
+  achieve: number | null;
+  achieveCount: number | null;
+  backNum: number | null;
+  score: number | null;
+  problemNum: number | null;
+  totalScore: number | null;
+  meetCourseType: number | null;
+  chapterId: string | null;
+  isCheckAnswer: number | null;
+  examUserName: string | null;
+}
+
+export interface ZhsFinalExam {
+  stuExamId: string;
+  examId: string;
+  name: string;
+  problemNum: number | null;
+  totalScore: number | null;
+  limitTime: number | null;
+  remainCount: number | null;
+  finalExam: boolean;
+}
+
+export interface ZhsExamList {
+  submitted: boolean;
+  homework: ZhsHomework[];
+  finals: ZhsFinalExam[];
+  finalsError: string | null;
+}
+
+export interface ZhsExamOption {
+  id: string;
+  content: string;
+}
+
+export interface ZhsExamQuestion {
+  id: string;
+  stem: string;
+  kindId: number;
+  kindName: string;
+  score: number;
+  multiple: boolean;
+  options: ZhsExamOption[];
+}
+
+export interface ZhsExamPaper {
+  examName: string;
+  courseName: string;
+  totalScore: number;
+  problemNum: number;
+  questionCount: number;
+  questions: ZhsExamQuestion[];
+}
+
+export type ZhsAnswerSource = "submitted" | "ai_analysis" | "bank";
+
+export interface ZhsPlanQuestion {
+  question: ZhsExamQuestion;
+  optionIds: string[];
+  optionContents: string[];
+  source: ZhsAnswerSource;
+}
+
+export interface ZhsUnresolved {
+  questionId: string;
+  stem: string;
+}
+
+export interface ZhsExamPlan {
+  examId: string;
+  examName: string;
+  totalScore: number;
+  questionCount: number;
+  resolved: number;
+  unresolved: ZhsUnresolved[];
+  complete: boolean;
+  questions: ZhsPlanQuestion[];
+}
+
+export interface ZhsQuestionResult {
+  questionId: string;
+  stem: string;
+  score: number;
+  fullScore: number;
+  correct: boolean;
+  selectedContents: string[];
+}
+
+export interface ZhsAnswerResult {
+  dryRun: boolean;
+  plan: ZhsExamPlan;
+  submitted: boolean;
+  score: number | null;
+  totalScore: number;
+  correctCount: number;
+  questionCount: number;
+  perQuestion: ZhsQuestionResult[];
+  message: string;
+  recordedToBank: number;
+}
+
+export interface ZhsBankInfo {
+  total: number;
+  submittedEntries: number;
+  aiEntries: number;
+  updatedAtUnix: number | null;
+  path: string;
+}
+
+export interface ZhsRecordAiResult {
+  recorded: number;
+  skipped: number;
+  /** Question ids whose AI panel text was missing/unmappable. */
+  skippedQuestionIds: string[];
+  bankTotal: number;
+  path: string;
+}
+
+/** One question that did not earn full marks after a submission. */
+export interface ZhsWrongQuestion {
+  questionId: string;
+  stem: string;
+  score: number;
+  fullScore: number;
+}
+
+/** Payload of the `zhs-exam-result` event (webview attempt finished). */
+export interface ZhsExamResultEvent {
+  submitted: boolean;
+  score: number | null;
+  totalScore: number;
+  correctCount: number;
+  questionCount: number;
+  recordedToBank: number;
+  /** Non-full-mark questions; the app never auto-retries (attempts are limited). */
+  wrongQuestions: ZhsWrongQuestion[];
+  message: string;
+}
+
+/** Homework / final-exam stats for one shared course. */
+export interface ZhsExamSummary {
+  homeworkTotal: number;
+  homeworkSubmitted: number;
+  averageScore: number | null;
+  finalExamCount: number;
+  finalExamSubmitted: number;
+}
+
+/** Result of a 申请重做 request (the flow runs in the exam-list webview). */
+export interface ZhsRedoResult {
+  started: boolean;
+  message: string;
+}
+
+/** Payload of the `zhs-exam-redo` event (injected list script finished). */
+export interface ZhsRedoEvent {
+  examId: string;
+  ok: boolean;
+  reason: string;
+}
+
+export interface ZhsAiEntry {
+  questionId?: string | null;
+  index?: number | null;
+  text: string;
+}
+
+/** Payload of the `zhs-exam-ai` event emitted after a harvest is persisted. */
+export interface ZhsExamAiEvent {
+  recorded: number;
+  skipped: number;
+  bankTotal: number;
 }

@@ -44,6 +44,15 @@ function meetStatus(meet: ZhsMeet): string {
   return "可回放";
 }
 
+/** A signed (签到完成) meeting already satisfies the replay requirement. */
+function isSigned(progress: ZhsMeetProgress | undefined): boolean {
+  return progress?.attendance.signed === true;
+}
+
+function isCompleted(progress: ZhsMeetProgress | undefined): boolean {
+  return progress?.completed === true;
+}
+
 export interface ZhsMeetHandlers {
   busy: boolean;
   onBack(): void;
@@ -64,6 +73,10 @@ export function renderZhsMeet(
   main.onchange = null;
   main.onclick = null;
   const withReplay = meets.filter(replayable).length;
+  const watchableCount = meets.filter(
+    (meet) =>
+      replayable(meet) && !isSigned(progress.get(meet.meetCourseId)),
+  ).length;
 
   main.innerHTML = `
     <div class="course-view">
@@ -77,7 +90,7 @@ export function renderZhsMeet(
           <button class="icon-button" data-action="refresh" title="刷新见面课列表" aria-label="刷新见面课列表">${icon("refresh", 16)}</button>
           <button class="icon-button" data-action="check" title="检查见面课风控状态" aria-label="检查见面课风控状态">${icon("shield", 16)}</button>
           <button class="btn btn-primary" data-action="watch-all" ${
-            withReplay === 0 ? "disabled" : ""
+            watchableCount === 0 ? "disabled" : ""
           }>${icon("play", 15)} 完成回放</button>
         </div>
       </header>
@@ -139,13 +152,27 @@ function renderMeetCard(
   progress: ZhsMeetProgress | undefined,
 ): string {
   const canReplay = replayable(meet);
+  const signed = isSigned(progress);
+  const completed = isCompleted(progress);
   const percent = progress ? progress.percent : 0;
+  const statusBadge = signed
+    ? `<span class="badge badge-good" title="${esc(
+        progress?.attendance.label ?? "签到完成",
+      )}">${icon("check", 12)} 已完成（签到完成）</span>`
+    : completed
+      ? `<span class="badge badge-good">${icon("check", 12)} 已完成（回放）</span>`
+      : `<span class="badge ${canReplay ? "badge-good" : "badge-muted"}">${meetStatus(meet)}</span>`;
+  const progressText = progress
+    ? signed
+      ? `${progress.watchedCount} / ${progress.totalMinutes} 分钟 · 签到完成`
+      : `${progress.watchedCount} / ${progress.totalMinutes} 分钟 · ${percent}%`
+    : "未查询";
   return `
     <article class="meet-card">
       <div class="meet-main">
         <div class="meet-head">
           <span class="kind-pill kind-live">${icon("live", 13)} 见面课</span>
-          <span class="badge ${canReplay ? "badge-good" : "badge-muted"}">${meetStatus(meet)}</span>
+          ${statusBadge}
         </div>
         <h3>${esc(meet.name || `见面课 ${meet.liveId}`)}</h3>
         <p class="meet-meta">
@@ -155,11 +182,7 @@ function renderMeetCard(
         <div class="meet-progress">
           <div class="meet-progress-row">
             <span>回放进度</span>
-            <span class="meet-progress-value">${
-              progress
-                ? `${progress.watchedCount} / ${progress.totalMinutes} 分钟 · ${percent}%`
-                : "未查询"
-            }</span>
+            <span class="meet-progress-value">${progressText}</span>
           </div>
           <div class="progress"><div class="progress-fill fill-good" style="width:${percent}%"></div></div>
         </div>
@@ -170,7 +193,9 @@ function renderMeetCard(
         )}">${icon("refresh", 13)} 查询进度</button>
         <button class="btn btn-sm" data-meet-watch="${esc(
           String(meet.meetCourseId),
-        )}" ${canReplay ? "" : "disabled"}>${icon("play", 13)} 完成回放</button>
+        )}" ${canReplay && !signed ? "" : "disabled"} title="${
+          signed ? "已完成签到，无需刷回放" : "完成本场回放"
+        }">${icon("play", 13)} ${signed ? "签到已完成" : "完成回放"}</button>
       </div>
     </article>
   `;

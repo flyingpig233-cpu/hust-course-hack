@@ -31,12 +31,22 @@ import type {
   WatchSummary,
   ZhsCourse,
   ZhsCourseDetail,
+  ZhsExamList,
+  ZhsExamPaper,
+  ZhsExamPlan,
+  ZhsExamQuestion,
+  ZhsExamSummary,
   ZhsExceptionStatus,
+  ZhsRedoResult,
   ZhsMeet,
   ZhsMeetOutcome,
   ZhsMeetProgress,
   ZhsMeetWatchRequest,
   ZhsMeetWatchSummary,
+  ZhsAiEntry,
+  ZhsAnswerResult,
+  ZhsBankInfo,
+  ZhsRecordAiResult,
   ZhsVideo,
   ZhsVideoOutcome,
   ZhsWatchRequest,
@@ -512,6 +522,8 @@ function summarize(
 
 const zhsCourses: ZhsCourse[] = [
   {
+    kind: "shared",
+    externalId: null,
     recruitId: 463667,
     courseId: 1000011214,
     classId: 3001,
@@ -527,6 +539,8 @@ const zhsCourses: ZhsCourse[] = [
     status: 1,
   },
   {
+    kind: "shared",
+    externalId: null,
     recruitId: 500001,
     courseId: 1000022233,
     classId: 3002,
@@ -541,7 +555,63 @@ const zhsCourses: ZhsCourse[] = [
     totalLessonCount: 3,
     status: 1,
   },
+  {
+    // AI 智课: listed for discovery, read-only in the GUI.
+    kind: "ai",
+    externalId: "ai-demo-calculus-2026",
+    recruitId: 0,
+    courseId: 200001,
+    classId: null,
+    schoolId: 360,
+    name: "微积分（B）2026级",
+    teacher: "王老师",
+    secret: null,
+    isApply: 0,
+    courseType: "AI",
+    progress: 12,
+    studiedLessonCount: 1,
+    totalLessonCount: 8,
+    status: 1,
+  },
+  {
+    // POLYMAS 智能体课: opaque external id, no shared-course protocol.
+    kind: "other",
+    externalId: "polymas-demo-critical-thinking",
+    recruitId: 0,
+    courseId: 0,
+    classId: null,
+    schoolId: 360,
+    name: "大学生批判性思维",
+    teacher: "李老师",
+    secret: null,
+    isApply: 0,
+    courseType: "polymas",
+    progress: null,
+    studiedLessonCount: null,
+    totalLessonCount: null,
+    status: 1,
+  },
 ];
+
+function zhsDemoKindLabel(course: ZhsCourse): string {
+  switch (course.kind) {
+    case "ai":
+      return "AI 智课";
+    case "school":
+      return "智慧课程";
+    case "other":
+      return "其他";
+    default:
+      return "共享课";
+  }
+}
+
+function zhsDemoCourseKey(course: ZhsCourse): string {
+  return course.kind === "shared"
+    ? String(course.courseId)
+    : (course.externalId ??
+        `${course.kind}:${course.recruitId}:${course.courseId}`);
+}
 
 function zhsVideo(
   videoId: number,
@@ -561,87 +631,113 @@ function zhsVideo(
 
 function zhsDetailFor(course: ZhsCourse): ZhsCourseDetail {
   if (course.recruitId === 500001) {
-    return {
-      course,
-      chapters: [
-        {
-          chapterId: 2001,
-          name: "第一章 绪论",
-          learningLessonStatus: 0,
-          isPass: 0,
-          limitChecked: null,
-          lessons: [
-            {
-              lessonId: 20010,
-              name: "1.1 心理健康概述",
-              isStudied: 0,
-              videoId: null,
-              videoSec: null,
-              videos: [
-                zhsVideo(780001, 200101, 612, false, "1.1.1 心理健康的标准"),
-                zhsVideo(780002, 200102, 534, false, "1.1.2 常见的心理困扰"),
-              ],
-            },
-          ],
-        },
-      ],
-    };
-  }
-  return {
-    course,
-    chapters: [
+    return zhsDetailWithCounts(course, [
       {
-        chapterId: 1000116293,
-        name: "第一章 中国国防",
+        chapterId: 2001,
+        name: "第一章 绪论",
         learningLessonStatus: 0,
         isPass: 0,
         limitChecked: null,
         lessons: [
           {
-            lessonId: 1000337351,
-            name: "1.1 国防概述",
-            isStudied: 1,
-            videoId: null,
-            videoSec: null,
-            videos: [
-              zhsVideo(70622143, 1000244446, 468, true, "1.1.1 国防的含义"),
-              zhsVideo(70796671, 1000244447, 491, true, "1.1.2 现代国防的特征"),
-            ],
-          },
-          {
-            lessonId: 1000337356,
-            name: "1.2 国防历史",
+            lessonId: 20010,
+            name: "1.1 心理健康概述",
             isStudied: 0,
             videoId: null,
             videoSec: null,
             videos: [
-              zhsVideo(71192505, 1000244477, 826, false, "1.2.1 中国古代国防"),
-              zhsVideo(74150643, 1000244476, 497, false, "1.2.2 近代国防的屈辱"),
+              zhsVideo(780001, 200101, 612, false, "1.1.1 心理健康的标准"),
+              zhsVideo(780002, 200102, 534, false, "1.1.2 常见的心理困扰"),
             ],
           },
         ],
       },
-      {
-        chapterId: 1000116294,
-        name: "第二章 国家安全",
-        learningLessonStatus: 0,
-        isPass: 0,
-        limitChecked: false,
-        lessons: [
-          {
-            lessonId: 1000337360,
-            name: "2.1 国家安全形势",
-            isStudied: 0,
-            videoId: null,
-            videoSec: null,
-            videos: [
-              zhsVideo(75000111, 1000245001, 703, false, "2.1.1 当前我国国家安全形势分析"),
-            ],
-          },
-        ],
-      },
-    ],
-  };
+    ]);
+  }
+  return zhsDetailWithCounts(course, [
+    {
+      chapterId: 1000116293,
+      name: "第一章 中国国防",
+      learningLessonStatus: 0,
+      isPass: 0,
+      limitChecked: null,
+      lessons: [
+        {
+          lessonId: 1000337351,
+          name: "1.1 国防概述",
+          isStudied: 1,
+          videoId: null,
+          videoSec: null,
+          videos: [
+            zhsVideo(70622143, 1000244446, 468, true, "1.1.1 国防的含义"),
+            zhsVideo(70796671, 1000244447, 491, true, "1.1.2 现代国防的特征"),
+          ],
+        },
+        {
+          lessonId: 1000337356,
+          name: "1.2 国防历史",
+          isStudied: 0,
+          videoId: null,
+          videoSec: null,
+          videos: [
+            zhsVideo(71192505, 1000244477, 826, false, "1.2.1 中国古代国防"),
+            zhsVideo(74150643, 1000244476, 497, false, "1.2.2 近代国防的屈辱"),
+          ],
+        },
+      ],
+    },
+    {
+      chapterId: 1000116294,
+      name: "第二章 国家安全",
+      learningLessonStatus: 0,
+      isPass: 0,
+      limitChecked: false,
+      lessons: [
+        {
+          lessonId: 1000337360,
+          name: "2.1 国家安全形势",
+          isStudied: 0,
+          videoId: null,
+          videoSec: null,
+          videos: [
+            zhsVideo(75000111, 1000245001, 703, false, "2.1.1 当前我国国家安全形势分析"),
+          ],
+        },
+      ],
+    },
+  ]);
+}
+
+/** Wrap a demo tree with the counts the real backend now returns. */
+function zhsDetailWithCounts(
+  course: ZhsCourse,
+  chapters: ZhsCourseDetail["chapters"],
+): ZhsCourseDetail {
+  let totalVideos = 0;
+  let completedVideos = 0;
+  for (const chapter of chapters) {
+    for (const lesson of chapter.lessons) {
+      const videos: ZhsVideo[] =
+        lesson.videos.length > 0
+          ? lesson.videos
+          : lesson.videoId !== null && lesson.videoSec !== null
+            ? [
+                {
+                  videoId: lesson.videoId,
+                  lessonVideoId: lesson.lessonId,
+                  videoSec: lesson.videoSec,
+                  isStudied: lesson.isStudied,
+                  name: lesson.name,
+                },
+              ]
+            : [];
+      totalVideos += videos.length;
+      completedVideos += videos.filter(
+        (video) => (video.isStudied ?? 0) !== 0,
+      ).length;
+    }
+  }
+  return { course, chapters, totalVideos, completedVideos };
 }
 
 const zhsMeets: ZhsMeet[] = [
@@ -706,9 +802,11 @@ function requireZhsSession(): void {
 function zhsCourse(ref: string): ZhsCourse {
   const match = zhsCourses.find(
     (course) =>
+      zhsDemoCourseKey(course) === ref ||
       String(course.courseId) === ref ||
       String(course.recruitId) === ref ||
-      course.name === ref,
+      course.name === ref ||
+      (course.externalId !== null && course.externalId === ref),
   );
   if (match) return match;
   const numbers = (ref.match(/\d{4,}/g) ?? []).map(Number);
@@ -909,6 +1007,174 @@ function ulCheckFor(course: UlCourse): UlCheck {
   };
 }
 
+// ---- Zhihuishu homework / exam demo data ----------------------------------
+// Synthetic exam data. The demo backend never claims a real submission and the
+// final exam is list-only (same as the real backend).
+
+const zhsExamQuestions: ZhsExamQuestion[] = [
+  {
+    id: "demo-q-1",
+    stem: "中国国防的主体是（ ）。",
+    kindId: 1,
+    kindName: "单选题",
+    score: 10,
+    multiple: false,
+    options: [
+      { id: "demo-o-1a", content: "国家" },
+      { id: "demo-o-1b", content: "军队" },
+      { id: "demo-o-1c", content: "人民" },
+      { id: "demo-o-1d", content: "政府" },
+    ],
+  },
+  {
+    id: "demo-q-2",
+    stem: "现代国防的基本特征包括（ ）。",
+    kindId: 2,
+    kindName: "多选题",
+    score: 10,
+    multiple: true,
+    options: [
+      { id: "demo-o-2a", content: "国防力量的综合性" },
+      { id: "demo-o-2b", content: "国防手段的多样性" },
+      { id: "demo-o-2c", content: "国防建设的系统性" },
+      { id: "demo-o-2d", content: "国防斗争的威慑性" },
+    ],
+  },
+  {
+    id: "demo-q-3",
+    stem: "国防是国家生存与发展的安全保障。",
+    kindId: 3,
+    kindName: "判断题",
+    score: 10,
+    multiple: false,
+    options: [
+      { id: "demo-o-3a", content: "正确" },
+      { id: "demo-o-3b", content: "错误" },
+    ],
+  },
+];
+
+function zhsDemoPaper(examName: string, courseName: string): ZhsExamPaper {
+  return {
+    examName,
+    courseName,
+    totalScore: 100,
+    problemNum: zhsExamQuestions.length,
+    questionCount: zhsExamQuestions.length,
+    questions: clone(zhsExamQuestions),
+  };
+}
+
+function zhsDemoPlan(examName: string): ZhsExamPlan {
+  const paper = zhsDemoPaper(examName, "军事理论-综合版");
+  const resolved: ZhsExamPlan["questions"] = [
+    {
+      question: paper.questions[0],
+      optionIds: ["demo-o-1a"],
+      optionContents: ["国家"],
+      source: "submitted",
+    },
+    {
+      question: paper.questions[1],
+      optionIds: ["demo-o-2a", "demo-o-2c"],
+      optionContents: ["国防力量的综合性", "国防建设的系统性"],
+      source: "ai_analysis",
+    },
+  ];
+  return {
+    examId: "demo-exam-3",
+    examName: paper.examName,
+    totalScore: paper.totalScore,
+    questionCount: paper.questionCount,
+    resolved: resolved.length,
+    unresolved: [
+      {
+        questionId: paper.questions[2].id,
+        stem: paper.questions[2].stem,
+      },
+    ],
+    complete: false,
+    questions: resolved,
+  };
+}
+
+const zhsExamUnsubmitted: ZhsExamList = {
+  submitted: false,
+  homework: [
+    {
+      stuExamId: "demo-hw-2",
+      examId: "demo-exam-2",
+      name: "第二章单元测试",
+      state: 1,
+      achieve: null,
+      achieveCount: 0,
+      backNum: 2,
+      score: null,
+      problemNum: 10,
+      totalScore: 100,
+      meetCourseType: null,
+      chapterId: "1000116294",
+      isCheckAnswer: 1,
+      examUserName: "张教授",
+    },
+  ],
+  finals: [
+    {
+      stuExamId: "demo-final",
+      examId: "demo-final-exam",
+      name: "军事理论-综合版教程考试（期末）",
+      problemNum: 68,
+      totalScore: 100,
+      limitTime: 90,
+      remainCount: 1,
+      finalExam: true,
+    },
+  ],
+  finalsError: null,
+};
+
+const zhsExamSubmitted: ZhsExamList = {
+  submitted: true,
+  homework: [
+    {
+      stuExamId: "demo-hw-3",
+      examId: "demo-exam-3",
+      name: "第三章单元测试",
+      state: 4,
+      achieve: 100,
+      achieveCount: 10,
+      backNum: 3,
+      score: 30,
+      problemNum: 10,
+      totalScore: 100,
+      meetCourseType: null,
+      chapterId: "1000116294",
+      isCheckAnswer: 1,
+      examUserName: "张教授",
+    },
+    {
+      stuExamId: "demo-meet-quiz",
+      examId: "demo-exam-meet",
+      name: "见面课测验（从白马庙到星辰大海）",
+      state: 4,
+      achieve: 20,
+      achieveCount: 1,
+      backNum: 1,
+      score: 20,
+      problemNum: 5,
+      totalScore: 100,
+      meetCourseType: 1,
+      chapterId: null,
+      isCheckAnswer: 1,
+      examUserName: "李教授",
+    },
+  ],
+  finals: [],
+  finalsError: null,
+};
+
+let zhsDemoBankTotal = 3;
+let zhsDemoAiEntries = 1;
 export const mockApi = {
   async sessionInfo(): Promise<SessionInfo | null> {
     await sleep(120);
@@ -1340,6 +1606,11 @@ export const mockApi = {
   async zhsCourseDetail(courseId: string): Promise<ZhsCourseDetail> {
     requireZhsSession();
     const course = zhsCourse(courseId);
+    if (course.kind !== "shared") {
+      throw new Error(
+        `${zhsDemoKindLabel(course)}暂不支持秒刷与详情，仅支持列表查看`,
+      );
+    }
     const detail = zhsDetailFor(course);
     const total = Math.max(1, detail.chapters.reduce(
       (sum, chapter) => sum + chapter.lessons.length,
@@ -1377,6 +1648,11 @@ export const mockApi = {
     }
     cancelled = false;
     const course = zhsCourse(request.course);
+    if (course.kind !== "shared") {
+      throw new Error(
+        `${zhsDemoKindLabel(course)}暂不支持秒刷与详情，仅支持列表查看`,
+      );
+    }
     const detail = zhsDetailFor(course);
     const all = detail.chapters.flatMap((chapter) =>
       chapter.lessons.flatMap((lesson) =>
@@ -1398,7 +1674,10 @@ export const mockApi = {
       stage: "videos",
       total: planned.length,
       dryRun: true,
-      skipped: all.length - planned.length,
+      // Skipped means "already recorded complete", not "capped by maxVideos".
+      skipped: request.includeCompleted
+        ? 0
+        : all.filter((target) => target.completed).length,
     });
     const outcomes: ZhsVideoOutcome[] = [];
     for (const [offset, target] of planned.entries()) {
@@ -1478,6 +1757,18 @@ export const mockApi = {
     if (!meet) throw new Error("演示数据中没有该见面课");
     const totalMinutes = Math.max(1, Math.ceil((meet.durationSecs ?? 0) / 60));
     const watched = zhsWatched.get(meet.liveId) ?? [];
+    // Demo: the first meeting is already signed (签到完成) and therefore
+    // complete even though replay minutes are empty.
+    if (meet.meetCourseId === 9001) {
+      return {
+        totalMinutes,
+        watchedMinutes: [...watched],
+        watchedCount: watched.length,
+        percent: 100,
+        completed: true,
+        attendance: { signed: true, signStatus: "2", label: "签到完成" },
+      };
+    }
     return {
       totalMinutes,
       watchedMinutes: [...watched],
@@ -1486,6 +1777,12 @@ export const mockApi = {
         100,
         Math.round((watched.length / totalMinutes) * 100),
       ),
+      completed: false,
+      attendance: {
+        signed: false,
+        signStatus: "0",
+        label: "未签到",
+      },
     };
   },
 
@@ -1626,6 +1923,162 @@ export const mockApi = {
     cancelled = true;
   },
 
+  // ---- Zhihuishu homework / exam demo backend ---------------------------
+  async zhsExamList(
+    recruitId: number,
+    courseId: number,
+    submitted: boolean,
+  ): Promise<ZhsExamList> {
+    requireZhsSession();
+    const course = zhsCourse(String(courseId));
+    if (course.recruitId !== recruitId) {
+      throw new Error("演示数据中没有该课程");
+    }
+    await sleep(220);
+    return clone(submitted ? zhsExamSubmitted : zhsExamUnsubmitted);
+  },
+
+  async zhsExamPaper(
+    _recruitId: number,
+    _courseId: number,
+    _examId: string,
+    submitted: boolean,
+  ): Promise<ZhsExamPaper> {
+    requireZhsSession();
+    await sleep(180);
+    if (!submitted) {
+      throw new Error(
+        "未开始的试卷无法只读预览（进入考试会开始计时，已阻止）；演示模式请使用「重做并提交」查看计划。",
+      );
+    }
+    return zhsDemoPaper("第三章单元测试", "军事理论-综合版");
+  },
+
+  async zhsExamPlan(
+    _recruitId: number,
+    _courseId: number,
+    examId: string,
+  ): Promise<ZhsExamPlan> {
+    requireZhsSession();
+    await sleep(220);
+    if (examId === "demo-final-exam") {
+      throw new Error(
+        "期末/教程考试只有 1 次机会，GUI 仅支持查看，不生成答题计划、不自动提交",
+      );
+    }
+    return zhsDemoPlan(
+      examId === "demo-exam-2" ? "第二章单元测试" : "第三章单元测试",
+    );
+  },
+
+  async zhsExamAnswer(
+    _recruitId: number,
+    _courseId: number,
+    examId: string,
+    dryRun: boolean,
+  ): Promise<ZhsAnswerResult> {
+    requireZhsSession();
+    if (examId === "demo-final-exam") {
+      throw new Error(
+        "期末/教程考试只有 1 次机会，GUI 不支持自动提交",
+      );
+    }
+    if (dryRun) {
+      const plan = zhsDemoPlan("第三章单元测试");
+      return {
+        dryRun: true,
+        plan,
+        submitted: false,
+        score: null,
+        totalScore: plan.totalScore,
+        correctCount: 0,
+        questionCount: plan.questionCount,
+        perQuestion: [],
+        message: "试运行：只生成答题计划，没有进入考试、保存或提交。",
+        recordedToBank: 0,
+      };
+    }
+    throw new Error(
+      "演示模式不会提交真实试卷；请连接真实知到账号并在确认后执行。",
+    );
+  },
+
+  async zhsExamBankInfo(): Promise<ZhsBankInfo> {
+    requireZhsSession();
+    await sleep(120);
+    return {
+      total: zhsDemoBankTotal,
+      submittedEntries: 2,
+      aiEntries: zhsDemoAiEntries,
+      updatedAtUnix: Math.floor(Date.now() / 1000) - 3600,
+      path: "（演示）应用数据目录/zhihuishu-answer-bank.json",
+    };
+  },
+
+  async zhsExamRecordAi(
+    _recruitId: number,
+    _courseId: number,
+    _examId: string,
+    entries: ZhsAiEntry[],
+  ): Promise<ZhsRecordAiResult> {
+    requireZhsSession();
+    const usable = entries.filter(
+      (entry) => typeof entry.text === "string" && entry.text.trim().length > 0,
+    );
+    if (usable.length === 0) {
+      throw new Error("没有可写入的 AI解析 文本");
+    }
+    await sleep(200);
+    zhsDemoBankTotal += usable.length;
+    zhsDemoAiEntries += usable.length;
+    const event = {
+      recorded: usable.length,
+      skipped: entries.length - usable.length,
+      bankTotal: zhsDemoBankTotal,
+    };
+    demoEmit("zhs-exam-ai", event);
+    return {
+      ...event,
+      skippedQuestionIds: [],
+      path: "（演示）应用数据目录/zhihuishu-answer-bank.json",
+    };
+  },
+
+  async zhsExamOpenCheckWindow(): Promise<void> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持打开采集窗口；可用「手动导入」体验答案库写入。",
+    );
+  },
+
+  async zhsExamOpenAttemptWindow(): Promise<void> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持打开网页作答窗口（滑块验证需要真实知到会话）；可用「看试卷 / 手动导入 / 题库统计」体验只读流程。",
+    );
+  },
+  async zhsExamSummary(): Promise<ZhsExamSummary> {
+    requireZhsSession();
+    return {
+      homeworkTotal: 5,
+      homeworkSubmitted: 3,
+      averageScore: 87.5,
+      finalExamCount: 1,
+      finalExamSubmitted: 0,
+    };
+  },
+  async zhsExamRedo(): Promise<ZhsRedoResult> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持申请重做；真实环境会打开考试列表窗口，自动点击「申请重做」并在成功后刷新列表、打开作答窗口。",
+    );
+  },
+  async zhsExamOpenExamLogin(): Promise<void> {
+    requireZhsSession();
+    throw new Error(
+      "演示模式不支持打开考试系统登录窗口；真实环境会使用持久考试配置打开考试列表，首次在该窗口登录一次即可。",
+    );
+  },
   // ---- Ulearning (优学院) demo backend ----------------------------------
   // Like the Zhihuishu demo, every job below is dry-run only.
   async ulListCourses(): Promise<UlCourse[]> {

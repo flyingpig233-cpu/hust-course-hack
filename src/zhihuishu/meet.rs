@@ -44,6 +44,8 @@ pub struct ZhsMeetWatchOptions {
     pub circuit_breaker: bool,
     /// Number of reports between two anti-cheat checks.
     pub check_every: usize,
+    /// Also report replay minutes for meetings that are already signed (签到).
+    pub include_signed: bool,
 }
 
 impl Default for ZhsMeetWatchOptions {
@@ -58,6 +60,7 @@ impl Default for ZhsMeetWatchOptions {
             delay_max_ms: 6_000,
             circuit_breaker: true,
             check_every: 10,
+            include_signed: false,
         }
     }
 }
@@ -258,6 +261,29 @@ pub async fn run_meet_watch(
         bail!("见面课「{}」缺少 liveId，无法上报回放考勤", meet.label());
     }
     let _user = client.current_user().await?;
+
+    // 签到 is the authoritative completion signal: a signed meeting must not be
+    // padded with replay minutes unless the caller explicitly asks for it.
+    if !opts.include_signed {
+        match client.meet_attendance(meet).await {
+            Ok(attendance) if attendance.signed => {
+                let mut done = outcome(
+                    meet,
+                    0,
+                    0,
+                    ZhsWatchState::Skip,
+                    "已签到（签到已完成），跳过回放补刷".to_string(),
+                );
+                done.watched_after = Some(0);
+                return Ok(done);
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!(
+                "读取见面课「{}」考勤失败，继续按回放分钟处理：{error:#}",
+                meet.label()
+            ),
+        }
+    }
 
     // The minute report carries the replay `videoId`; load the video list
     // (id + duration) so multi-video replays map every minute to its own video.

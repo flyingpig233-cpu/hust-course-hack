@@ -161,6 +161,7 @@ pub fn session_info(state: State<'_, AppState>) -> Option<SessionInfo> {
 #[tauri::command]
 pub fn disconnect(state: State<'_, AppState>) {
     state.clear_session();
+    state.set_zhs_exam_sso_ready(false);
 }
 
 #[tauri::command]

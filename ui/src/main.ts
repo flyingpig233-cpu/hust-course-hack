@@ -19,6 +19,7 @@ import type {
   UlWatchSummary,
   ZhsCourse,
   ZhsCourseDetail,
+  ZhsExamSummary,
   ZhsMeet,
   ZhsMeetProgress,
   ZhsMeetWatchSummary,
@@ -48,14 +49,18 @@ import {
   renderZhsCourseError,
   renderZhsHome,
   renderZhsLoading,
+  renderZhsUnsupportedCourse,
   updateZhsLoading,
 } from "./views/zhs-course";
 import {
   openZhsMeetWatchModal,
   renderZhsMeet,
 } from "./views/zhs-meet";
+import { openZhsExamModal } from "./views/zhs-exam";
 import {
   zhsCompletedVideos,
+  zhsCourseKey,
+  zhsCourseKindLabel,
   zhsCourseLabel,
   zhsTotalVideos,
 } from "./zhs";
@@ -115,6 +120,7 @@ const store = {
     courses: [] as ZhsCourse[],
     selectedId: null as string | null,
     detail: null as ZhsCourseDetail | null,
+    examSummary: null as ZhsExamSummary | null,
     meets: [] as ZhsMeet[],
     meetProgress: new Map<number, ZhsMeetProgress>(),
     view: "home" as ZhsView,
@@ -157,9 +163,13 @@ function updateSidebar(): void {
     selectedId = store.hust.selectedId;
   } else if (session && platform === "zhihuishu") {
     courses = store.zhs.courses.map((course) => ({
-      id: String(course.courseId),
+      id: zhsCourseKey(course),
       name: zhsCourseLabel(course),
-      meta: `recruit ${course.recruitId}`,
+      meta:
+        course.kind === "shared"
+          ? `recruit ${course.recruitId}`
+          : `${zhsCourseKindLabel(course)} · 只读`,
+      group: zhsCourseKindLabel(course),
     }));
     selectedId = store.zhs.selectedId;
   } else if (session) {
@@ -276,6 +286,7 @@ async function activateSession(info: SessionInfo, announce: boolean): Promise<vo
     courses: [],
     selectedId: null,
     detail: null,
+    examSummary: null,
     meets: [],
     meetProgress: new Map(),
     view: "home",
@@ -507,16 +518,19 @@ function findZhsCourse(reference: string): ZhsCourse | null {
   return (
     store.zhs.courses.find(
       (course) =>
+        zhsCourseKey(course) === reference ||
         String(course.courseId) === reference ||
         String(course.recruitId) === reference ||
+        (course.externalId !== null && course.externalId === reference) ||
         zhsCourseLabel(course) === reference,
     ) ?? null
   );
 }
 
 function upsertZhsCourse(course: ZhsCourse): void {
+  const key = zhsCourseKey(course);
   const index = store.zhs.courses.findIndex(
-    (item) => item.recruitId === course.recruitId,
+    (item) => zhsCourseKey(item) === key && item.kind === course.kind,
   );
   if (index >= 0) {
     store.zhs.courses[index] = course;
@@ -571,14 +585,33 @@ async function selectZhsCourse(courseId: string): Promise<void> {
   }
   const course = findZhsCourse(courseId);
   if (!course) return;
-  if (store.zhs.selectedId === courseId && store.zhs.detail) {
+  const key = zhsCourseKey(course);
+  if (course.kind !== "shared") {
+    // Non-shared courses are discovery-only: show a read-only info panel.
+    store.zhs.selectedId = key;
+    store.zhs.view = "course";
+    store.zhs.detail = null;
+    store.zhs.examSummary = null;
+    store.zhs.meets = [];
+    store.zhs.meetProgress.clear();
+    updateSidebar();
+    renderZhsUnsupportedCourse(main, course, () => {
+      store.zhs.selectedId = null;
+      store.zhs.view = "home";
+      updateSidebar();
+      showHome();
+    });
+    return;
+  }
+  if (store.zhs.selectedId === key && store.zhs.detail) {
     store.zhs.view = "course";
     showZhsCourseView();
     return;
   }
-  store.zhs.selectedId = courseId;
+  store.zhs.selectedId = key;
   store.zhs.view = "course";
   store.zhs.detail = null;
+  store.zhs.examSummary = null;
   store.zhs.meets = [];
   store.zhs.meetProgress.clear();
   updateSidebar();
@@ -592,11 +625,20 @@ async function loadZhsDetail(
   if (store.busy) return;
   store.busy = true;
   updateSidebar();
-  if (!silent) renderZhsLoading(main, course, () => void cancelCurrentJob());
+  if (!silent) {
+    renderZhsLoading(main, course, () => void cancelCurrentJob());
+  } else if (store.zhs.detail) {
+    // Show the busy banner on the current tree while the silent refresh runs.
+    showZhsCourseView();
+  }
 
   let unlisten: (() => void) | null = null;
   let detail: ZhsCourseDetail | null = null;
   let failure: string | null = null;
+  // Silent failure = no stats card; the course detail must not be blocked.
+  const summaryPromise = api
+    .zhsExamSummary(course.recruitId, course.courseId)
+    .catch(() => null);
 
   try {
     unlisten = await onJobProgress((progress) => {
@@ -606,6 +648,7 @@ async function loadZhsDetail(
     });
     detail = await api.zhsCourseDetail(String(course.courseId));
     store.zhs.detail = detail;
+    store.zhs.examSummary = await summaryPromise;
     upsertZhsCourse(detail.course);
   } catch (error) {
     failure = errorText(error);
@@ -630,7 +673,50 @@ async function loadZhsDetail(
     return;
   }
   if (failure) {
+    if (silent && store.zhs.detail) {
+      // A silent refresh must not replace the working tree with an error card.
+      toast(`刷新完成状态失败：${failure}`, "error");
+      showZhsCourseView();
+      return;
+    }
     renderZhsCourseError(main, course, failure, () => void loadZhsDetail(course));
+  }
+}
+
+/**
+ * Re-read the authoritative completion record after a real watch run.
+ *
+ * `zhs_course_detail` re-queries `queryStuyInfo` (`watchState`) and returns the
+ * corrected per-video state and counts, because the `videolist`
+ * `isStudiedLesson` flag stays stale after a report. The shared-course list
+ * additionally carries the platform's own progress percentage; that lookup is
+ * best effort and must never hide the corrected per-video state.
+ */
+async function refreshZhsAfterWatch(course: ZhsCourse): Promise<void> {
+  await loadZhsDetail(course, true);
+  const detail = store.zhs.detail;
+  if (!detail || detail.course.recruitId !== course.recruitId) return;
+  try {
+    const courses = await api.zhsListCourses();
+    const fresh = courses.find((item) => item.recruitId === course.recruitId);
+    if (!fresh) return;
+    // Merge the fresh list instead of replacing it: a course added manually
+    // from a study-page URL may not appear in the shared-course list.
+    for (const item of courses) upsertZhsCourse(item);
+    const current = store.zhs.detail;
+    if (current && current.course.recruitId === course.recruitId) {
+      current.course = {
+        ...current.course,
+        progress: fresh.progress,
+        studiedLessonCount: fresh.studiedLessonCount,
+        totalLessonCount: fresh.totalLessonCount,
+      };
+      if (store.zhs.view === "course") showZhsCourseView();
+    }
+    updateSidebar();
+  } catch {
+    // Progress percentage is best effort; the watchState-derived counts above
+    // are the authoritative completion record.
   }
 }
 
@@ -662,13 +748,22 @@ function showZhsCourseView(): void {
         videoCompleted: zhsCompletedVideos(detail),
         onToast: (message, tone) => toast(message, tone),
         onFinished: (summary: ZhsWatchSummary) => {
-          if (!summary.dryRun && summary.ok > 0) {
-            void loadZhsDetail(course, true);
-          }
+          // Any real run changes platform state, even a partial or cancelled
+          // one, so always re-read the completion record. Dry runs send
+          // nothing and the tree cannot have changed.
+          if (!summary.dryRun) void refreshZhsAfterWatch(course);
         },
       }),
     onCheck: () => void checkZhsStatus(String(course.courseId)),
-  });
+    onExam: () =>
+      openZhsExamModal({
+        recruitId: course.recruitId,
+        courseId: course.courseId,
+        courseName: zhsCourseLabel(course),
+        summary: store.zhs.examSummary,
+        onToast: (message, tone) => toast(message, tone),
+      }),
+  }, store.zhs.examSummary);
 }
 
 async function loadZhsMeets(course: ZhsCourse): Promise<void> {
@@ -725,7 +820,16 @@ function showZhsMeetView(): void {
     onRefresh: () => void loadZhsMeets(course),
     onLoadProgress: (meet) => void loadZhsMeetProgress(course, meet),
     onWatch: (meet) => {
-      const selected = meet ? [meet] : replayable;
+      const signed = (item: ZhsMeet): boolean =>
+        store.zhs.meetProgress.get(item.meetCourseId)?.attendance.signed ===
+        true;
+      const selected = meet
+        ? [meet]
+        : replayable.filter((item) => !signed(item));
+      if (selected.length === 0) {
+        toast("所有有回放的见面课都已签到完成，无需再刷回放考勤", "info");
+        return;
+      }
       const totalMinutes = selected.reduce(
         (total, item) =>
           total + Math.ceil((item.durationSecs ?? 0) / 60),
@@ -760,6 +864,10 @@ async function loadZhsMeetProgress(
     );
     store.zhs.meetProgress.set(meet.meetCourseId, progress);
     showZhsMeetView();
+    if (progress.attendance.signed) {
+      toast(`${meet.name}：已完成（签到完成），无需刷回放`, "success");
+      return;
+    }
     toast(
       `${meet.name}：已看 ${progress.watchedCount} / ${progress.totalMinutes} 分钟（${progress.percent}%）`,
       "info",
@@ -1072,6 +1180,7 @@ async function disconnect(): Promise<void> {
   store.zhs.courses = [];
   store.zhs.selectedId = null;
   store.zhs.detail = null;
+  store.zhs.examSummary = null;
   store.zhs.meets = [];
   store.zhs.meetProgress.clear();
   store.zhs.view = "home";

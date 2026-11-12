@@ -2,11 +2,16 @@
 //!
 //! The player builds an `ItemStudyRecordUpdateDTO`, DES-encrypts it with the
 //! hardcoded key and POSTs it to `/yws/api/personal/sync?courseType=4&platform=PC`.
-//! The payload layout below matches the verified golden payload in
-//! `docs/ulearning/miaoshua-plan.md` §2.4/§2.6:
+//! The payload layout below matches the captured player traffic (2026-11-11):
 //!
 //! * `pageid` is the page **relation id**;
 //! * video `videoid` is the element `resourceid` and `time` its `videoLength`;
+//! * the player reports `current = videoLength`, `recordTime = 0`,
+//!   `studyTime = 0` and an **empty** `startEndTimeList` when it completes a
+//!   video page (the old fabricated `0..duration` timeline is flagged as 刷课);
+//! * `studyStartTime` must be the value returned by
+//!   `GET /studyrecord/initialize/{sectionId}` (a backdated timestamp is
+//!   rejected as 刷分 by the server);
 //! * practice pages carry `coursepageId` plus one `questions[]` entry per
 //!   answered question;
 //! * the platform answers `1` (success) or `2` (anti-cheat stop).
@@ -64,16 +69,16 @@ pub fn build_record_payload(section: &UlSectionPlan, study_start_time: i64) -> R
             if video.video_id <= 0 || video.duration_secs <= 0 {
                 bail!("视频信息不完整（videoid/time 为空），拒绝猜测");
             }
+            // Match the player's completion record: full position, no fabricated
+            // playback timeline. The server checks this against its heartbeat
+            // history; `0..duration` or a backdated studyStartTime is flagged.
             videos.push(json!({
                 "videoid": video.video_id,
                 "current": video.duration_secs,
                 "status": 1,
-                "recordTime": video.duration_secs,
+                "recordTime": 0,
                 "time": video.duration_secs,
-                "startEndTimeList": [{
-                    "startTime": 0,
-                    "endTime": video.duration_secs
-                }],
+                "startEndTimeList": [],
             }));
         }
 
@@ -92,7 +97,12 @@ pub fn build_record_payload(section: &UlSectionPlan, study_start_time: i64) -> R
         let mut page_record = Map::new();
         page_record.insert("pageid".to_string(), json!(page.relation_id));
         page_record.insert("complete".to_string(), json!(1));
-        page_record.insert("studyTime".to_string(), json!(STUDY_TIME_CAP));
+        let study_time = if planned.kind == UlPageKind::Video {
+            0
+        } else {
+            STUDY_TIME_CAP
+        };
+        page_record.insert("studyTime".to_string(), json!(study_time));
         page_record.insert("score".to_string(), json!(planned.score));
         page_record.insert("answerTime".to_string(), json!(1));
         page_record.insert(
@@ -208,13 +218,15 @@ mod tests {
     }
 
     #[test]
-    fn builds_verified_video_payload() {
+    fn builds_player_shaped_video_payload() {
         let section = video_section();
         let payload = build_record_payload(&section, 1_794_062_059).unwrap();
         assert_eq!(payload["itemid"], json!(2377981));
         assert_eq!(payload["autoSave"], json!(1));
         assert_eq!(payload["withoutOld"], Value::Null);
         assert_eq!(payload["complete"], json!(1));
+        // The player sends the server-issued initialize timestamp, never a
+        // backdated one (backdating is flagged as 刷分).
         assert_eq!(payload["studyStartTime"], json!(1_794_062_059));
         assert_eq!(payload["score"], json!(100));
         let pages = payload["pageStudyRecordDTOList"].as_array().unwrap();
@@ -222,7 +234,8 @@ mod tests {
         let page = &pages[0];
         assert_eq!(page["pageid"], json!(2377984));
         assert_eq!(page["complete"], json!(1));
-        assert_eq!(page["studyTime"], json!(1000));
+        // Player-shaped video completion: no fabricated study time.
+        assert_eq!(page["studyTime"], json!(0));
         assert_eq!(page["score"], json!(100));
         assert_eq!(page["answerTime"], json!(1));
         assert_eq!(page["submitTimes"], json!(0));
@@ -233,12 +246,10 @@ mod tests {
         assert_eq!(video["videoid"], json!(1563126));
         assert_eq!(video["current"], json!(1326));
         assert_eq!(video["status"], json!(1));
-        assert_eq!(video["recordTime"], json!(1326));
+        assert_eq!(video["recordTime"], json!(0));
         assert_eq!(video["time"], json!(1326));
-        assert_eq!(
-            video["startEndTimeList"],
-            json!([{"startTime": 0, "endTime": 1326}])
-        );
+        // The fabricated `0..duration` timeline is what the anti-cheat flags.
+        assert_eq!(video["startEndTimeList"], json!([]));
     }
 
     #[test]
@@ -247,6 +258,7 @@ mod tests {
         let payload = build_record_payload(&section, 1_794_062_059).unwrap();
         let page = &payload["pageStudyRecordDTOList"][0];
         assert_eq!(page["pageid"], json!(2379020));
+        assert_eq!(page["studyTime"], json!(1000));
         assert_eq!(page["submitTimes"], json!(1));
         assert_eq!(page["coursepageId"], json!(9002));
         assert_eq!(page["videos"], json!([]));

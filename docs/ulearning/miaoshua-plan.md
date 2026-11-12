@@ -93,7 +93,7 @@ body = DES-ECB(PKCS7, key="12345678", JSON(payload))   # CryptoJS.DES.encrypt �
     "videos": [{
       "videoid": 1563126, "current": 1326, "status": 1,
       "recordTime": 1326, "time": 1326,
-      "startEndTimeList": [{"startTime": 0, "endTime": 1326}]
+      "startEndTimeList": [{"startTime": 1794319537, "endTime": 1794320137}, {"startTime": 1794320137, "endTime": 1794320863}]
     }],
     "speaks": []
   }]
@@ -106,7 +106,7 @@ body = DES-ECB(PKCS7, key="12345678", JSON(payload))   # CryptoJS.DES.encrypt �
 - **实测该 payload 返回 1**，回读 `completion_status=1`，课程页进度 25%（1/4 页）。
 - `studyStartTime` 用 `GET /studyrecord/initialize/{sectionId}` 的返回值；缺省也能过（本次用了页面加载时的值）。
 - `page.studyTime` 客户端上限 1000 秒；服务端存了 1008（有自己的累加规则），说明不是强校验。
-- 视频完成阈值在前端是 95%，但我们直接给 `status=1`，无需凑阈值。
+- 视频完成阈值在前端是 95%，但我们直接给 `status=1`，无需凑阈值。\n- **`startEndTimeList` 必须是真实的 epoch 时间区间**（播放器上报的是每次实际播放的起止时间戳）：旧实现写 `[{"startTime":0,"endTime":duration}]` 会被服务端判定刷课并返回 `2`；现在按视频时长生成一组以当前时间结尾的 epoch 区间。
 
 ### 2.5 单节秒刷流程
 

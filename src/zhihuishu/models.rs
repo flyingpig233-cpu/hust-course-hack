@@ -24,9 +24,44 @@ pub struct ZhsUser {
     pub is_teacher: bool,
 }
 
+/// Where a Zhihuishu course came from.
+///
+/// `Shared` is the historical 共享课 list (`queryShareCourseInfo`), which is the
+/// only kind the video/meet/exam protocols currently support. The other kinds
+/// are listed for discovery and are marked as unsupported until their own
+/// protocol is captured.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZhsCourseKind {
+    /// 共享课 (`queryShareCourseInfo`).
+    #[default]
+    Shared,
+    /// AI 智课 / 智慧课程 (`queryStudentAICourseList`).
+    Ai,
+    /// 校内智慧课程 (`queryStudentSchoolCourseList`).
+    School,
+    /// 微课 / 翻转课 / 兴趣课 / B2C 等其他来源.
+    Other,
+}
+
+impl ZhsCourseKind {
+    /// Chinese label used by the CLI and the GUI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Shared => "共享课",
+            Self::Ai => "AI 智课",
+            Self::School => "智慧课程",
+            Self::Other => "其他",
+        }
+    }
+}
+
 /// A shared course (共享课) the student is enrolled in.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ZhsCourse {
+    /// Which list endpoint produced this course (defaults to 共享课 for old data).
+    #[serde(default)]
+    pub kind: ZhsCourseKind,
     /// Recruit id (`recruitId`), the enrollment id used by every video API.
     pub recruit_id: u64,
     /// Course id (`courseId`).
@@ -42,6 +77,10 @@ pub struct ZhsCourse {
     /// `recruitAndCourseId` secret from a study page URL, when the course was
     /// resolved from a URL instead of the course list.
     pub secret: Option<String>,
+    /// Opaque platform course id for sources whose ids are not numeric
+    /// (POLYMAS 智能体课, e.g. 大学生批判性思维). `course_id` stays `0` for these.
+    #[serde(default)]
+    pub external_id: Option<String>,
     /// Whether the course must be applied to (`isApply`).
     pub is_apply: Option<i64>,
     /// Course type reported by the platform (polymas courses are unsupported).
@@ -190,6 +229,24 @@ impl ZhsCourseDetail {
             .filter(|v| v.is_studied.unwrap_or(0) != 0)
             .count()
     }
+
+    /// `(lessonId, lessonVideoId)` of every playable video, in platform order.
+    ///
+    /// `queryStuyInfo` takes both ids and keys its reply by `lessonVideoId`, so
+    /// this is the batch shape the completion refresh needs. Lessons without
+    /// small lessons expose their own id as `lessonVideoId`.
+    pub fn lesson_video_pairs(&self) -> Vec<(u64, u64)> {
+        self.chapters
+            .iter()
+            .flat_map(|chapter| &chapter.lessons)
+            .flat_map(|lesson| {
+                lesson
+                    .all_videos()
+                    .into_iter()
+                    .map(|video| (lesson.lesson_id, video.lesson_video_id))
+            })
+            .collect()
+    }
 }
 
 /// Anti-cheat / exception status returned by the `exceptionActionDetail`
@@ -273,7 +330,7 @@ pub struct ZhsMeetVideo {
 }
 
 /// Replay attendance progress of one meet course.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ZhsMeetProgress {
     /// Total number of one-minute slots in the replay.
     pub total_minutes: u32,
@@ -283,6 +340,56 @@ pub struct ZhsMeetProgress {
     pub watched_count: usize,
     /// Watched coverage in percent (0-100).
     pub percent: u32,
+    /// Whether the meet requirement is complete. A signed (签到完成) meeting is
+    /// complete even when replay minutes are missing.
+    pub completed: bool,
+    /// Sign-in / attendance state from `checkLiveHomeAuth`.
+    #[serde(default)]
+    pub attendance: ZhsMeetAttendance,
+}
+
+/// Sign-in (签到) attendance state of one meet course.
+///
+/// For the measured course **签到完成 == 回放完成**: the platform marks the
+/// replay requirement as satisfied when `signInStatus == "2"`, even when the
+/// replay-minute list is empty. `signed == true` therefore means both
+/// attendance and replay completion, and [`ZhsMeetProgress`] reports it as
+/// 100%/completed. The other raw fields are kept for future edge cases where a
+/// course may distinguish attendance from replay watching.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ZhsMeetAttendance {
+    /// Whether the platform reports the meeting as signed/attended
+    /// (`signInStatus == "2"`).
+    pub signed: bool,
+    /// Raw `signInStatus` value (`"2"` = signed).
+    pub sign_status: Option<String>,
+    /// Raw `openStatus` value.
+    pub open_status: Option<String>,
+    /// Raw `courseLeaveStatus` value.
+    pub course_leave_status: Option<String>,
+    /// Raw `courseEndStatus` value.
+    pub course_end_status: Option<String>,
+    /// Full response object, for callers that need platform-specific fields.
+    pub raw: serde_json::Value,
+}
+
+impl ZhsMeetAttendance {
+    /// Whether the attendance endpoint returned a real payload (as opposed to
+    /// the default used when the call failed).
+    pub fn known(&self) -> bool {
+        !self.raw.is_null()
+    }
+
+    /// Chinese label for CLI/UI output.
+    pub fn label(&self) -> &'static str {
+        if !self.known() {
+            "未知（考勤接口不可用）"
+        } else if self.signed {
+            "已签到（签到已完成）"
+        } else {
+            "未签到"
+        }
+    }
 }
 
 impl ZhsMeetProgress {
@@ -301,7 +408,28 @@ impl ZhsMeetProgress {
             watched_minutes,
             watched_count,
             percent,
+            completed: false,
+            attendance: ZhsMeetAttendance::default(),
         }
+    }
+
+    /// Mark a signed meeting as fully completed (签到完成 == 回放完成).
+    ///
+    /// The platform stops requiring replay minutes once the sign-in is done, so
+    /// report 100% and `completed = true`; keep the real `watched_minutes` list
+    /// for diagnostics instead of inventing watched slots.
+    pub fn mark_completed_by_attendance(mut self) -> Self {
+        if self.attendance.signed {
+            self.completed = true;
+            self.percent = 100;
+            self.watched_count = self.total_minutes as usize;
+        }
+        self
+    }
+
+    /// Whether attendance (签到) satisfies the meet requirement.
+    pub fn attendance_satisfied(&self) -> bool {
+        self.attendance.signed
     }
 }
 
@@ -575,6 +703,24 @@ mod tests {
             ..course
         };
         assert!(unsupported.is_polymas());
+    }
+
+    #[test]
+    fn course_kind_defaults_to_shared_for_old_payloads() {
+        let course = ZhsCourse {
+            recruit_id: 1,
+            course_id: 2,
+            ..ZhsCourse::default()
+        };
+        assert_eq!(course.kind, ZhsCourseKind::Shared);
+        let mut value = serde_json::to_value(&course).unwrap();
+        assert_eq!(value["kind"], "shared");
+        value.as_object_mut().unwrap().remove("kind");
+        let parsed: ZhsCourse = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.kind, ZhsCourseKind::Shared);
+        assert_eq!(ZhsCourseKind::Ai.label(), "AI 智课");
+        assert_eq!(ZhsCourseKind::School.label(), "智慧课程");
+        assert_eq!(ZhsCourseKind::Other.label(), "其他");
     }
 
     #[test]

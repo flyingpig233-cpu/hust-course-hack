@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "exam-remote",
+  "description": "Limited exam page commands",
+  "windows": [
+    "zhs-exam"
+  ],
+  "remote": {
+    "urls": [
+      "https://onlineexamh5new.zhihuishu.com/*"
+    ]
+  },
+  "permissions": [
+    "allow-zhs-exam-solve-captcha",
+    "allow-zhs-exam-webview-plan",
+    "allow-zhs-exam-webview-submitted",
+    "allow-zhs-exam-record-ai",
+    "allow-zhs-exam-redo-result",
+    "allow-zhs-exam-js-error"
+  ]
+}

@@ -8,6 +8,8 @@ export interface SidebarItem {
   id: string;
   name: string;
   meta: string;
+  /** Optional group header (e.g. 共享课 / AI 智课 / 智慧课程 / 其他). */
+  group?: string;
 }
 
 export interface SidebarState {
@@ -120,10 +122,19 @@ export function createSidebar(
       return;
     }
 
+    let lastGroup = "";
     list.innerHTML = filtered
       .map((course) => {
         const active = course.id === state.selectedId;
-        return `
+        const group = course.group ?? "";
+        const header =
+          group && group !== lastGroup
+            ? `<div class="sidebar-group-label">${esc(group)}</div>`
+            : "";
+        lastGroup = group;
+        return (
+          header +
+          `
           <button class="course-item${active ? " is-active" : ""}" data-course-id="${esc(
             course.id,
           )}" title="${esc(course.name)}">
@@ -135,7 +146,8 @@ export function createSidebar(
             </span>
             <span class="course-chevron">${icon("chevron", 14)}</span>
           </button>
-        `;
+        `
+        );
       })
       .join("");
   };

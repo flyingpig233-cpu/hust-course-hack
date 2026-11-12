@@ -18,6 +18,7 @@
 
 pub mod api;
 pub mod crypto;
+pub mod exam;
 pub mod meet;
 pub mod models;
 pub mod watch;
@@ -27,11 +28,18 @@ pub use crypto::{
     ModuleKey, ModuleKeyCache, crypto_self_check, decrypt_module_key_blob, decrypt_secret,
     encrypt_secret, fetch_module_key, hms, parse_hms, watch_points, xor_decode, xor_encode,
 };
+pub use exam::{
+    DEFAULT_ANSWER_BANK_JSON, DEFAULT_ANSWER_BANK_PATH, ZhsAnswerBank, ZhsAnswerSource,
+    ZhsBankEntry, ZhsExamClient, ZhsExamContext, ZhsExamOption, ZhsExamPaper, ZhsExamPart,
+    ZhsExamPlan, ZhsExamQuestion, ZhsFinalExam, ZhsHomework, ZhsQuestionPlan, ZhsSubmitResult,
+    ZhsSubmittedAnswer, parse_ai_analysis, plan_exam,
+};
 pub use meet::{ZhsMeetWatchOptions, plan_meet_minutes, run_meet_watch};
 pub use models::{
-    ZhsChapter, ZhsCourse, ZhsCourseDetail, ZhsExceptionStatus, ZhsLesson, ZhsMeet, ZhsMeetOutcome,
-    ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote, ZhsProgress, ZhsProgressStage, ZhsUser,
-    ZhsVideo, ZhsVideoStudy, ZhsVideoTarget, ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
+    ZhsChapter, ZhsCourse, ZhsCourseDetail, ZhsCourseKind, ZhsExceptionStatus, ZhsLesson, ZhsMeet,
+    ZhsMeetAttendance, ZhsMeetOutcome, ZhsMeetProgress, ZhsMeetVideo, ZhsPrelearningNote,
+    ZhsProgress, ZhsProgressStage, ZhsUser, ZhsVideo, ZhsVideoStudy, ZhsVideoTarget,
+    ZhsWatchOptions, ZhsWatchOutcome, ZhsWatchState,
 };
 pub use watch::{plan_videos, run_video_watch};
 
@@ -66,6 +74,17 @@ pub const MODULE_MEET: u32 = 9;
 /// Shared-course list module id (measured 2026-11-08: `queryShareCourseInfo`
 /// encrypts with the runtime module-13 key, not module 11).
 pub const MODULE_COURSE_LIST: u32 = 13;
+
+/// Homework / exam module id (measured 2026-11-09: the exam APIs encrypt with
+/// the runtime module-3 key).
+pub const MODULE_EXAM: u32 = 3;
+
+/// Main exam-engine API base (`studentExam`).
+pub const EXAM_API_BASE: &str = "https://studentexam-api.zhihuishu.com/studentExam/gateway/t/v1";
+
+/// Taurus exam-engine API base, used by the final-exam list.
+pub const TAURUS_EXAM_API_BASE: &str =
+    "https://taurusexam-api.zhihuishu.com/taurusExam/gateway/t/v1";
 
 /// XOR key for the video `sdsew` report.
 pub const XOR_KEY_VIDEO: &str = "zzpttjd";
@@ -135,6 +154,8 @@ pub const VIDEO_EXCEPTION_PATH: &str = "/gateway/t/v1/cheat/exceptionActionDetai
 pub const MEET_EXCEPTION_PATH: &str = "/app-commserv-live/gateway/t/v1/chect/exceptionActionDetail";
 /// Meet replay watched-minute list.
 pub const MEET_HISTORY_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/getWatchHistory";
+/// Meet sign-in/attendance state (JSONP, `im.zhihuishu.com`).
+pub const MEET_AUTH_PATH: &str = "/live/checkLiveHomeAuth";
 /// Meet replay minute report.
 pub const MEET_SUBMIT_PATH: &str = "/app-commserv-live/gateway/t/v1/pc/live/setWatchHistorySecret";
 /// Meet course list (plain form POST, no `secretStr`).
@@ -150,6 +171,32 @@ pub const MEET_LIST_FALLBACK_PATH: &str =
     "/onlineSchool/json/teachMeeting/listTeachMeetingStu?examV2=ss";
 /// Shared-course list (verified live on 2026-11-08).
 pub const COURSE_LIST_PATH: &str = "/gateway/t/v1/student/course/share/queryShareCourseInfo";
+/// AI 智课 / 智慧课程 list (verified live on 2026-11-09; AES module **13**,
+/// plaintext `{"status":3}`, outer `date` field).
+pub const AI_COURSE_LIST_PATH: &str = "/gateway/t/v1/student/queryStudentAICourseList";
+/// Micro / flipped-course list (module 13; plaintext `{"pageNo":1,"pageSize":5}`).
+pub const MICRO_COURSE_LIST_PATH: &str = "/gateway/t/v1/student/course/share/queryMicroCourseInfo";
+/// Elective-course list (module 13; plaintext `{"schoolId":...}`).
+pub const SELECT_COURSE_LIST_PATH: &str =
+    "/gateway/t/v1/student/course/share/querySelectCourseInfo";
+/// In-school smart-course list (plain GET on `school-platform`).
+pub const SCHOOL_COURSE_LIST_PATH: &str = "/spCourse/queryStudentSchoolCourseList";
+/// Online (hike) course list (best effort; empty for the measured account).
+pub const HIKE_COURSE_LIST_PATH: &str = "/gateway/t/v1/student/online/course/getCourseList";
+/// B2C course list (plain form POST; empty for the measured account).
+pub const B2C_COURSE_LIST_PATH: &str = "/b2cpush/courseDetail/query2CCourseList";
+/// POLYMAS 智能体课 list (plain JSON POST; captured 2026-11-08, returns
+/// 大学生批判性思维 for the account).
+pub const POLYMAS_COURSE_LIST_PATH: &str =
+    "/student-course/student/index/teacherQueryStudentCourse";
+/// `cloudapi.polymas.com` host (POLYMAS 智能体课).
+pub const POLYMAS_BASE: &str = "https://cloudapi.polymas.com";
+/// `school-platform` host (in-school smart courses).
+pub const SCHOOL_PLATFORM_BASE: &str = "https://school-platform.zhihuishu.com";
+/// `hike-teaching-api` host (online course list).
+pub const HIKE_TEACHING_BASE: &str = "https://hike-teaching-api.zhihuishu.com";
+/// `b2cpush` host (B2C course list).
+pub const B2C_BASE: &str = "https://b2cpush.zhihuishu.com";
 /// Shared-course metadata (best effort; used for `isApply`/`classId`).
 pub const QUERY_COURSE_PATH: &str = "/gateway/t/v1/learning/queryCourse";
 /// Replay duration fallback (JSONP, live page endpoint).

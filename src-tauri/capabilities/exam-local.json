@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "exam-local",
+  "description": "Exam window local diagnostics",
+  "windows": [
+    "zhs-exam"
+  ],
+  "permissions": [
+    "allow-zhs-exam-js-error",
+    "allow-zhs-exam-open-exam-login"
+  ]
+}

@@ -26,9 +26,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hust_course_hack::zhihuishu::{
-    VIDEO_MODULE_KEY_FALLBACK, ZhsClient, ZhsEndpoints, ZhsMeet, ZhsMeetWatchOptions, ZhsProgress,
-    ZhsWatchOptions, ZhsWatchState, decrypt_module_key_blob, decrypt_secret, encrypt_secret,
-    xor_decode, xor_encode,
+    VIDEO_MODULE_KEY_FALLBACK, ZhsAnswerBank, ZhsClient, ZhsEndpoints, ZhsExamClient, ZhsHomework,
+    ZhsMeet, ZhsMeetWatchOptions, ZhsProgress, ZhsWatchOptions, ZhsWatchState,
+    decrypt_module_key_blob, decrypt_secret, encrypt_secret, plan_exam, xor_decode, xor_encode,
 };
 use reqwest::cookie::Jar;
 use serde_json::{Value, json};
@@ -114,8 +114,18 @@ pub struct MockState {
     pub fail_set_minute: usize,
     /// Replay duration reported by the meet list and the IM fallback.
     pub replay_duration_secs: u64,
+    /// `signInStatus` returned by `checkLiveHomeAuth` ("2" = signed).
+    pub meet_sign_status: String,
+    /// Fail the attendancce JSONP endpoint (HTTP 500).
+    pub meet_auth_error: bool,
+    /// Fail the replay video-list endpoint (HTTP 503).
+    pub meet_video_error: bool,
     /// Fail the `c/has` module-key handshake (video fallback / meet error tests).
     pub fail_module_key: bool,
+    /// Return an empty `rt` from `lookHomework` (forces the openHomework/openExam fallback).
+    pub fail_look_homework: bool,
+    /// Return the platform slider-verification error from `student/doHomework`.
+    pub homework_captcha: bool,
     /// Return a videolist with no chapters (empty-course boundary test).
     pub empty_video_tree: bool,
 }
@@ -134,7 +144,12 @@ impl Default for MockState {
             drop_connections: false,
             fail_set_minute: 0,
             replay_duration_secs: 7_195,
+            meet_sign_status: "1".to_string(),
+            meet_auth_error: false,
+            meet_video_error: false,
             fail_module_key: false,
+            fail_look_homework: false,
+            homework_captcha: false,
             empty_video_tree: false,
         }
     }
@@ -205,7 +220,11 @@ impl MockServer {
             online: base.clone(),
             stuonline: base.clone(),
             online_service: base.clone(),
-            im: base,
+            im: base.clone(),
+            school_platform: base.clone(),
+            hike: base.clone(),
+            b2c: base.clone(),
+            polymas: base,
         };
         ZhsClient::with_cookie_jar_and_endpoints(Arc::new(Jar::default()), endpoints)
             .expect("build mock client")
@@ -381,6 +400,113 @@ fn live_ok(rt: Value) -> String {
 
 fn study_error(code: i64) -> String {
     json!({"code": code, "message": "mock platform error"}).to_string()
+}
+
+/// Exam (`{currentTime,msg,rt,status}`) response envelope.
+fn exam_ok(rt: Value) -> String {
+    json!({
+        "currentTime": 1_794_219_638_650u64,
+        "msg": "请求成功",
+        "rt": rt,
+        "status": "200",
+    })
+    .to_string()
+}
+
+/// Sanitized homework list entry used by the exam mock.
+fn mock_homework(submitted: bool) -> Value {
+    if submitted {
+        json!({
+            "id": "stu-DONE",
+            "state": 1,
+            "score": "100",
+            "achieveCount": 1,
+            "achieve": 100,
+            "backNum": 0,
+            "isCheckAnswer": 1,
+            "courseId": MOCK_COURSE_ID,
+            "courseName": "测试课程",
+            "examName": "已提交单元测试",
+            "examId": "exam-DONE",
+            "totalScore": "100",
+            "problemNum": 3,
+            "examUserName": "测试老师",
+            "meetCourseType": 0,
+            "chapterId": 1000116293,
+        })
+    } else {
+        json!({
+            "id": "stu-EXAM1",
+            "state": 1,
+            "score": null,
+            "achieveCount": 0,
+            "achieve": 0,
+            "backNum": 3,
+            "isCheckAnswer": 0,
+            "courseId": MOCK_COURSE_ID,
+            "courseName": "测试课程",
+            "examName": "第一章单元测试",
+            "examId": "exam-EXAM1",
+            "totalScore": "100",
+            "problemNum": 3,
+            "examUserName": "测试老师",
+            "meetCourseType": 0,
+            "chapterId": 1000116293,
+        })
+    }
+}
+
+/// Sanitized paper payload (three questions: single, multiple, judge).
+fn mock_paper_rt() -> Value {
+    json!({
+        "id": null,
+        "score": "100",
+        "examBase": {
+            "id": "exam-EXAM1",
+            "name": "第一章单元测试",
+            "courseName": "测试课程",
+            "problemNum": 3,
+            "totalScore": "100",
+            "chapterId": 1000116293,
+            "workExamParts": [{
+                "id": null,
+                "startSort": 1,
+                "questionCount": 3,
+                "questionDtos": [{
+                    "id": 7001,
+                    "name": "测试单选题干（ ）。",
+                    "questionType": {"id": 1, "name": "单选题"},
+                    "questionOptions": [
+                        {"id": 9001, "content": "甲选项"},
+                        {"id": 9002, "content": "乙选项"},
+                        {"id": 9003, "content": "丙选项"},
+                        {"id": 9004, "content": "丁选项"}
+                    ],
+                    "questionScore": "10",
+                    "eid": null
+                }, {
+                    "id": 7002,
+                    "name": "测试多选题干（ ）。",
+                    "questionType": {"id": 2, "name": "多选题"},
+                    "questionOptions": [
+                        {"id": 9101, "content": "多选甲"},
+                        {"id": 9102, "content": "多选乙"},
+                        {"id": 9103, "content": "多选丙"}
+                    ],
+                    "questionScore": "20"
+                }, {
+                    "id": 7003,
+                    "name": "测试判断题干（ ）。",
+                    "questionType": {"id": 3, "name": "判断题"},
+                    "questionOptions": [
+                        {"id": 9201, "content": "正确"},
+                        {"id": 9202, "content": "错误"}
+                    ],
+                    "questionScore": "10"
+                }]
+            }]
+        }
+    })
 }
 
 /// Route one request to the mock handler.
@@ -603,7 +729,36 @@ fn route(
         );
     }
 
+    if path.contains("/live/checkLiveHomeAuth") {
+        if state.meet_auth_error {
+            return (
+                500,
+                "application/json".to_string(),
+                json!({"msg": "mock attendance failure"}).to_string(),
+            );
+        }
+        let body = json!({
+            "signInStatus": state.meet_sign_status,
+            "openStatus": "2",
+            "courseLeaveStatus": "2",
+            "auth": "-1",
+            "courseEndStatus": "1",
+        });
+        return (
+            200,
+            "application/javascript".to_string(),
+            format!("checkLiveHomeAuth({body})"),
+        );
+    }
+
     if path.contains("/livehome/getVideosByLiveId") {
+        if state.meet_video_error {
+            return (
+                503,
+                "application/json".to_string(),
+                json!({"msg": "mock replay video failure"}).to_string(),
+            );
+        }
         // JSONP response shape used by the live page.
         return (
             200,
@@ -661,6 +816,135 @@ fn route(
             200,
             "application/json".to_string(),
             live_ok(json!({"lock": state.meet_lock})),
+        );
+    }
+
+    if path.contains("/exam/getLoginSchoolInfo") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!({"schoolId": 360})),
+        );
+    }
+
+    if path.contains("/student/getStudentHomework") {
+        let flag = captured
+            .secret
+            .as_ref()
+            .and_then(|secret| secret.get("flag"))
+            .and_then(Value::as_i64)
+            .unwrap_or(1);
+        let list = if flag == 2 {
+            vec![mock_homework(true)]
+        } else {
+            vec![mock_homework(false)]
+        };
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!({
+                "result": "success",
+                "next": -1,
+                "studentHomeworkList": list,
+            })),
+        );
+    }
+
+    if path.contains("/student/getStudentFinalExam") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!([{
+                "id": "stu-FINAL",
+                "state": 1,
+                "examId": "exam-FINAL",
+                "examName": "教程考试",
+                "problemNum": 3,
+                "totalScore": "100",
+                "limitTime": 90,
+                "faStudentExamRemainCount": 1,
+                "courseId": MOCK_COURSE_ID,
+            }])),
+        );
+    }
+
+    if path.contains("/student/lookHomework") {
+        if state.fail_look_homework {
+            return (200, "application/json".to_string(), exam_ok(Value::Null));
+        }
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(mock_paper_rt()),
+        );
+    }
+
+    if path.contains("/student/doHomework") {
+        if state.homework_captcha {
+            return (
+                200,
+                "application/json".to_string(),
+                json!({
+                    "currentTime": 1_794_219_638_650u64,
+                    "code": -12,
+                    "msg": "弹出滑块验证",
+                    "rt": null,
+                })
+                .to_string(),
+            );
+        }
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(mock_paper_rt()),
+        );
+    }
+
+    if path.contains("/student/doExam") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(mock_paper_rt()),
+        );
+    }
+
+    if path.contains("/answer/getStuAnswerInfo") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!({
+                "7001": {"score": "10", "isCurrent": "1", "questionId": "7001", "answer": "9004", "stuExamId": "stu-DONE"},
+                "7002": {"score": "20", "isCurrent": "1", "questionId": "7002", "answer": "9101,9103", "stuExamId": "stu-DONE"},
+                "7003": {"score": "10", "isCurrent": "1", "questionId": "7003", "answer": "9201", "stuExamId": "stu-DONE"},
+            })),
+        );
+    }
+
+    if path.contains("/answer/checkAnswerSheetInfo") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!({
+                "7001": {"score": "10", "isCurrent": "1", "totalScore": ""},
+                "7002": {"score": "20", "isCurrent": "1", "totalScore": ""},
+                "7003": {"score": "10", "isCurrent": "1", "totalScore": ""},
+            })),
+        );
+    }
+
+    if path.contains("/answer/saveStudentAnswer") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!({"statu": "1"})),
+        );
+    }
+
+    if path.contains("/answer/submit") {
+        return (
+            200,
+            "application/json".to_string(),
+            exam_ok(json!({"msg": "提交成功", "score": "30", "statu": "0"})),
         );
     }
 
@@ -807,6 +1091,47 @@ async fn video_flow_logs_in_lists_tree_and_completes_videos() {
     // Anti-cheat check after every report.
     let checks = server.requests_for("/cheat/exceptionActionDetail");
     assert_eq!(checks.len(), 2);
+}
+
+#[tokio::test]
+async fn course_detail_with_states_uses_watch_state_for_completion() {
+    let server = MockServer::start();
+    let client = server.client();
+    let course = resolve_mock_course(&client).await;
+
+    // `videolist` reports both videos as unfinished (`isStudiedLesson: 0`), so
+    // the raw tree is stale; `queryStuyInfo` is the authoritative record.
+    server.configure(|state| state.video_watch_state = 1);
+    let detail = client
+        .course_detail_with_states(&course)
+        .await
+        .expect("detail with states");
+    assert_eq!(detail.total_videos(), 2);
+    assert_eq!(detail.completed_videos(), 2);
+    assert!(
+        detail.chapters[0].lessons[0]
+            .videos
+            .iter()
+            .all(|video| video.is_studied == Some(1))
+    );
+
+    // One batched query for the whole tree, carrying both ids and one
+    // de-duplicated lesson id.
+    let queries = server.requests_for("/learning/queryStuyInfo");
+    assert_eq!(queries.len(), 1, "the completion refresh must batch");
+    let secret = queries[0].secret();
+    assert_eq!(secret["recruitId"], MOCK_RECRUIT_ID);
+    assert_eq!(secret["lessonVideoIds"].as_array().map(Vec::len), Some(2));
+    assert_eq!(secret["lessonIds"].as_array().map(Vec::len), Some(1));
+
+    // An in-progress video must override a stale `isStudiedLesson=1` as well,
+    // so the completion count follows the platform record in both directions.
+    server.configure(|state| state.video_watch_state = 2);
+    let detail = client
+        .course_detail_with_states(&course)
+        .await
+        .expect("detail with states");
+    assert_eq!(detail.completed_videos(), 0);
 }
 
 #[tokio::test]
@@ -1040,6 +1365,7 @@ fn fast_meet_options() -> ZhsMeetWatchOptions {
         delay_max_ms: 30,
         circuit_breaker: false,
         check_every: 100,
+        include_signed: false,
     }
 }
 
@@ -1158,6 +1484,7 @@ async fn meet_flow_trips_the_circuit_breaker_on_a_lock() {
         delay_max_ms: 2,
         circuit_breaker: true,
         check_every: 1,
+        include_signed: false,
     };
     let outcome = client
         .meet_watch(&meet, &options, &no_progress)
@@ -1191,6 +1518,7 @@ async fn meet_flow_dry_run_reports_no_minutes_and_stays_in_coverage() {
             delay_max_ms: 2,
             circuit_breaker: false,
             check_every: 10,
+            include_signed: false,
         };
         let outcome = client
             .meet_watch(&meet, &options, &no_progress)
@@ -1226,6 +1554,139 @@ async fn meet_flow_can_be_cancelled_before_the_first_report() {
         .expect("cancelled run");
     assert_eq!(outcome.state, ZhsWatchState::Cancelled);
     assert!(server.requests_for("/setWatchHistorySecret").is_empty());
+}
+
+#[tokio::test]
+async fn meet_attendance_parses_the_jsonp_signed_state() {
+    let server = MockServer::start();
+    server.configure(|state| state.meet_sign_status = "2".to_string());
+    let (client, meet) = meet_fixture(&server).await;
+
+    let attendance = client.meet_attendance(&meet).await.expect("attendance");
+    assert!(attendance.signed);
+    assert_eq!(attendance.sign_status.as_deref(), Some("2"));
+    assert_eq!(attendance.open_status.as_deref(), Some("2"));
+    assert_eq!(attendance.course_leave_status.as_deref(), Some("2"));
+    assert_eq!(attendance.course_end_status.as_deref(), Some("1"));
+    assert_eq!(attendance.raw["auth"], "-1");
+
+    let requests = server.requests_for("/live/checkLiveHomeAuth");
+    assert_eq!(requests.len(), 1);
+    let query = &requests[0].query;
+    assert_eq!(
+        query.get("liveCourseId").map(String::as_str),
+        Some("13416762")
+    );
+    assert_eq!(
+        query.get("courseId").map(String::as_str),
+        Some("1000011214")
+    );
+    assert_eq!(query.get("recruitId").map(String::as_str), Some("463667"));
+    assert_eq!(
+        query.get("callback").map(String::as_str),
+        Some("checkLiveHomeAuth")
+    );
+    assert!(query.get("userId").is_some());
+}
+
+#[tokio::test]
+async fn meet_progress_uses_attendance_as_the_completion_signal() {
+    // Unsigned: replay minutes decide, as before.
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "1".to_string();
+        state.replay_duration_secs = 600;
+        state.history = vec![1, 2, 3];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client
+        .meet_progress(&meet)
+        .await
+        .expect("unsigned progress");
+    assert!(!progress.attendance_satisfied());
+    assert!(!progress.completed);
+    assert_eq!(progress.total_minutes, 10);
+    assert_eq!(progress.percent, 30);
+
+    // Signed: replay duration may be unavailable without failing the status;
+    // 签到完成 counts as replay completion (100%).
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "2".to_string();
+        state.replay_duration_secs = 0;
+        state.meet_video_error = true;
+        state.history = vec![];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client.meet_progress(&meet).await.expect("signed progress");
+    assert!(progress.attendance_satisfied());
+    assert!(progress.attendance.known());
+    assert!(progress.completed);
+    assert_eq!(progress.total_minutes, 0);
+    assert_eq!(progress.watched_count, 0);
+    assert_eq!(progress.percent, 100);
+
+    // Signed with a known duration: watched == total and 100%.
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "2".to_string();
+        state.replay_duration_secs = 600;
+        state.history = vec![];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client.meet_progress(&meet).await.expect("signed progress");
+    assert!(progress.completed);
+    assert_eq!(progress.total_minutes, 10);
+    assert_eq!(progress.watched_count, 10);
+    assert_eq!(progress.percent, 100);
+}
+
+#[tokio::test]
+async fn meet_progress_tolerates_an_attendance_endpoint_error() {
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_auth_error = true;
+        state.replay_duration_secs = 600;
+        state.history = vec![1];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+    let progress = client
+        .meet_progress(&meet)
+        .await
+        .expect("replay progress still answers when attendance is down");
+    assert!(!progress.attendance_satisfied());
+    assert!(!progress.attendance.known());
+    assert_eq!(progress.total_minutes, 10);
+}
+
+#[tokio::test]
+async fn meet_watch_skips_signed_meetings_unless_requested() {
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.meet_sign_status = "2".to_string();
+        state.history = vec![];
+    });
+    let (client, meet) = meet_fixture(&server).await;
+
+    let outcome = client
+        .meet_watch(&meet, &fast_meet_options(), &no_progress)
+        .await
+        .expect("signed watch");
+    assert_eq!(outcome.state, ZhsWatchState::Skip);
+    assert!(outcome.message.contains("已签到"), "{}", outcome.message);
+    assert!(
+        server.requests_for("/setWatchHistorySecret").is_empty(),
+        "a signed meeting must not report replay minutes"
+    );
+
+    let mut options = fast_meet_options();
+    options.include_signed = true;
+    options.dry_run = true;
+    let outcome = client
+        .meet_watch(&meet, &options, &no_progress)
+        .await
+        .expect("include-signed dry run");
+    assert_eq!(outcome.state, ZhsWatchState::DryRun);
 }
 
 #[tokio::test]
@@ -1461,4 +1922,229 @@ async fn mock_records_report_timestamps_for_rate_limit_assertions() {
 fn xor_encode_fields(fields: &[u64]) -> String {
     let fields: Vec<String> = fields.iter().map(u64::to_string).collect();
     xor_encode(&fields, "zhihuishu")
+}
+
+// -------------------------------------------------------------------------
+// Exam / homework flow (module 3 secretStr)
+// -------------------------------------------------------------------------
+
+fn exam_client(server: &MockServer, client: &ZhsClient) -> ZhsExamClient {
+    // Both exam engines are routed at the same mock listener.
+    ZhsExamClient::with_bases(client.clone(), server.base(), server.base())
+}
+
+#[tokio::test]
+async fn exam_flow_reads_lists_paper_answers_and_submits() {
+    let server = MockServer::start();
+    let client = server.client();
+    let exams = exam_client(&server, &client);
+
+    let homeworks = exams
+        .list_homework(MOCK_RECRUIT_ID, MOCK_COURSE_ID, false)
+        .await
+        .expect("homework list");
+    assert_eq!(homeworks.len(), 1);
+    let homework = &homeworks[0];
+    assert_eq!(homework.exam_id, "exam-EXAM1");
+    assert_eq!(homework.stu_exam_id, "stu-EXAM1");
+    assert_eq!(homework.name, "第一章单元测试");
+    assert_eq!(homework.problem_num, Some(3));
+    assert_eq!(homework.back_num, Some(3));
+
+    // Measured `getStudentHomework` payload: recruitId string, courseId number,
+    // no timestamp field.
+    let requests = server.requests_for("/student/getStudentHomework");
+    assert_eq!(requests.len(), 1);
+    let secret = requests[0].secret();
+    assert_eq!(secret["recruitId"], "463667");
+    assert_eq!(secret["courseId"], MOCK_COURSE_ID);
+    assert_eq!(secret["flag"], 1);
+    assert_eq!(secret["pageSize"], 100);
+    assert_eq!(secret["pageNum"], 0);
+    assert!(secret.get("dateFormate").is_none());
+
+    let paper = exams.paper(homework).await.expect("paper");
+    assert_eq!(paper.question_count(), 3);
+    let questions: Vec<_> = paper.questions().collect();
+    assert!(questions[0].stem.contains("单选题干"));
+    assert_eq!(questions[0].kind_name, "单选题");
+    assert_eq!(questions[0].options[3].content, "丁选项");
+    assert!(questions[1].is_multiple());
+    assert_eq!(questions[1].score, 20);
+
+    // Measured `lookHomework` payload uses string ids.
+    let look = server.requests_for("/student/lookHomework");
+    assert_eq!(look.len(), 1);
+    let secret = look[0].secret();
+    assert_eq!(secret["recruitId"], "463667");
+    assert_eq!(secret["studentExamId"], "stu-EXAM1");
+    assert_eq!(secret["examId"], "exam-EXAM1");
+    assert_eq!(secret["schoolId"], "360");
+    assert_eq!(secret["courseId"], "1000011214");
+
+    let submitted_homework = ZhsHomework {
+        stu_exam_id: "stu-DONE".to_string(),
+        exam_id: "exam-DONE".to_string(),
+        ..homework.clone()
+    };
+    let answers = exams
+        .submitted_answers(&submitted_homework, &paper)
+        .await
+        .expect("submitted answers");
+    assert_eq!(answers.len(), 3);
+    let multiple = answers
+        .iter()
+        .find(|answer| answer.question_id == "7002")
+        .expect("multiple answer");
+    assert_eq!(multiple.option_ids, vec!["9101", "9103"]);
+    assert_eq!(multiple.score, 20.0);
+    let answer_info = server.requests_for("/answer/getStuAnswerInfo");
+    assert_eq!(answer_info.len(), 1);
+    assert_eq!(
+        answer_info[0].secret()["questionIds"],
+        "7001,7002,7003",
+        "getStuAnswerInfo requires the paper questionIds"
+    );
+
+    let saved = exams
+        .save_answer(
+            homework,
+            questions[0],
+            &[questions[0].options[3].id.clone()],
+        )
+        .await
+        .expect("save answer");
+    assert!(saved);
+    let saves = server.requests_for("/answer/saveStudentAnswer");
+    assert_eq!(saves.len(), 1);
+    let secret = saves[0].secret();
+    assert_eq!(secret["recruitId"], "463667");
+    let raw = secret["stuExamAnswer"].as_str().expect("stuExamAnswer");
+    let parsed: Value = serde_json::from_str(raw).expect("stuExamAnswer JSON");
+    let record = &parsed[0];
+    assert_eq!(record["examId"], "exam-EXAM1");
+    assert_eq!(record["recruitId"], "463667");
+    assert_eq!(record["stuExamId"], "stu-EXAM1");
+    assert_eq!(record["eid"], "7001");
+    assert_eq!(record["schoolId"], "360");
+    assert_eq!(record["examType"], "");
+    assert_eq!(record["fromType"], 3);
+    assert_eq!(record["answer"], "9004");
+    assert_eq!(record["questionType"], 1);
+
+    let result = exams.submit(homework).await.expect("submit");
+    assert_eq!(result.statu, "0");
+    assert_eq!(result.score, Some(30.0));
+    assert_eq!(result.message, "提交成功");
+    let submits = server.requests_for("/answer/submit");
+    assert_eq!(submits.len(), 1);
+    assert_eq!(submits[0].secret()["studentExamId"], "stu-EXAM1");
+}
+
+#[tokio::test]
+async fn exam_flow_lists_finals_and_grows_the_bank_from_submission() {
+    let server = MockServer::start();
+    let client = server.client();
+    let exams = exam_client(&server, &client);
+
+    let finals = exams
+        .list_final_exams(MOCK_RECRUIT_ID, MOCK_COURSE_ID)
+        .await
+        .expect("final exams");
+    assert_eq!(finals.len(), 1);
+    assert_eq!(finals[0].exam_id, "exam-FINAL");
+    assert_eq!(finals[0].limit_time, Some(90));
+    assert_eq!(finals[0].remain_count, Some(1));
+
+    let submitted = exams
+        .list_homework(MOCK_RECRUIT_ID, MOCK_COURSE_ID, true)
+        .await
+        .expect("submitted homework");
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0].exam_id, "exam-DONE");
+
+    let paper = exams.paper(&submitted[0]).await.expect("submitted paper");
+    let answers = exams
+        .submitted_answers(&submitted[0], &paper)
+        .await
+        .expect("submitted answers");
+    let mut bank = ZhsAnswerBank::default();
+    let recorded = bank.record_submitted(&paper, &answers, 1_794_219_638);
+    assert_eq!(recorded, 3, "all mock questions are full marks");
+    assert_eq!(bank.len(), 3);
+
+    let unsubmitted = exams
+        .list_homework(MOCK_RECRUIT_ID, MOCK_COURSE_ID, false)
+        .await
+        .expect("unsubmitted homework");
+    let paper = exams.paper(&unsubmitted[0]).await.expect("paper");
+    let context = exams
+        .context_for(&unsubmitted[0])
+        .await
+        .expect("exam context");
+    let plan = plan_exam(&paper, &context, &bank);
+    assert!(plan.is_complete(), "plan: {plan:?}");
+    assert_eq!(plan.questions.len(), 3);
+    assert_eq!(
+        plan.questions[0].option_contents,
+        vec!["丁选项".to_string()]
+    );
+    assert_eq!(
+        plan.questions[1].option_contents,
+        vec!["多选甲".to_string(), "多选丙".to_string()]
+    );
+    assert_eq!(plan.questions[2].option_contents, vec!["正确".to_string()]);
+}
+
+#[tokio::test]
+async fn exam_paper_falls_back_to_open_homework() {
+    let server = MockServer::start();
+    server.configure(|state| state.fail_look_homework = true);
+    let client = server.client();
+    let exams = exam_client(&server, &client);
+
+    let homeworks = exams
+        .list_homework(MOCK_RECRUIT_ID, MOCK_COURSE_ID, false)
+        .await
+        .expect("homework list");
+    let paper = exams
+        .paper_for_answering(&homeworks[0])
+        .await
+        .expect("openHomework fallback");
+    assert_eq!(paper.question_count(), 3);
+    let open = server.requests_for("/student/doHomework");
+    assert_eq!(open.len(), 1);
+    let secret = open[0].secret();
+    assert_eq!(secret["recruitId"], "463667");
+    assert_eq!(secret["examId"], "exam-EXAM1");
+    assert_eq!(secret["studentExamId"], "stu-EXAM1");
+    assert_eq!(secret["schoolId"], "360");
+    assert_eq!(secret["courseId"], "1000011214");
+}
+
+#[tokio::test]
+async fn exam_paper_reports_slider_captcha_without_trying_open_exam() {
+    let server = MockServer::start();
+    server.configure(|state| {
+        state.fail_look_homework = true;
+        state.homework_captcha = true;
+    });
+    let client = server.client();
+    let exams = exam_client(&server, &client);
+
+    let homeworks = exams
+        .list_homework(MOCK_RECRUIT_ID, MOCK_COURSE_ID, false)
+        .await
+        .expect("homework list");
+    let error = exams
+        .paper_for_answering(&homeworks[0])
+        .await
+        .expect_err("slider captcha must abort instead of trying doExam");
+    let text = format!("{error:#}");
+    assert!(text.contains("滑块"), "error = {text}");
+    assert_eq!(
+        server.requests_for("/student/doExam").len(),
+        0,
+        "doExam must not be attempted when the platform asks for verification"
+    );
 }

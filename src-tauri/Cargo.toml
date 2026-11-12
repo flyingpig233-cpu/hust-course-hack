@@ -22,3 +22,11 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 url = "2"
+
+# The exam窗口 injects the Zhihuishu session into its own WebView2 profile via
+# ICoreWebView2CookieManager. Both crates are already transitive dependencies of
+# Tauri 2.12.5 (webview2-com 0.39.1 / windows 0.62.2), so the pin mirrors the
+# locked tree exactly.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", default-features = false }
