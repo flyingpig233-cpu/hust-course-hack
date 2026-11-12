@@ -131,3 +131,138 @@ input, textarea, select { accent-color: var(--accent); }
   .connect-view { margin-top: 24px; }
   .connect-card { padding: 20px; }
 }
+
+/* Application layout: a persistent top bar, navigation drawer and workspace. */
+.app-shell { grid-template-columns: 272px minmax(0, 1fr); grid-template-rows: 64px minmax(0, 1fr); }
+.app-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 24px; padding: 0 28px; background: #fff; border-bottom: 1px solid var(--line); box-shadow: 0 2px 5px rgba(0,0,0,.04); z-index: 2; }
+.app-bar-brand { width: 216px; flex: none; display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 600; }
+.app-bar-symbol { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; background: var(--accent); color: #fff; font-size: 17px; }
+.app-bar-context { color: var(--ink-2); font-size: 14px; font-weight: 500; }
+.app-bar-status { margin-left: auto; padding: 6px 12px; border-radius: 16px; background: #f1f4f8; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+.sidebar { grid-row: 2; padding: 24px 16px 16px; gap: 18px; background: #fff; }
+.drawer-heading { display: flex; flex-direction: column; gap: 3px; padding: 0 8px; font-size: 15px; font-weight: 700; }
+.drawer-platform { color: var(--muted); font-size: 12px; font-weight: 400; }
+.sidebar-nav { padding-top: 16px; border-top: 1px solid var(--line); }
+.course-item { min-height: 58px; padding: 8px 10px; }
+.course-item.is-active { background: #e8f1fb; }
+.main { grid-row: 2; min-width: 0; padding: 36px 40px 56px; background: #f7f9fc; }
+
+/* The entry screen groups platform selection and authentication into one task. */
+.connect-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 480px); align-items: center; gap: clamp(32px, 6vw, 88px); max-width: 1120px; margin: clamp(24px, 7vh, 80px) auto 0; padding: 0; }
+.connect-intro h1 { margin: 0 0 16px; font-size: clamp(32px, 3.4vw, 44px); line-height: 1.2; letter-spacing: -.025em; font-weight: 600; }
+.connect-lead { max-width: 440px; margin: 0; font-size: 16px; }
+.connect-benefits { display: grid; gap: 24px; margin-top: 40px; }
+.connect-benefits > div { display: flex; align-items: center; gap: 16px; }
+.benefit-icon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border-radius: 12px; color: var(--accent); background: var(--accent-soft); }
+.connect-benefits strong, .connect-benefits small { display: block; }
+.connect-benefits strong { font-size: 14px; font-weight: 600; }
+.connect-benefits small { margin-top: 3px; font-size: 13px; color: var(--muted); }
+.connect-card { max-width: none; padding: 28px; border-radius: 12px; box-shadow: var(--shadow-md); }
+.connect-card-head { margin-bottom: 28px; }
+.connect-card h2 { font-size: 22px; margin-bottom: 6px; }
+.connect-card p { font-size: 13px; }
+.connect-field-label { margin-bottom: 10px; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.platform-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 24px; }
+.platform-option { min-width: 0; justify-content: center; }
+.login-panel { padding: 20px; background: #f6f8fc; border: 1px solid var(--line); border-radius: 8px; }
+.login-panel-title { font-size: 15px; font-weight: 600; }
+.login-panel p { margin: 4px 0 20px; }
+.connect-card .demo-notice { margin: 20px 0 0; }
+
+/* Course surfaces use a consistent hierarchy: page title, overview, then content. */
+.home-view, .course-view { max-width: 1280px; }
+.home-head, .course-head { align-items: center; margin-bottom: 28px; }
+.home-head h1, .course-head h1 { font-size: 28px; line-height: 1.3; }
+.home-sub, .course-sub { font-size: 13px; }
+.course-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; }
+.course-card { min-height: 190px; padding: 20px; border-radius: 10px; }
+.course-card-top { margin-bottom: 12px; }
+.course-card-cta { padding-top: 18px; }
+.stat-strip { gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow-sm); }
+.stat-card { min-width: 0; padding: 18px 20px; border: 0; border-radius: 0; box-shadow: none; }
+.stat-card + .stat-card { border-left: 1px solid var(--line); }
+.stat-card strong { font-size: 24px; }
+.stat-label, .stat-head { font-size: 12px; }
+.tab-bar { margin-top: 28px; margin-bottom: 20px; overflow-x: auto; }
+.tab { min-height: 48px; padding: 12px 20px; white-space: nowrap; font-weight: 500; }
+.tree { gap: 8px; }
+.tree-node { border-radius: 8px; box-shadow: none; }
+.tree-summary { min-height: 52px; padding: 12px 16px; }
+.tree-body .tree-node { background: #fff; }
+.table-wrap, .card-block, .quiz-group, .meet-card { border-radius: 8px; }
+.btn:focus-visible, .course-item:focus-visible, .course-card:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 1100px) {
+  .app-shell { grid-template-columns: 240px minmax(0, 1fr); }
+  .app-bar-brand { width: 184px; }
+  .main { padding: 28px 24px 48px; }
+  .connect-view { grid-template-columns: 1fr; max-width: 640px; gap: 28px; margin-top: 12px; }
+  .connect-benefits { grid-template-columns: 1fr 1fr; margin-top: 24px; }
+}
+@media (max-width: 700px) {
+  .app-shell { grid-template-columns: 180px minmax(0, 1fr); grid-template-rows: 56px minmax(0, 1fr); }
+  .app-bar { padding: 0 16px; gap: 12px; }
+  .app-bar-brand { width: auto; font-size: 15px; }
+  .app-bar-context { display: none; }
+  .sidebar { padding: 16px 8px; }
+  .main { padding: 20px 14px 40px; }
+  .connect-benefits { grid-template-columns: 1fr; gap: 14px; }
+  .connect-card { padding: 18px; }
+  .platform-switch { display: grid; grid-template-columns: 1fr; }
+  .platform-option { justify-content: flex-start; }
+  .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-card + .stat-card { border-left: 0; }
+  .stat-card:nth-child(even) { border-left: 1px solid var(--line); }
+  .stat-card:nth-child(n+3) { border-top: 1px solid var(--line); }
+  .home-head, .course-head { align-items: flex-start; flex-direction: column; }
+}
+.connect-privacy { display: flex; align-items: center; gap: 8px; margin-top: 32px; color: var(--muted); font-size: 13px; }
+
+/* The desktop title bar shares the app bar; only empty bar space drags. */
+.app-bar { padding-right: 0; user-select: none; }
+.app-bar-brand, .app-bar-context, .app-bar-status { pointer-events: none; }
+.window-controls { align-self: stretch; display: flex; margin-left: 0; }
+.window-control { width: 46px; height: 100%; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ink-2); }
+.window-control:hover { background: #edf1f6; }
+.window-control:active { background: #dfe6ee; }
+.window-control:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.window-close:hover { background: #c42b1c; color: #fff; }
+.window-close:active { background: #a82619; }
+.window-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.2; }
+.window-restore-icon, .window-control.is-maximized .window-maximize-icon { display: none; }
+.window-control.is-maximized .window-restore-icon { display: block; }
+@media (max-width: 700px) { .app-bar { padding-right: 0; } .window-control { width: 38px; } }
+
+/* Minimal entry screen and quiet, compact task controls. */
+.app-shell.is-disconnected .sidebar,
+.app-shell.is-disconnected .app-bar-status { display: none; }
+.app-shell.is-disconnected .main { grid-column: 1 / -1; }
+.app-shell.is-disconnected .window-controls { margin-left: auto; }
+.connect-view { display: block; width: 100%; max-width: 440px; margin: clamp(24px, 12vh, 120px) auto 0; }
+.connect-card { padding: 32px; box-shadow: var(--shadow-sm); }
+.connect-card-head { margin-bottom: 24px; }
+.connect-card h1 { margin: 0; font-size: 24px; font-weight: 600; }
+.connect-card .platform-switch { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 24px; }
+.connect-card .platform-option { justify-content: center; padding: 10px 6px; }
+.connect-card .platform-mark { display: none; }
+.login-panel { padding: 0; border: 0; background: transparent; }
+.login-panel .btn { width: 100%; }
+.sidebar-nav { padding-top: 0; border-top: 0; }
+.course-item { min-height: 48px; }
+.course-name { color: inherit; }
+.tab-bar { overflow-y: hidden; }
+.sidebar-link { width: 100%; padding: 8px; border-radius: 6px; }
+.course-card { min-height: 140px; box-shadow: none; }
+.course-card h3 { margin-bottom: 0; }
+.zhs-add-course { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.modal-body > .settings-grid:not(.quiz-settings) { display: flex; flex-wrap: wrap; gap: 16px 24px; margin-top: 0; }
+.check.switch-row.risk-confirm { padding: 0; border: 0; background: transparent; align-items: center; }
+.advanced-settings { margin: 16px 0; border-top: 1px solid var(--line); }
+.advanced-settings > summary { padding-top: 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.advanced-settings > .settings-grid { margin-bottom: 12px; }
+.risk-summary { padding: 0; margin: 16px 0; border: 0; background: transparent; color: var(--muted); }
+.watch-log:empty { margin: 0; }
+.modal [hidden] { display: none !important; }
+@media (max-width: 700px) {
+  .connect-card { padding: 24px; }
+  .connect-card .platform-switch { display: grid; }
+}

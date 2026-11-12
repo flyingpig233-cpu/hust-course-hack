@@ -14,6 +14,7 @@
       {
         "label": "main",
         "title": "HUST Course Hack",
+        "decorations": false,
         "width": 1280,
         "height": 840,
         "minWidth": 1000,

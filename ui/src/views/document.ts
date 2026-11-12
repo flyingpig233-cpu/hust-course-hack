@@ -39,47 +39,18 @@ export function openDocumentModal(options: DocumentModalOptions): void {
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">文档任务</div>
-        <h2>完成文档任务点</h2>
+        <h2>完成文档</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <p class="modal-lead">
-        按 Chaoxing 官方客户端协议直接完成文档任务点：先读取卡片的
-        <code>AttachmentSetting</code> 取得 <code>jtoken</code>，再上报
-        <code>/mooc-ans/job/document</code>。不会打开平台阅读器，每次执行都会重新抓取课程与 token。
-      </p>
-      ${
-        options.jobId
-          ? `<div class="inline-notice">${icon("link", 14)} 仅处理任务点 <code>${esc(
-              options.jobId,
-            )}</code></div>`
-          : ""
-      }
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 关闭“试运行”后会向平台发送真实的文档完成请求。建议先勾选“试运行”确认流程。
-      </div>
-      <div class="settings-grid">
-        <label class="field">
-          <span>最多处理文档数</span>
-          <input id="document-max" type="number" min="1" step="1" placeholder="不限" />
-          <em>用于先跑一个小批量</em>
-        </label>
-        <label class="check switch-row">
-          <input id="document-include-completed" type="checkbox" />
-          <span>重新上报已完成的文档</span>
-        </label>
-        <label class="check switch-row">
-          <input id="document-dry" type="checkbox" checked />
-          <span>试运行，只生成计划</span>
-        </label>
-      </div>
+      ${options.jobId ? `<div class="inline-notice">当前文档</div>` : ""}
+      <p>确认完成文档？此操作将向平台提交记录。</p>
 
-      <div class="watch-progress" id="document-progress">
+      <div class="watch-progress" id="document-progress" hidden>
         <div class="watch-status-row">
-          <span id="document-status">准备就绪</span>
+          <span id="document-status">就绪</span>
           <span id="document-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="document-fill" style="width:0%"></div></div>
@@ -89,7 +60,7 @@ export function openDocumentModal(options: DocumentModalOptions): void {
     <div class="modal-foot">
       <button class="btn btn-ghost" id="document-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="document-start">${icon("document", 15)} 生成计划</button>
+      <button class="btn btn-primary" id="document-start">${icon("document", 15)} 确认执行</button>
     </div>
   `;
 
@@ -99,16 +70,7 @@ export function openDocumentModal(options: DocumentModalOptions): void {
   const log = qs<HTMLElement>("#document-log", content);
   const startButton = qs<HTMLButtonElement>("#document-start", content);
   const stopButton = qs<HTMLButtonElement>("#document-stop", content);
-  const dryRun = qs<HTMLInputElement>("#document-dry", content);
-  const includeCompleted = qs<HTMLInputElement>(
-    "#document-include-completed",
-    content,
-  );
-  const maxInput = qs<HTMLInputElement>("#document-max", content);
 
-  // Re-reporting one completed document must not be filtered out by the
-  // backend's "skip completed" rule.
-  if (options.jobId) includeCompleted.checked = true;
 
   let running = false;
   let closed = false;
@@ -143,25 +105,14 @@ export function openDocumentModal(options: DocumentModalOptions): void {
   };
 
   const setRunningUi = (busy: boolean) => {
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
     startButton.disabled = busy;
     stopButton.hidden = !busy;
     stopButton.disabled = false;
     stopButton.innerHTML = `${icon("stop", 14)} 停止`;
-    for (const input of [maxInput, includeCompleted, dryRun]) {
-      input.disabled = busy;
-    }
   };
 
-  const syncStart = () => {
-    if (running) return;
-    startButton.innerHTML = dryRun.checked
-      ? `${icon("document", 15)} 生成计划`
-      : `${icon("document", 15)} 开始完成`;
-  };
-
-  dryRun.addEventListener("change", syncStart);
-  syncStart();
 
   const rowTemplate = (progress: Extract<JobProgress, { kind: "document" }>) => {
     const wrapper = document.createElement("div");
@@ -201,9 +152,9 @@ export function openDocumentModal(options: DocumentModalOptions): void {
       detail.textContent = progress.message
         ? progress.message
         : progress.status === "running"
-          ? "正在读取 jtoken 并上报…"
+          ? "处理中…"
           : progress.status === "completed"
-            ? "服务端已确认 status=true"
+            ? "已完成"
             : "";
     }
     row.classList.toggle("is-passed", progress.status === "completed");
@@ -220,7 +171,7 @@ export function openDocumentModal(options: DocumentModalOptions): void {
   const handleProgress = (progress: JobProgress) => {
     if (closed) return;
     if (progress.kind === "crawl") {
-      setStatus("正在刷新课程与文档信息…");
+      setStatus("加载中…");
       setProgress(progress.done, progress.total);
       return;
     }
@@ -234,7 +185,7 @@ export function openDocumentModal(options: DocumentModalOptions): void {
         progress.total === 0
           ? "没有需要处理的文档"
           : progress.dryRun
-            ? `试运行：将为 ${progress.total} 个文档生成上报计划`
+            ? `试运行 · ${progress.total} 个文档`
             : `准备完成 ${progress.total} 个文档`,
       );
       return;
@@ -254,26 +205,26 @@ export function openDocumentModal(options: DocumentModalOptions): void {
       options.onToast("已取消文档任务", "info");
     } else if (summary.dryRun) {
       setStatus(
-        `试运行完成：计划上报 ${summary.total} 个文档，未发送请求`,
+        `试运行完成 · ${summary.total} 个文档`,
       );
-      options.onToast("试运行完成，没有发送任何请求", "success");
+      options.onToast("试运行完成", "success");
     } else if (summary.failed > 0) {
       setStatus(
         `完成：${summary.completed} 个已完成 · ${summary.failed} 个失败`,
       );
       options.onToast(
-        `${summary.completed} 个文档完成，${summary.failed} 个失败，详见日志`,
+        `${summary.completed} 个文档完成，${summary.failed} 个失败`,
         "error",
       );
     } else if (summary.completed > 0) {
-      setStatus(`完成：${summary.completed} 个文档任务点已完成`);
-      options.onToast(`已完成 ${summary.completed} 个文档任务点`, "success");
+      setStatus(`已完成 ${summary.completed} 个文档`);
+      options.onToast(`已完成 ${summary.completed} 个文档`, "success");
     } else if (summary.total === 0) {
       setStatus("没有需要处理的文档");
       options.onToast("没有需要处理的文档", "info");
     } else {
       setStatus("没有完成任何文档");
-      options.onToast("没有完成任何文档，详见日志", "info");
+      options.onToast("没有完成任何文档", "info");
     }
 
     if (summary.errors.length > 0) {
@@ -294,7 +245,7 @@ export function openDocumentModal(options: DocumentModalOptions): void {
     rows.clear();
     log.innerHTML = "";
     setRunningUi(true);
-    setStatus("正在刷新课程与文档信息…");
+    setStatus("加载中…");
     setProgress(0, 0);
 
     unlisten = await onJobProgress(handleProgress);
@@ -307,9 +258,9 @@ export function openDocumentModal(options: DocumentModalOptions): void {
       const summary = await api.completeDocuments({
         course: options.courseId,
         job: options.jobId ?? null,
-        includeCompleted: includeCompleted.checked,
-        dryRun: dryRun.checked,
-        maxDocuments: maxInput.value ? Math.max(1, Number(maxInput.value)) : null,
+        includeCompleted: Boolean(options.jobId),
+        dryRun: false,
+        maxDocuments: null,
       });
       if (!closed) finish(summary);
     } catch (error) {
@@ -335,7 +286,7 @@ export function openDocumentModal(options: DocumentModalOptions): void {
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.cancelJob();
   });
 }

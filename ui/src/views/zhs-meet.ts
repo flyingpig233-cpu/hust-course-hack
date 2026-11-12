@@ -69,33 +69,27 @@ export function renderZhsMeet(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">知到 · 见面课回放</div>
           <h1>${esc(zhsCourseLabel(course))}</h1>
-          <p class="course-sub">共 ${meets.length} 场 · ${withReplay} 场有回放 · 已看分钟以服务端 <code>getWatchHistory</code> 为准</p>
+          <p class="course-sub">共 ${meets.length} 场 · ${withReplay} 场有回放</p>
         </div>
         <div class="head-actions">
-          <button class="icon-button" data-action="back" title="返回视频树" aria-label="返回视频树">${icon("folder", 16)}</button>
+          <button class="icon-button" data-action="back" title="返回视频" aria-label="返回视频">${icon("folder", 16)}</button>
           <button class="icon-button" data-action="refresh" title="刷新见面课列表" aria-label="刷新见面课列表">${icon("refresh", 16)}</button>
           <button class="icon-button" data-action="check" title="检查见面课风控状态" aria-label="检查见面课风控状态">${icon("shield", 16)}</button>
           <button class="btn btn-primary" data-action="watch-all" ${
             withReplay === 0 ? "disabled" : ""
-          }>${icon("play", 15)} 秒刷全部回放考勤</button>
+          }>${icon("play", 15)} 完成回放</button>
         </div>
       </header>
-
       ${
         handlers.busy
           ? `<div class="crawl-banner"><div class="crawl-banner-row"><span class="spinner spinner-sm"></span><span class="crawl-progress-label">正在刷新见面课…</span></div></div>`
           : ""
       }
 
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 回放考勤按随机 90–100% 覆盖率逐分钟上报，带随机间隔与风控熔断。默认仅试运行，确认真实执行前不会发送。
-      </div>
-
       ${
         meets.length === 0
-          ? `<div class="empty-panel compact"><div class="empty-icon">${icon("live", 24)}</div><h2>没有见面课</h2><p>该课程当前没有见面课，或接口没有返回场次。</p></div>`
+          ? `<div class="empty-panel compact"><div class="empty-icon">${icon("live", 24)}</div><h2>没有见面课</h2></div>`
           : `<div class="meet-list">${meets
               .map((meet) => renderMeetCard(meet, progress.get(meet.meetCourseId)))
               .join("")}</div>`
@@ -157,7 +151,6 @@ function renderMeetCard(
         <p class="meet-meta">
           ${esc(meet.teacher || "主讲未知")}
           ${meet.startTime ? ` · ${esc(meet.startTime)}` : ""}
-          · liveId ${esc(String(meet.liveId))}
         </p>
         <div class="meet-progress">
           <div class="meet-progress-row">
@@ -177,7 +170,7 @@ function renderMeetCard(
         )}">${icon("refresh", 13)} 查询进度</button>
         <button class="btn btn-sm" data-meet-watch="${esc(
           String(meet.meetCourseId),
-        )}" ${canReplay ? "" : "disabled"}>${icon("play", 13)} 秒刷本场</button>
+        )}" ${canReplay ? "" : "disabled"}>${icon("play", 13)} 完成回放</button>
       </div>
     </article>
   `;
@@ -194,7 +187,7 @@ export interface ZhsMeetWatchModalOptions {
   onFinished(summary: ZhsMeetWatchSummary): void;
 }
 
-/** Replay attendance dialog: coverage/pacing settings, dry-run and risk gate. */
+/** Replay attendance dialog: confirmation before submitting. */
 export function openZhsMeetWatchModal(
   options: ZhsMeetWatchModalOptions,
 ): void {
@@ -203,63 +196,21 @@ export function openZhsMeetWatchModal(
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">知到 · 见面课</div>
-        <h2>秒刷回放考勤</h2>
+        <h2>完成回放</h2>
         <p class="modal-sub">${
           options.meet
             ? esc(options.meet.name)
-            : `${esc(options.courseName)} · 全部有回放的场次`
+            : esc(options.courseName)
         }</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <p class="modal-lead">
-        读取 <code>getWatchHistory</code> 的已看分钟，按随机覆盖率补齐缺口，再逐分钟调用
-        <code>setWatchHistorySecret</code>；每 N 条检查一次 <code>exceptionActionDetail</code>，命中锁定即熔断。
-      </p>
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 见面课考勤属于高风险操作。真实执行前请确认你理解账号风控与成绩判定风险。
-      </div>
-      <div class="settings-grid">
-        <label class="field">
-          <span>最低覆盖率（%）</span>
-          <input id="zhs-meet-min" type="number" min="1" max="100" step="1" value="90" />
-        </label>
-        <label class="field">
-          <span>最高覆盖率（%）</span>
-          <input id="zhs-meet-max" type="number" min="1" max="100" step="1" value="100" />
-        </label>
-        <label class="field">
-          <span>最小间隔（毫秒）</span>
-          <input id="zhs-meet-delay-min" type="number" min="0" step="100" value="2000" />
-        </label>
-        <label class="field">
-          <span>最大间隔（毫秒）</span>
-          <input id="zhs-meet-delay-max" type="number" min="0" step="100" value="6000" />
-        </label>
-        <label class="field">
-          <span>每 N 条检查风控</span>
-          <input id="zhs-meet-check" type="number" min="1" step="1" value="10" />
-        </label>
-        <label class="check switch-row">
-          <input id="zhs-meet-breaker" type="checkbox" checked />
-          <span>启用风控熔断</span>
-        </label>
-        <label class="check switch-row">
-          <input id="zhs-meet-dry" type="checkbox" checked />
-          <span>试运行，只计算覆盖计划</span>
-        </label>
-        <label class="check switch-row risk-confirm">
-          <input id="zhs-meet-confirm" type="checkbox" />
-          <span>我确认已了解风险，按随机 90–100% 覆盖率真实上报</span>
-        </label>
-      </div>
-      <div class="risk-summary" id="zhs-meet-summary"></div>
+      <p>确认完成回放？此操作将向平台提交记录，可能影响账号或成绩。</p>
 
-      <div class="watch-progress" id="zhs-meet-progress">
+      <div class="watch-progress" id="zhs-meet-progress" hidden>
         <div class="watch-status-row">
-          <span id="zhs-meet-status">准备就绪</span>
+          <span id="zhs-meet-status">就绪</span>
           <span id="zhs-meet-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="zhs-meet-fill" style="width:0%"></div></div>
@@ -270,7 +221,7 @@ export function openZhsMeetWatchModal(
       <button class="btn btn-ghost" id="zhs-meet-copy" hidden>${icon("copy", 14)} 复制结果</button>
       <button class="btn btn-ghost" id="zhs-meet-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="zhs-meet-start">${icon("play", 15)} 开始</button>
+      <button class="btn btn-primary" id="zhs-meet-start">${icon("play", 15)} 确认执行</button>
     </div>
   `;
 
@@ -278,18 +229,9 @@ export function openZhsMeetWatchModal(
   const countText = qs<HTMLElement>("#zhs-meet-count", content);
   const fill = qs<HTMLElement>("#zhs-meet-fill", content);
   const log = qs<HTMLElement>("#zhs-meet-log", content);
-  const summaryText = qs<HTMLElement>("#zhs-meet-summary", content);
   const startButton = qs<HTMLButtonElement>("#zhs-meet-start", content);
   const stopButton = qs<HTMLButtonElement>("#zhs-meet-stop", content);
   const copyButton = qs<HTMLButtonElement>("#zhs-meet-copy", content);
-  const minInput = qs<HTMLInputElement>("#zhs-meet-min", content);
-  const maxInput = qs<HTMLInputElement>("#zhs-meet-max", content);
-  const delayMinInput = qs<HTMLInputElement>("#zhs-meet-delay-min", content);
-  const delayMaxInput = qs<HTMLInputElement>("#zhs-meet-delay-max", content);
-  const checkInput = qs<HTMLInputElement>("#zhs-meet-check", content);
-  const breakerInput = qs<HTMLInputElement>("#zhs-meet-breaker", content);
-  const dryInput = qs<HTMLInputElement>("#zhs-meet-dry", content);
-  const confirmInput = qs<HTMLInputElement>("#zhs-meet-confirm", content);
 
   let running = false;
   let closed = false;
@@ -297,41 +239,6 @@ export function openZhsMeetWatchModal(
   let totalMeets = 0;
   let resultLines: string[] = [];
   const rows = new Map<number, HTMLElement>();
-
-  const coverage = (): [number, number] => {
-    const low = Math.min(100, Math.max(1, Number(minInput.value) || 90));
-    const high = Math.min(100, Math.max(low, Number(maxInput.value) || 100));
-    return [low, high];
-  };
-
-  const syncSummary = () => {
-    const [low, high] = coverage();
-    const scope = `<strong>${options.meetCount}</strong> 场回放`;
-    const duration =
-      options.totalMinutes > 0
-        ? `（回放总时长约 ${options.totalMinutes} 分钟）`
-        : "";
-    if (dryInput.checked) {
-      summaryText.innerHTML = `${icon("spark", 13)} 试运行：将为 ${scope}${duration} 按随机 ${low}–${high}% 覆盖率生成计划，不发送任何请求。`;
-      confirmInput.disabled = true;
-      confirmInput.checked = false;
-    } else {
-      summaryText.innerHTML = `${icon("alert", 13)} 真实执行：将为 ${scope}${duration} 按随机 ${low}–${high}% 覆盖率逐分钟上报考勤。`;
-      confirmInput.disabled = false;
-    }
-    if (!running) {
-      startButton.disabled = !dryInput.checked && !confirmInput.checked;
-      startButton.title = startButton.disabled
-        ? "请勾选风险确认，或改用试运行"
-        : "";
-    }
-  };
-
-  dryInput.addEventListener("change", syncSummary);
-  confirmInput.addEventListener("change", syncSummary);
-  minInput.addEventListener("input", syncSummary);
-  maxInput.addEventListener("input", syncSummary);
-  syncSummary();
 
   const close = openModal(content, {
     wide: true,
@@ -353,20 +260,9 @@ export function openZhsMeetWatchModal(
   };
 
   const setRunningUi = (busy: boolean) => {
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
     stopButton.hidden = !busy;
-    for (const input of [
-      minInput,
-      maxInput,
-      delayMinInput,
-      delayMaxInput,
-      checkInput,
-      breakerInput,
-      dryInput,
-    ]) {
-      input.disabled = busy;
-    }
-    confirmInput.disabled = busy || dryInput.checked;
   };
 
   const appendLog = (message: string, tone?: "ok" | "warn" | "error") => {
@@ -437,7 +333,7 @@ export function openZhsMeetWatchModal(
         progress.total === 0
           ? "没有可回放的见面课"
           : progress.dryRun
-            ? `试运行：将为 ${progress.total} 场回放生成覆盖计划`
+            ? `试运行 · ${progress.total} 场回放`
             : `准备处理 ${progress.total} 场回放`;
       return;
     }
@@ -474,7 +370,7 @@ export function openZhsMeetWatchModal(
     if (resultLines.length === 0) return;
     const copied = await copyText(resultLines.join("\n"));
     options.onToast(
-      copied ? "结果已复制" : "复制失败，请手动选择日志",
+      copied ? "结果已复制" : "复制失败",
       copied ? "success" : "error",
     );
   };
@@ -490,14 +386,14 @@ export function openZhsMeetWatchModal(
       statusText.textContent = "已取消";
       options.onToast("已取消回放考勤上报", "info");
     } else if (summary.dryRun) {
-      statusText.textContent = `试运行完成：${summary.meets} 场回放计划已生成，未发送`;
-      options.onToast("试运行完成，没有发送考勤上报", "success");
+      statusText.textContent = `试运行完成 · ${summary.meets} 场回放`;
+      options.onToast("试运行完成", "success");
     } else if (summary.failed === 0) {
-      statusText.textContent = `完成：${summary.meets} 场回放处理结束`;
+      statusText.textContent = `已处理 ${summary.meets} 场回放`;
       options.onToast("回放考勤上报完成", "success");
     } else {
-      statusText.textContent = `完成：${summary.failed} 场失败，详见日志`;
-      options.onToast(`${summary.failed} 场失败，详见日志`, "error");
+      statusText.textContent = `完成：${summary.failed} 场失败`;
+      options.onToast(`${summary.failed} 场失败`, "error");
     }
 
     summary.outcomes.forEach((outcome, offset) => {
@@ -532,20 +428,12 @@ export function openZhsMeetWatchModal(
 
   startButton.addEventListener("click", async () => {
     if (running) return;
-    if (!dryInput.checked && !confirmInput.checked) {
-      options.onToast("真实执行前必须勾选风险确认", "error");
-      return;
-    }
-    const [low, high] = coverage();
-    const delayMin = Math.max(0, Number(delayMinInput.value) || 0);
-    const delayMax = Math.max(delayMin, Number(delayMaxInput.value) || 0);
     running = true;
     rows.clear();
     log.innerHTML = "";
     resultLines = [];
     copyButton.hidden = true;
     setRunningUi(true);
-    syncSummary();
     statusText.textContent = "正在加载见面课列表…";
     setProgress(0, 0);
 
@@ -559,26 +447,25 @@ export function openZhsMeetWatchModal(
       const summary = await api.zhsMeetWatch({
         course: options.courseId,
         meet: options.meet ? options.meet.meetCourseId : null,
-        dryRun: dryInput.checked,
-        coverageMin: low,
-        coverageMax: high,
-        delayMinMs: delayMin,
-        delayMaxMs: delayMax,
-        circuitBreaker: breakerInput.checked,
-        checkEvery: Math.max(1, Number(checkInput.value) || 10),
+        dryRun: false,
+        coverageMin: 90,
+        coverageMax: 100,
+        delayMinMs: 2000,
+        delayMaxMs: 6000,
+        circuitBreaker: true,
+        checkEvery: 10,
       });
       if (!closed) finish(summary);
     } catch (error) {
       if (closed) return;
       running = false;
       setRunningUi(false);
-      syncSummary();
-      const message = errorText(error);
+        const message = errorText(error);
       if (message.includes("已取消")) {
         statusText.textContent = "已取消";
         options.onToast("已取消回放考勤上报", "info");
       } else {
-        statusText.textContent = "秒刷失败";
+        statusText.textContent = "执行失败";
         log.innerHTML = `<div class="watch-error">${esc(message)}</div>`;
         options.onToast(message, "error");
       }
@@ -592,7 +479,7 @@ export function openZhsMeetWatchModal(
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.zhsCancelJob();
   });
 }

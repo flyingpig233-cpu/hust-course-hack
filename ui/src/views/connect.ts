@@ -28,49 +28,26 @@ function renderDesktopConnect(main: HTMLElement, handlers: ConnectHandlers): voi
     handlers.status === "opening"
       ? meta.openingLabel
       : handlers.status === "waiting"
-        ? "等待登录完成…"
+        ? "等待登录…"
         : handlers.status === "failed"
           ? meta.retryButton
           : meta.loginButton;
 
   main.innerHTML = `
     <section class="connect-view">
-      <div class="connect-hero">
+      <div class="connect-card">
+        <div class="connect-card-head">
+          <h1>登录</h1>
+        </div>
         ${platformSwitchHtml(handlers.platform, busy)}
-
-        <div class="eyebrow">课程助手</div>
-        <h1>学习，从这里开始</h1>
-        <p class="connect-lead">选择平台，登录后查看你的课程。</p>
-
-        ${
-          isTauri
-            ? ""
-            : `<div class="demo-notice">${icon("spark", 15)} 演示模式 · 使用示例课程</div>`
-        }
-
-        <div class="connect-card">
-          <div class="connect-card-head">
-            <div>
-              <h2>${esc(meta.loginTitle)}</h2>
-              <p>在官方登录窗口完成登录</p>
-            </div>
-          </div>
+        <div class="login-panel">
           <button class="btn btn-primary btn-lg" id="login-button" ${busy ? "disabled" : ""}>
             ${busy ? spinner("spinner-sm") : icon("user", 17)}
             <span>${buttonLabel}</span>
           </button>
-          ${
-            busy
-              ? `<div class="login-wait"><span class="pulse-dot"></span> 请在新窗口完成登录，成功后会自动返回这里。</div>`
-              : ""
-          }
-          ${
-            handlers.error
-              ? `<div class="connect-error is-visible">${esc(handlers.error)}</div>`
-              : ""
-          }
+          ${handlers.error ? `<div class="connect-error is-visible">${esc(handlers.error)}</div>` : ""}
         </div>
-
+        ${isTauri ? "" : `<div class="demo-notice">${icon("spark", 15)} 演示模式</div>`}
       </div>
     </section>
   `;
@@ -91,7 +68,6 @@ export function renderHome(
     <section class="home-view">
       <header class="home-head">
         <div>
-          <div class="eyebrow">已连接 SmartCourse</div>
           <h1>我的课程</h1>
           <p class="home-sub">${courses.length} 门课程</p>
         </div>
@@ -117,17 +93,13 @@ export function renderHome(
                       )}</span>
                     </div>
                     <h3>${esc(course.name)}</h3>
-                    <p class="course-card-meta">班级 ${esc(course.class_id)}</p>
-                    <span class="course-card-cta">加载课程目录 ${icon("chevron", 14)}</span>
                   </button>
                 `;
               })
               .join("")}</div>`
           : `<div class="empty-panel">
               <div class="empty-icon">${icon("folder", 26)}</div>
-              <h2>当前账号没有课程</h2>
-              <p>登录已成功，但本学期课程列表为空；也可能需要稍后刷新。</p>
-              <button class="btn" data-refresh>${icon("refresh", 15)} 刷新课程列表</button>
+              <h2>暂无课程</h2>
             </div>`
       }
 

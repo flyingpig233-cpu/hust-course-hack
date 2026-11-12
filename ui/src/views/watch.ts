@@ -34,56 +34,18 @@ export function openWatchModal(options: WatchModalOptions): void {
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">视频任务</div>
-        <h2>完成视频进度</h2>
+        <h2>完成视频</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <p class="modal-lead">
-        通过复现播放器的进度落点完成视频任务。每次执行都会重新抓取课程与
-        <code>dtoken</code>、<code>otherInfo</code> 和签名，不会保存会话数据。
-      </p>
-      ${
-        options.jobId
-          ? `<div class="inline-notice">${icon("link", 14)} 仅处理任务点 <code>${esc(
-              options.jobId,
-            )}</code></div>`
-          : ""
-      }
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 这会向平台发送真实的观看进度请求。建议先勾选“试运行”确认流程。
-      </div>
-      <div class="settings-grid">
-        <label class="field">
-          <span>中间心跳间隔（秒）</span>
-          <input id="watch-step" type="number" min="0" step="1" value="0" />
-          <em>0 = 直接跳到结尾</em>
-        </label>
-        <label class="field">
-          <span>心跳延迟（毫秒）</span>
-          <input id="watch-delay" type="number" min="0" step="50" value="0" />
-          <em>放慢节奏时使用</em>
-        </label>
-        <label class="field">
-          <span>最多处理视频数</span>
-          <input id="watch-max" type="number" min="1" step="1" placeholder="不限" />
-          <em>用于先跑一个小批量</em>
-        </label>
-        <label class="check switch-row">
-          <input id="watch-include-completed" type="checkbox" />
-          <span>重新上报已完成的视频</span>
-        </label>
-        <label class="check switch-row">
-          <input id="watch-dry" type="checkbox" />
-          <span>试运行，只生成签名 URL</span>
-        </label>
-      </div>
+      ${options.jobId ? `<div class="inline-notice">当前视频</div>` : ""}
+      <p>确认上报视频？此操作将向平台提交记录。</p>
 
-      <div class="watch-progress" id="watch-progress">
+      <div class="watch-progress" id="watch-progress" hidden>
         <div class="watch-status-row">
-          <span id="watch-status">准备就绪</span>
+          <span id="watch-status">就绪</span>
           <span id="watch-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="watch-fill" style="width:0%"></div></div>
@@ -93,7 +55,7 @@ export function openWatchModal(options: WatchModalOptions): void {
     <div class="modal-foot">
       <button class="btn btn-ghost" id="watch-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="watch-start">${icon("play", 15)} 开始上报</button>
+      <button class="btn btn-primary" id="watch-start">${icon("play", 15)} 确认执行</button>
     </div>
   `;
 
@@ -103,18 +65,7 @@ export function openWatchModal(options: WatchModalOptions): void {
   const log = qs<HTMLElement>("#watch-log", content);
   const startButton = qs<HTMLButtonElement>("#watch-start", content);
   const stopButton = qs<HTMLButtonElement>("#watch-stop", content);
-  const stepInput = qs<HTMLInputElement>("#watch-step", content);
-  const delayInput = qs<HTMLInputElement>("#watch-delay", content);
-  const maxInput = qs<HTMLInputElement>("#watch-max", content);
-  const includeCompleted = qs<HTMLInputElement>(
-    "#watch-include-completed",
-    content,
-  );
-  const dryRun = qs<HTMLInputElement>("#watch-dry", content);
 
-  // Re-reporting a specific completed video must not be filtered out by the
-  // backend's "skip completed" rule.
-  if (options.jobId) includeCompleted.checked = true;
 
   let running = false;
   let closed = false;
@@ -148,14 +99,12 @@ export function openWatchModal(options: WatchModalOptions): void {
   };
 
   const setRunningUi = (busy: boolean) => {
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
     startButton.disabled = busy;
     stopButton.hidden = !busy;
     stopButton.disabled = false;
     stopButton.innerHTML = `${icon("stop", 14)} 停止`;
-    for (const input of [stepInput, delayInput, maxInput, includeCompleted, dryRun]) {
-      input.disabled = busy;
-    }
   };
 
   const rowTemplate = (progress: Extract<JobProgress, { kind: "watch" }>) => {
@@ -195,7 +144,7 @@ export function openWatchModal(options: WatchModalOptions): void {
           const toggler = document.createElement("details");
           toggler.className = "watch-urls";
           const summary = document.createElement("summary");
-          summary.textContent = "查看签名 URL";
+          summary.textContent = "查看详情";
           const pre = document.createElement("pre");
           pre.textContent = progress.message;
           toggler.append(summary, pre);
@@ -206,9 +155,9 @@ export function openWatchModal(options: WatchModalOptions): void {
           detail.appendChild(pre);
         }
       } else if (progress.status === "passed") {
-        detail.textContent = "服务端返回 isPassed=true";
+        detail.textContent = "已完成";
       } else if (progress.status === "running") {
-        detail.textContent = "正在发送心跳…";
+        detail.textContent = "处理中…";
       }
     }
     row.classList.toggle("is-passed", progress.status === "passed");
@@ -222,7 +171,7 @@ export function openWatchModal(options: WatchModalOptions): void {
   const handleProgress = (progress: JobProgress) => {
     if (closed) return;
     if (progress.kind === "crawl") {
-      setStatus("正在刷新课程与视频签名…");
+      setStatus("加载中…");
       setProgress(progress.done, progress.total);
       return;
     }
@@ -235,7 +184,7 @@ export function openWatchModal(options: WatchModalOptions): void {
         progress.total === 0
           ? "没有需要处理的视频"
           : progress.dryRun
-            ? `试运行：将为 ${progress.total} 个视频生成签名 URL`
+            ? `试运行 · ${progress.total} 个视频`
             : `准备上报 ${progress.total} 个视频`,
       );
       return;
@@ -253,9 +202,6 @@ export function openWatchModal(options: WatchModalOptions): void {
     if (summary.cancelled) {
       setStatus("已取消");
       options.onToast("已取消视频上报", "info");
-    } else if (dryRun.checked) {
-      setStatus(`试运行完成：生成 ${summary.total} 个上报 URL，未发送请求`);
-      options.onToast("试运行完成，没有发送任何请求", "success");
     } else {
       setStatus(
         `完成：${summary.passed} 个通过 · ${summary.failed} 个未通过`,
@@ -264,7 +210,7 @@ export function openWatchModal(options: WatchModalOptions): void {
         options.onToast(`已完成 ${summary.passed} 个视频`, "success");
       } else if (summary.failed > 0) {
         options.onToast(
-          `${summary.passed} 个通过，${summary.failed} 个失败，详见日志`,
+          `${summary.passed} 个通过，${summary.failed} 个失败`,
           "error",
         );
       } else {
@@ -283,7 +229,7 @@ export function openWatchModal(options: WatchModalOptions): void {
     rows.clear();
     log.innerHTML = "";
     setRunningUi(true);
-    setStatus("正在刷新课程与视频签名…");
+    setStatus("加载中…");
     setProgress(0, 0);
 
     unlisten = await onJobProgress(handleProgress);
@@ -296,11 +242,11 @@ export function openWatchModal(options: WatchModalOptions): void {
       const summary = await api.watchCourse({
         course: options.courseId,
         job: options.jobId ?? null,
-        includeCompleted: includeCompleted.checked,
-        stepSecs: Math.max(0, Number(stepInput.value) || 0),
-        delayMs: Math.max(0, Number(delayInput.value) || 0),
-        maxVideos: maxInput.value ? Math.max(1, Number(maxInput.value)) : null,
-        dryRun: dryRun.checked,
+        includeCompleted: Boolean(options.jobId),
+        stepSecs: 0,
+        delayMs: 0,
+        maxVideos: null,
+        dryRun: false,
       });
       if (!closed) finish(summary);
     } catch (error) {
@@ -326,7 +272,7 @@ export function openWatchModal(options: WatchModalOptions): void {
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.cancelJob();
   });
 }

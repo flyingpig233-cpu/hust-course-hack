@@ -5,7 +5,6 @@ import type { IconName } from "../icons";
 import { icon } from "../icons";
 
 export interface CourseHeadOptions {
-  eyebrow: string;
   title: string;
   subtitle: string;
   /** Pre-rendered action buttons. */
@@ -17,9 +16,8 @@ export function courseHeadHtml(options: CourseHeadOptions): string {
   return `
     <header class="course-head">
       <div class="course-head-copy">
-        <div class="eyebrow">${esc(options.eyebrow)}</div>
         <h1>${esc(options.title)}</h1>
-        <p class="course-sub">${esc(options.subtitle)}</p>
+        ${options.subtitle ? `<p class="course-sub">${esc(options.subtitle)}</p>` : ""}
       </div>
       <div class="head-actions">${options.actions}</div>
     </header>

@@ -16,7 +16,7 @@ import {
   zhsLessonVideos,
   zhsTotalVideos,
 } from "../zhs";
-import { courseHeadHtml, noticeHtml, statStripHtml } from "./course-shell";
+import { courseHeadHtml, statStripHtml } from "./course-shell";
 
 const STATUS_TEXT: Record<string, string> = {
   running: "上报中",
@@ -56,7 +56,6 @@ export function renderZhsHome(
     <section class="home-view">
       <header class="home-head">
         <div>
-          <div class="eyebrow">已连接 知到（智慧树）</div>
           <h1>我的课程</h1>
           <p class="home-sub">${courses.length} 门课程</p>
         </div>
@@ -66,17 +65,12 @@ export function renderZhsHome(
       </header>
 
       <div class="zhs-add-course">
-        <div class="zhs-add-copy">
-          <strong>添加课程</strong>
-          <p>粘贴课程学习页链接</p>
-        </div>
         <div class="zhs-add-row">
           <input id="zhs-course-ref" type="text" spellcheck="false" autocomplete="off"
-            placeholder="https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=..." />
+            placeholder="课程学习页链接" aria-label="课程学习页链接" />
           <button class="btn" data-add-course>${icon("link", 15)} 添加</button>
         </div>
       </div>
-
       ${
         courses.length
           ? `<div class="course-grid">${courses
@@ -95,7 +89,6 @@ export function renderZhsHome(
                     <p class="course-card-meta">${esc(course.teacher || "知到共享课")}${
                       percent === null ? "" : ` · 进度 ${percent}%`
                     }</p>
-                    <span class="course-card-cta">查看课程 ${icon("chevron", 14)}</span>
                   </button>
                 `;
               })
@@ -103,8 +96,6 @@ export function renderZhsHome(
           : `<div class="empty-panel">
               <div class="empty-icon">${icon("folder", 26)}</div>
               <h2>暂无共享课</h2>
-              <p>刷新课程，或通过链接添加。</p>
-              <button class="btn" data-refresh>${icon("refresh", 15)} 刷新课程列表</button>
             </div>`
       }
 
@@ -141,20 +132,18 @@ export function renderZhsLoading(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">知到 · recruit ${esc(String(course.recruitId))}</div>
           <h1>${esc(zhsCourseLabel(course))}</h1>
-          <p class="course-sub">正在抓取视频树与完成状态。</p>
+
         </div>
       </header>
       <div class="crawl-card">
         <div class="crawl-orb">${icon("refresh", 28)}</div>
-        <h2>正在抓取视频树</h2>
-        <p>知到共享课的视频树一次返回章 / 节 / 小节，通常几秒内完成。</p>
+        <h2>正在加载视频</h2>
         <div class="progress progress-lg">
           <div class="progress-fill zhs-loading-fill" style="width: 0%"></div>
         </div>
         <div class="crawl-meta">
-          <span class="zhs-loading-label">正在请求 videoList…</span>
+          <span class="zhs-loading-label">加载中…</span>
           <span class="zhs-loading-count"></span>
         </div>
         <button class="btn btn-ghost" data-cancel>${icon("stop", 14)} 取消</button>
@@ -191,16 +180,14 @@ export function renderZhsCourseError(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">知到 · recruit ${esc(String(course.recruitId))}</div>
           <h1>${esc(zhsCourseLabel(course))}</h1>
-          <p class="course-sub">视频树抓取未完成</p>
+
         </div>
       </header>
       <div class="error-card">
         <div class="error-icon">${icon("alert", 24)}</div>
-        <h2>抓取视频树失败</h2>
+        <h2>加载失败</h2>
         <pre class="error-detail">${esc(message)}</pre>
-        <p class="hint">如果提示登录失效，请在连接页重新登录知到。</p>
         <button class="btn btn-primary" data-retry>${icon("refresh", 15)} 重试</button>
       </div>
     </div>
@@ -219,7 +206,7 @@ export interface ZhsCourseHandlers {
   onCheck(): void;
 }
 
-/** Shared-course video tree with the "秒刷本课视频" entry point. */
+/** Shared-course video tree with the "完成视频" entry point. */
 export function renderZhsCourse(
   main: HTMLElement,
   detail: ZhsCourseDetail,
@@ -239,45 +226,36 @@ export function renderZhsCourse(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: "知到 · 我的课程",
         title: zhsCourseLabel(course),
-        subtitle: `${course.teacher || "知到共享课"} · ${detail.chapters.length} 章 ${lessons} 节`,
+        subtitle: course.teacher || "",
         actions: `
           <button class="icon-button" data-action="back" title="返回课程列表" aria-label="返回课程列表">${icon("folder", 16)}</button>
-          <button class="icon-button" data-action="refresh" title="重新抓取" aria-label="重新抓取">${icon("refresh", 16)}</button>
+          <button class="icon-button" data-action="refresh" title="刷新" aria-label="刷新">${icon("refresh", 16)}</button>
           <button class="icon-button" data-action="check" title="检查风控状态" aria-label="检查风控状态">${icon("shield", 16)}</button>
           <button class="btn btn-ghost" data-action="meet">${icon("live", 15)} 见面课</button>
-          <button class="btn btn-primary" data-action="watch">${icon("play", 15)} 秒刷本课视频</button>
+          <button class="btn btn-primary" data-action="watch">${icon("play", 15)} 完成视频</button>
         `,
       })}
-
       ${
         handlers.busy
-          ? `<div class="crawl-banner"><div class="crawl-banner-row"><span class="spinner spinner-sm"></span><span class="crawl-progress-label">正在抓取视频树…</span></div></div>`
+          ? `<div class="crawl-banner"><div class="crawl-banner-row"><span class="spinner spinner-sm"></span><span class="crawl-progress-label">正在加载视频…</span></div></div>`
           : ""
       }
-
-      ${noticeHtml(
-        "alert",
-        "操作可能影响账号或课程成绩。默认试运行，正式执行前需确认风险。",
-      )}
 
       ${statStripHtml([
         {
           label: "视频完成度",
           value: `${completed} / ${videos}`,
-          foot: `${percent}% 的小节视频已被平台标记完成`,
           wide: true,
           progress: percent,
         },
         { label: "章节", value: String(detail.chapters.length), foot: `${lessons} 节课` },
-        { label: "视频", value: String(videos), foot: "按小节统计" },
-        { label: "已完成", value: String(completed), foot: "watchState=1" },
+        { label: "视频", value: String(videos),  },
+        { label: "已完成", value: String(completed),  },
       ])}
-
       ${
         videos === 0
-          ? `<div class="empty-panel compact"><div class="empty-icon">${icon("video", 24)}</div><h2>没有可用的视频小节</h2><p>平台可能返回了空视频树，或该课程属于暂不支持的课程类型。</p></div>`
+          ? `<div class="empty-panel compact"><div class="empty-icon">${icon("video", 24)}</div><h2>暂无视频</h2></div>`
           : `<div class="tree">${detail.chapters
               .map((chapter, chapterIndex) => renderChapter(chapter, chapterIndex))
               .join("")}</div>`
@@ -348,8 +326,6 @@ function renderChapter(
                           )}</div>
                           <div class="task-meta">${esc(
                             formatDuration(video.videoSec),
-                          )} · videoId ${esc(String(video.videoId))} · lessonVideoId ${esc(
-                            String(video.lessonVideoId),
                           )}</div>
                         </div>
                         <div class="task-actions">
@@ -363,7 +339,7 @@ function renderChapter(
                     `,
                       )
                       .join("")
-                  : `<div class="empty-inline">该节没有视频小节</div>`
+                  : `<div class="empty-inline">暂无视频</div>`
               }
             </div>
           </div>
@@ -384,56 +360,24 @@ export interface ZhsWatchModalOptions {
   onFinished(summary: ZhsWatchSummary): void;
 }
 
-/** Video completion dialog: dry-run by default, risk confirmation for real runs. */
+/** Video completion dialog: confirmation before submitting. */
 export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   const content = document.createElement("div");
   content.className = "watch-modal";
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">知到 · 视频课</div>
-        <h2>秒刷本课视频</h2>
+        <h2>完成视频</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <p class="modal-lead">
-        对每个待处理的小节先取 <code>prelearningNote</code>（noteId），再提交
-        <code>saveDatabaseIntervalTimeV2</code>，并可用 <code>queryStuyInfo</code> 复核
-        <code>watchState=1</code>。试运行只在本地生成 <code>sdsew</code>/<code>ewssw</code>，不会发送。
-      </p>
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 秒刷视频属于最高风险形态。真实执行前请确认你理解账号风控与成绩判定风险。
-      </div>
-      <div class="settings-grid">
-        <label class="field">
-          <span>最多处理视频数</span>
-          <input id="zhs-watch-max" type="number" min="1" step="1" placeholder="不限" />
-          <em>先跑一个小批量</em>
-        </label>
-        <label class="check switch-row">
-          <input id="zhs-watch-include" type="checkbox" />
-          <span>重新上报已完成的视频</span>
-        </label>
-        <label class="check switch-row">
-          <input id="zhs-watch-verify" type="checkbox" checked />
-          <span>每节上报后复核 watchState</span>
-        </label>
-        <label class="check switch-row">
-          <input id="zhs-watch-dry" type="checkbox" checked />
-          <span>试运行，只生成上报字段</span>
-        </label>
-        <label class="check switch-row risk-confirm">
-          <input id="zhs-watch-confirm" type="checkbox" />
-          <span>我确认已了解风险，按平台协议真实上报视频进度</span>
-        </label>
-      </div>
-      <div class="risk-summary" id="zhs-watch-summary"></div>
+      <p>确认完成视频？此操作将向平台提交记录，可能影响账号或成绩。</p>
 
-      <div class="watch-progress" id="zhs-watch-progress">
+      <div class="watch-progress" id="zhs-watch-progress" hidden>
         <div class="watch-status-row">
-          <span id="zhs-watch-status">准备就绪</span>
+          <span id="zhs-watch-status">就绪</span>
           <span id="zhs-watch-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="zhs-watch-fill" style="width:0%"></div></div>
@@ -444,7 +388,7 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
       <button class="btn btn-ghost" id="zhs-watch-copy" hidden>${icon("copy", 14)} 复制结果</button>
       <button class="btn btn-ghost" id="zhs-watch-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="zhs-watch-start">${icon("play", 15)} 开始</button>
+      <button class="btn btn-primary" id="zhs-watch-start">${icon("play", 15)} 确认执行</button>
     </div>
   `;
 
@@ -452,15 +396,9 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   const countText = qs<HTMLElement>("#zhs-watch-count", content);
   const fill = qs<HTMLElement>("#zhs-watch-fill", content);
   const log = qs<HTMLElement>("#zhs-watch-log", content);
-  const summaryText = qs<HTMLElement>("#zhs-watch-summary", content);
   const startButton = qs<HTMLButtonElement>("#zhs-watch-start", content);
   const stopButton = qs<HTMLButtonElement>("#zhs-watch-stop", content);
   const copyButton = qs<HTMLButtonElement>("#zhs-watch-copy", content);
-  const maxInput = qs<HTMLInputElement>("#zhs-watch-max", content);
-  const includeInput = qs<HTMLInputElement>("#zhs-watch-include", content);
-  const verifyInput = qs<HTMLInputElement>("#zhs-watch-verify", content);
-  const dryInput = qs<HTMLInputElement>("#zhs-watch-dry", content);
-  const confirmInput = qs<HTMLInputElement>("#zhs-watch-confirm", content);
 
   let running = false;
   let closed = false;
@@ -468,38 +406,6 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   let targetTotal = 0;
   const rows = new Map<number, HTMLElement>();
   let resultLines: string[] = [];
-
-  const planned = (): number => {
-    const base = includeInput.checked
-      ? options.videoTotal
-      : Math.max(0, options.videoTotal - options.videoCompleted);
-    const max = maxInput.value ? Math.max(1, Number(maxInput.value) || 1) : null;
-    return max === null ? base : Math.min(base, max);
-  };
-
-  const syncSummary = () => {
-    const count = planned();
-    if (dryInput.checked) {
-      summaryText.innerHTML = `${icon("spark", 13)} 试运行：将处理 <strong>${count}</strong> 个视频（共 ${options.videoTotal} 个，已完成 ${options.videoCompleted} 个），只生成上报字段，不发送任何请求。`;
-      confirmInput.disabled = true;
-      confirmInput.checked = false;
-    } else {
-      summaryText.innerHTML = `${icon("alert", 13)} 真实执行：将秒刷 <strong>${count}</strong> 个视频（共 ${options.videoTotal} 个，已完成 ${options.videoCompleted} 个），按平台协议逐节上报。`;
-      confirmInput.disabled = false;
-    }
-    if (!running) {
-      startButton.disabled = !dryInput.checked && !confirmInput.checked;
-      startButton.title = startButton.disabled
-        ? "请勾选风险确认，或改用试运行"
-        : "";
-    }
-  };
-
-  dryInput.addEventListener("change", syncSummary);
-  confirmInput.addEventListener("change", syncSummary);
-  includeInput.addEventListener("change", syncSummary);
-  maxInput.addEventListener("input", syncSummary);
-  syncSummary();
 
   const close = openModal(content, {
     wide: true,
@@ -521,12 +427,9 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   };
 
   const setRunningUi = (busy: boolean) => {
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
     stopButton.hidden = !busy;
-    for (const input of [maxInput, includeInput, verifyInput, dryInput]) {
-      input.disabled = busy;
-    }
-    confirmInput.disabled = busy || dryInput.checked;
   };
 
   const addRow = (index: number, label: string): HTMLElement => {
@@ -581,7 +484,7 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
         progress.total === 0
           ? "没有需要处理的视频"
           : progress.dryRun
-            ? `试运行：将为 ${progress.total} 个视频生成上报字段`
+            ? `试运行 · ${progress.total} 个视频`
             : `准备上报 ${progress.total} 个视频`;
       return;
     }
@@ -602,7 +505,7 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   const copyResults = async () => {
     if (resultLines.length === 0) return;
     const copied = await copyText(resultLines.join("\n"));
-    options.onToast(copied ? "结果已复制" : "复制失败，请手动选择日志", copied ? "success" : "error");
+    options.onToast(copied ? "结果已复制" : "复制失败", copied ? "success" : "error");
   };
   copyButton.addEventListener("click", () => void copyResults());
 
@@ -616,15 +519,15 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
       statusText.textContent = "已取消";
       options.onToast("已取消视频秒刷", "info");
     } else if (summary.dryRun) {
-      statusText.textContent = `试运行完成：${summary.total} 个视频计划已生成，未发送任何请求`;
-      options.onToast("试运行完成，没有发送视频上报", "success");
+      statusText.textContent = `试运行完成 · ${summary.total} 个视频`;
+      options.onToast("试运行完成", "success");
     } else if (summary.failed === 0 && summary.ok > 0) {
       statusText.textContent = `完成：${summary.ok} 个已确认，${summary.skipped} 个跳过`;
       options.onToast(`已完成 ${summary.ok} 个视频`, "success");
     } else {
       statusText.textContent = `完成：${summary.ok} 个成功 · ${summary.failed} 个失败`;
       options.onToast(
-        `${summary.ok} 个成功，${summary.failed} 个失败，详见日志`,
+        `${summary.ok} 个成功，${summary.failed} 个失败`,
         summary.failed > 0 ? "error" : "info",
       );
     }
@@ -656,18 +559,13 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
 
   startButton.addEventListener("click", async () => {
     if (running) return;
-    if (!dryInput.checked && !confirmInput.checked) {
-      options.onToast("真实执行前必须勾选风险确认", "error");
-      return;
-    }
     running = true;
     rows.clear();
     log.innerHTML = "";
     resultLines = [];
     copyButton.hidden = true;
     setRunningUi(true);
-    syncSummary();
-    statusText.textContent = "正在抓取视频树…";
+    statusText.textContent = "正在加载视频…";
     setProgress(0, 0);
 
     unlisten = await onJobProgress(handleProgress);
@@ -679,23 +577,22 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
     try {
       const summary = await api.zhsWatchVideos({
         course: options.courseId,
-        dryRun: dryInput.checked,
-        includeCompleted: includeInput.checked,
-        maxVideos: maxInput.value ? Math.max(1, Number(maxInput.value)) : null,
-        verify: verifyInput.checked,
+        dryRun: false,
+        includeCompleted: false,
+        maxVideos: null,
+        verify: true,
       });
       if (!closed) finish(summary);
     } catch (error) {
       if (closed) return;
       running = false;
       setRunningUi(false);
-      syncSummary();
-      const message = errorText(error);
+        const message = errorText(error);
       if (message.includes("已取消")) {
         statusText.textContent = "已取消";
         options.onToast("已取消视频秒刷", "info");
       } else {
-        statusText.textContent = "秒刷失败";
+        statusText.textContent = "执行失败";
         log.innerHTML = `<div class="watch-error">${esc(message)}</div>`;
         options.onToast(message, "error");
       }
@@ -709,7 +606,7 @@ export function openZhsWatchModal(options: ZhsWatchModalOptions): void {
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.zhsCancelJob();
   });
 }

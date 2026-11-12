@@ -991,6 +991,7 @@ export const mockApi = {
 
   async watchCourse(request: WatchRequest): Promise<WatchSummary> {
     requireSession();
+    if (!request.dryRun) throw new Error("演示模式无法向平台提交，请先连接真实账号。");
     cancelled = false;
     const summary = summaries.find(
       (course) =>
@@ -1064,6 +1065,7 @@ export const mockApi = {
 
   async completeDocuments(request: DocumentRequest): Promise<DocumentSummary> {
     requireSession();
+    if (!request.dryRun) throw new Error("演示模式无法向平台提交，请先连接真实账号。");
     cancelled = false;
     const summary = summaries.find(
       (course) =>
@@ -1193,6 +1195,7 @@ export const mockApi = {
 
   async completeQuizzes(request: QuizRequest): Promise<QuizSummary> {
     requireSession();
+    if (!request.dryRun) throw new Error("演示模式无法向平台提交，请先连接真实账号。");
     cancelled = false;
     const summary = summaries.find(
       (course) =>
@@ -1370,7 +1373,7 @@ export const mockApi = {
   async zhsWatchVideos(request: ZhsWatchRequest): Promise<ZhsWatchSummary> {
     requireZhsSession();
     if (request.dryRun === false) {
-      throw new Error("演示模式仅支持试运行；请连接真实知到账号后执行。");
+      throw new Error("演示模式无法向平台提交，请先连接真实知到账号。");
     }
     cancelled = false;
     const course = zhsCourse(request.course);
@@ -1491,7 +1494,7 @@ export const mockApi = {
   ): Promise<ZhsMeetWatchSummary> {
     requireZhsSession();
     if (request.dryRun === false) {
-      throw new Error("演示模式仅支持试运行；请连接真实知到账号后执行。");
+      throw new Error("演示模式无法向平台提交，请先连接真实知到账号。");
     }
     cancelled = false;
     const course = zhsCourse(request.course);
@@ -1694,7 +1697,7 @@ export const mockApi = {
   async ulWatch(request: UlWatchRequest): Promise<UlWatchSummary> {
     requireUlSession();
     if (request.dryRun === false) {
-      throw new Error("演示模式仅支持试运行；请连接真实优学院账号后执行。");
+      throw new Error("演示模式无法向平台提交，请先连接真实优学院账号。");
     }
     cancelled = false;
     const course = ulCourse(request.course);

@@ -1,7 +1,9 @@
 import "./styles.css";
 import "./material-theme.css";
-import { api, backendMode, onJobProgress, onLoginClosed, onSessionChanged } from "./api";
+import { api, onJobProgress, onLoginClosed, onSessionChanged } from "./api";
 import { errorText, qs, toast } from "./dom";
+import { isTauri } from "./env";
+import { initTitlebar } from "./titlebar";
 import { safeFileName } from "./format";
 import { platformMeta } from "./platforms";
 import { openExternal, pickSavePath } from "./platform";
@@ -70,10 +72,21 @@ import {
 const app = qs<HTMLElement>("#app");
 app.innerHTML = `
   <div class="app-shell">
+    <header class="app-bar" data-tauri-drag-region>
+      <div class="app-bar-brand"><span class="app-bar-symbol">H</span><span>课程助手</span></div>
+      <div class="app-bar-status" id="app-bar-status" aria-live="polite">未连接</div>
+      ${isTauri ? `<div class="window-controls" aria-label="窗口控制">
+        <button class="window-control" id="window-minimize" type="button" title="最小化" aria-label="最小化"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
+        <button class="window-control" id="window-maximize" type="button" title="最大化" aria-label="最大化"><svg class="window-maximize-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9"/></svg><svg class="window-restore-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5h7v7M3.5 5.5h7v7h-7z"/></svg></button>
+        <button class="window-control window-close" id="window-close" type="button" title="关闭" aria-label="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+      </div>` : ""}
+    </header>
     <aside class="sidebar" id="sidebar"></aside>
     <main class="main" id="main"></main>
   </div>
 `;
+
+initTitlebar();
 
 const main = qs<HTMLElement>("#main");
 
@@ -129,6 +142,10 @@ function activePlatform(): Platform {
 function updateSidebar(): void {
   const session = store.session;
   const platform = activePlatform();
+  qs<HTMLElement>(".app-shell").classList.toggle("is-disconnected", !session);
+  qs<HTMLElement>("#app-bar-status").textContent = session
+    ? `已连接 · ${platformMeta(platform).sessionTitle}`
+    : "未连接";
   let courses: SidebarItem[] = [];
   let selectedId: string | null = null;
   if (session && platform === "hust") {
@@ -326,7 +343,7 @@ async function selectCourse(courseId: string): Promise<void> {
     return;
   }
   if (store.busy) {
-    toast("正在抓取课程，请先取消当前任务");
+    toast("请先停止当前任务");
     return;
   }
   const summary = store.hust.courses.find(
@@ -412,7 +429,7 @@ function showHustDetail(detail: CourseDetail): void {
     },
     onOptionsChange: (options) => {
       store.hust.options = options;
-      toast("抓取设置已更新，点击刷新后生效");
+      toast("设置已更新，刷新后生效");
     },
   });
 }
@@ -513,14 +530,14 @@ async function loadZhsCourseList(): Promise<void> {
     store.zhs.courses = await api.zhsListCourses();
     if (store.zhs.courses.length === 0) {
       toast(
-        "知到没有返回可用的共享课。可粘贴学习页链接（含 recruitAndCourseId）手动添加。",
+        "暂无课程",
         "info",
       );
     }
   } catch (error) {
     store.zhs.courses = [];
     toast(
-      `知到课程列表接口暂不可用：${errorText(error)}。可粘贴学习页链接手动添加课程。`,
+      `加载失败：${errorText(error)}`,
       "error",
     );
   }
@@ -537,7 +554,7 @@ async function addZhsCourse(reference: string): Promise<void> {
     const course = await api.zhsAddCourse(reference);
     upsertZhsCourse(course);
     updateSidebar();
-    toast(`已解析课程：${zhsCourseLabel(course)}`, "success");
+    toast(`已添加课程`, "success");
     store.zhs.selectedId = String(course.courseId);
     store.zhs.view = "course";
     store.zhs.detail = null;
@@ -549,7 +566,7 @@ async function addZhsCourse(reference: string): Promise<void> {
 
 async function selectZhsCourse(courseId: string): Promise<void> {
   if (store.busy) {
-    toast("正在抓取课程，请先取消当前任务");
+    toast("请先停止当前任务");
     return;
   }
   const course = findZhsCourse(courseId);
@@ -799,14 +816,14 @@ async function loadUlCourseList(): Promise<void> {
     store.ul.courses = await api.ulListCourses();
     if (store.ul.courses.length === 0) {
       toast(
-        "优学院没有返回可用的课程。可粘贴播放器链接（含 courseId / classId）手动添加。",
+        "暂无课程",
         "info",
       );
     }
   } catch (error) {
     store.ul.courses = [];
     toast(
-      `优学院课程列表接口暂不可用：${errorText(error)}。可粘贴播放器链接手动添加课程。`,
+      `加载失败：${errorText(error)}`,
       "error",
     );
   }
@@ -820,7 +837,7 @@ async function refreshUlCourses(): Promise<void> {
 
 async function addUlCourse(reference: string): Promise<void> {
   if (store.busy) {
-    toast("正在执行任务，请先取消当前任务");
+    toast("请先停止当前任务");
     return;
   }
   store.busy = true;
@@ -834,7 +851,7 @@ async function addUlCourse(reference: string): Promise<void> {
     store.ul.view = "course";
     store.busy = false;
     updateSidebar();
-    toast(`已解析课程：${ulCourseLabel(detail.course)}`, "success");
+    toast(`已添加课程`, "success");
     showUlCourseView();
     void runUlCheck(detail.course);
   } catch (error) {
@@ -846,7 +863,7 @@ async function addUlCourse(reference: string): Promise<void> {
 
 async function selectUlCourse(courseId: string): Promise<void> {
   if (store.busy) {
-    toast("正在执行任务，请先取消当前任务");
+    toast("请先停止当前任务");
     return;
   }
   const course = findUlCourse(courseId);
@@ -1022,7 +1039,7 @@ async function refreshCourses(): Promise<void> {
       showHome();
     }
     updateSidebar();
-    toast(`课程列表已刷新，共 ${courses.length} 门课程`, "success");
+    toast(`已刷新 · ${courses.length} 门课程`, "success");
   } catch (error) {
     toast(errorText(error), "error");
   }
@@ -1086,12 +1103,6 @@ async function boot(): Promise<void> {
 
   if (!store.session) {
     showConnect();
-    if (backendMode === "demo") {
-      window.setTimeout(
-        () => toast("演示模式：使用内置示例课程，不会访问真实平台", "info"),
-        500,
-      );
-    }
     return;
   }
 

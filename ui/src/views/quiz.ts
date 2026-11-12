@@ -43,53 +43,18 @@ export function openQuizModal(options: QuizModalOptions): void {
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">章节测验</div>
-        <h2>一键完成题目</h2>
+        <h2>完成题目</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <p class="modal-lead">
-        使用内置题库匹配每道题，已批改的作业自动跳过；题目没抓全或题库缺少答案的作业
-        不会提交，也不会只提交一部分。每次提交前都会重新打开作答页获取页面令牌。
-      </p>
-      ${
-        options.workId
-          ? `<div class="inline-notice">${icon("link", 14)} 仅处理作业 <code>${esc(
-              options.workId,
-            )}</code></div>`
-          : ""
-      }
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 关闭“试运行”后，这会向平台提交真实答案；请先确认题库覆盖情况。
-      </div>
-      <div class="quiz-bank-line">
-        内置题库 <strong>${options.bankQuestions ?? "…"}</strong> 题 · 未批改作业会先匹配再提交
-      </div>
-      <div class="settings-grid quiz-settings">
-        ${
-          options.workId
-            ? ""
-            : `<label class="field">
-                <span>最多处理作业数</span>
-                <input id="quiz-max" type="number" min="1" step="1" placeholder="不限" />
-                <em>第一次建议先试运行，或只处理 1 个</em>
-              </label>`
-        }
-        <label class="check switch-row">
-          <input id="quiz-dry" type="checkbox" checked />
-          <span>试运行，只生成计划</span>
-        </label>
-        <label class="check switch-row">
-          <input id="quiz-confirm" type="checkbox" />
-          <span>我确认提交未批改作业</span>
-        </label>
-      </div>
+      ${options.workId ? `<div class="inline-notice">当前作业</div>` : ""}
+      <p>确认提交题目？此操作将向平台提交记录。</p>
 
-      <div class="watch-progress" id="quiz-progress">
+      <div class="watch-progress" id="quiz-progress" hidden>
         <div class="watch-status-row">
-          <span id="quiz-status">准备就绪</span>
+          <span id="quiz-status">就绪</span>
           <span id="quiz-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="quiz-fill" style="width:0%"></div></div>
@@ -99,7 +64,7 @@ export function openQuizModal(options: QuizModalOptions): void {
     <div class="modal-foot">
       <button class="btn btn-ghost" id="quiz-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="quiz-start">${icon("work", 15)} 生成计划</button>
+      <button class="btn btn-primary" id="quiz-start">${icon("work", 15)} 确认执行</button>
     </div>
   `;
 
@@ -109,9 +74,6 @@ export function openQuizModal(options: QuizModalOptions): void {
   const log = qs<HTMLElement>("#quiz-log", content);
   const startButton = qs<HTMLButtonElement>("#quiz-start", content);
   const stopButton = qs<HTMLButtonElement>("#quiz-stop", content);
-  const dryRun = qs<HTMLInputElement>("#quiz-dry", content);
-  const confirm = qs<HTMLInputElement>("#quiz-confirm", content);
-  const maxInput = content.querySelector<HTMLInputElement>("#quiz-max");
 
   let running = false;
   let closed = false;
@@ -145,32 +107,14 @@ export function openQuizModal(options: QuizModalOptions): void {
   };
 
   const setRunningUi = (busy: boolean) => {
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
-    startButton.disabled = busy || (!dryRun.checked && !confirm.checked);
+    startButton.disabled = busy;
     stopButton.hidden = !busy;
     stopButton.disabled = false;
     stopButton.innerHTML = `${icon("stop", 14)} 停止`;
-    for (const input of [dryRun, confirm, ...(maxInput ? [maxInput] : [])]) {
-      input.disabled = busy;
-    }
   };
 
-  const syncStart = () => {
-    if (running) return;
-    confirm.disabled = dryRun.checked;
-    if (dryRun.checked) confirm.checked = false;
-    startButton.disabled = !dryRun.checked && !confirm.checked;
-    startButton.title = startButton.disabled
-      ? "请先勾选确认提交，或改用试运行"
-      : "";
-    startButton.innerHTML = dryRun.checked
-      ? `${icon("work", 15)} 生成计划`
-      : `${icon("work", 15)} 开始提交`;
-  };
-
-  dryRun.addEventListener("change", syncStart);
-  confirm.addEventListener("change", syncStart);
-  syncStart();
 
   const rowTemplate = (progress: Extract<JobProgress, { kind: "quiz" }>) => {
     const wrapper = document.createElement("div");
@@ -208,7 +152,7 @@ export function openQuizModal(options: QuizModalOptions): void {
       detail.textContent = progress.message
         ? progress.message
         : progress.status === "running"
-          ? "正在打开作答页并提交…"
+          ? "提交中…"
           : `${progress.questionCount} 道题`;
     }
     row.classList.toggle("is-passed", progress.status === "submitted");
@@ -225,7 +169,7 @@ export function openQuizModal(options: QuizModalOptions): void {
   const handleProgress = (progress: JobProgress) => {
     if (closed) return;
     if (progress.kind === "crawl") {
-      setStatus("正在刷新课程与测验题目…");
+      setStatus("加载中…");
       setProgress(progress.done, progress.total);
       return;
     }
@@ -238,12 +182,12 @@ export function openQuizModal(options: QuizModalOptions): void {
       if (progress.total === 0) {
         setStatus(
           progress.skippedGraded > 0
-            ? `没有需要提交的作业（已跳过 ${progress.skippedGraded} 个已批改作业）`
-            : "这门课程没有可提交的测验作业",
+            ? `无需提交 · 跳过 ${progress.skippedGraded} 个已批改作业`
+            : "暂无待提交作业",
         );
       } else if (progress.dryRun) {
         setStatus(
-          `试运行：${progress.total} 个作业，其中 ${progress.incomplete} 个题库不完整`,
+          `试运行 · ${progress.total} 个作业 · ${progress.incomplete} 个答案不全`,
         );
       } else {
         setStatus(
@@ -274,13 +218,13 @@ export function openQuizModal(options: QuizModalOptions): void {
       setStatus(
         `试运行完成：${summary.total - summary.skipped} 个作业可提交，${summary.skipped} 个跳过`,
       );
-      options.onToast("试运行完成，没有发送任何提交请求", "success");
+      options.onToast("试运行完成", "success");
     } else if (summary.failed > 0) {
       setStatus(
         `完成：${summary.submitted} 个已提交 · ${summary.failed} 个失败 · ${summary.skipped} 个跳过`,
       );
       options.onToast(
-        `${summary.submitted} 个提交成功，${summary.failed} 个失败，详见日志`,
+        `${summary.submitted} 个提交成功，${summary.failed} 个失败`,
         "error",
       );
     } else if (summary.submitted > 0) {
@@ -293,13 +237,13 @@ export function openQuizModal(options: QuizModalOptions): void {
     } else if (summary.total === 0) {
       setStatus(
         summary.skippedGraded > 0
-          ? `没有需要提交的作业（已跳过 ${summary.skippedGraded} 个已批改作业）`
-          : "这门课程没有可提交的测验作业",
+          ? `无需提交 · 跳过 ${summary.skippedGraded} 个已批改作业`
+          : "暂无待提交作业",
       );
       options.onToast("没有需要提交的作业", "info");
     } else {
-      setStatus(`没有提交任何作业，${summary.skipped} 个作业被跳过`);
-      options.onToast("所有作业都不完整，详见日志", "info");
+      setStatus(`未提交 · 跳过 ${summary.skipped} 个作业`);
+      options.onToast("所有作业都不完整", "info");
     }
 
     const problems = [...summary.planErrors, ...summary.errors];
@@ -321,7 +265,7 @@ export function openQuizModal(options: QuizModalOptions): void {
     rows.clear();
     log.innerHTML = "";
     setRunningUi(true);
-    setStatus("正在刷新课程与测验题目…");
+    setStatus("加载中…");
     setProgress(0, 0);
 
     unlisten = await onJobProgress(handleProgress);
@@ -334,10 +278,8 @@ export function openQuizModal(options: QuizModalOptions): void {
       const summary = await api.completeQuizzes({
         course: options.courseId,
         work: options.workId ?? null,
-        dryRun: dryRun.checked,
-        maxWorks: maxInput?.value
-          ? Math.max(1, Number(maxInput.value) || 1)
-          : null,
+        dryRun: false,
+        maxWorks: null,
       });
       if (!closed) finish(summary);
     } catch (error) {
@@ -363,7 +305,7 @@ export function openQuizModal(options: QuizModalOptions): void {
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.cancelJob();
   });
 }

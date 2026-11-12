@@ -88,12 +88,11 @@ function completionBadge(completed: boolean | null): string {
   return "";
 }
 
-function emptyState(title: string, body: string, iconName = "folder"): string {
+function emptyState(title: string, iconName = "folder"): string {
   return `
     <div class="empty-panel compact">
       <div class="empty-icon">${icon(iconName, 24)}</div>
       <h2>${esc(title)}</h2>
-      <p>${body}</p>
     </div>
   `;
 }
@@ -107,23 +106,20 @@ export function renderCourseLoading(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">${esc(summary.course_id)}</div>
           <h1>${esc(summary.name)}</h1>
-          <p class="course-sub">正在加载课程内容</p>
         </div>
       </header>
       <div class="crawl-card">
         <div class="crawl-orb">${icon("refresh", 28)}</div>
         <h2>正在加载课程</h2>
-        <p>请稍候</p>
         <div class="progress progress-lg">
           <div class="progress-fill crawl-progress-fill" style="width: 0%"></div>
         </div>
         <div class="crawl-meta">
-          <span class="crawl-progress-label">正在解析章节目录…</span>
+          <span class="crawl-progress-label">加载中…</span>
           <span class="crawl-progress-count"></span>
         </div>
-        <button class="btn btn-ghost" data-cancel>${icon("stop", 14)} 取消抓取</button>
+        <button class="btn btn-ghost" data-cancel>${icon("stop", 14)} 取消</button>
       </div>
     </div>
   `;
@@ -143,16 +139,13 @@ export function renderCourseError(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">${esc(summary.course_id)}</div>
           <h1>${esc(summary.name)}</h1>
-          <p class="course-sub">${esc(summary.class_id)} · 抓取未完成</p>
         </div>
       </header>
       <div class="error-card">
         <div class="error-icon">${icon("alert", 24)}</div>
-        <h2>抓取课程失败</h2>
+        <h2>加载失败</h2>
         <pre class="error-detail">${esc(message)}</pre>
-        <p class="hint">如果登录已过期，请重新登录后重试。</p>
         <button class="btn btn-primary" data-retry>${icon("refresh", 15)} 重试</button>
       </div>
     </div>
@@ -172,10 +165,7 @@ export function updateCrawlProgress(
   const fill = main.querySelector<HTMLElement>(".crawl-progress-fill");
   if (fill) fill.style.width = `${percent}%`;
   const label = main.querySelector<HTMLElement>(".crawl-progress-label");
-  if (label) {
-    label.textContent =
-      total > 0 ? "正在抓取知识点" : "正在解析章节目录…";
-  }
+  if (label) label.textContent = "加载中…";
   const count = main.querySelector<HTMLElement>(".crawl-progress-count");
   if (count) count.textContent = total > 0 ? `${done} / ${total} · ${percent}%` : "";
 }
@@ -254,11 +244,7 @@ export function renderCourse(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">我的课程</div>
           <h1>${esc(detail.title)}</h1>
-          <p class="course-sub">
-            班级 ${esc(detail.class_id)}
-          </p>
         </div>
         <div class="head-actions">
           <button class="icon-button" data-action="open" title="在浏览器打开课程页" aria-label="在浏览器打开课程页">${icon(
@@ -269,7 +255,7 @@ export function renderCourse(
             "download",
             16,
           )}</button>
-          <button class="icon-button" data-action="refresh" title="重新抓取" aria-label="重新抓取">${icon(
+          <button class="icon-button" data-action="refresh" title="刷新" aria-label="刷新">${icon(
             "refresh",
             16,
           )}</button>
@@ -292,7 +278,6 @@ export function renderCourse(
                 <span>并发数</span>
                 <input type="number" min="1" max="8" value="${handlers.options.concurrency ?? 4}" data-option="concurrency" />
               </label>
-              <p class="hint">修改后点击右上角刷新按钮生效。</p>
             </div>
           </details>
           <button class="btn btn-primary" data-action="quiz">${icon("work", 15)} 完成题目</button>
@@ -306,7 +291,7 @@ export function renderCourse(
           ? `<div class="crawl-banner">
               <div class="crawl-banner-row">
                 ${spinner("spinner-sm")}
-                <span class="crawl-progress-label">正在重新抓取课程…</span>
+                <span class="crawl-progress-label">正在刷新课程…</span>
                 <span class="crawl-progress-count"></span>
                 <button class="btn btn-sm btn-ghost" data-cancel>取消</button>
               </div>
@@ -319,14 +304,13 @@ export function renderCourse(
         <div class="stat-card stat-card-wide">
           <div class="stat-head"><span>视频完成度</span><strong>${videosDone} / ${videos.length}</strong></div>
           <div class="progress"><div class="progress-fill fill-good" style="width:${videoPercent}%"></div></div>
-          <div class="stat-foot">${videoPercent}% 的视频任务点已完成</div>
         </div>
         <div class="stat-card"><span class="stat-label">知识点</span><strong>${stats.leaves}</strong><span class="stat-foot">${stats.cards} 张卡片</span></div>
         <div class="stat-card"><span class="stat-label">任务点</span><strong>${stats.task_points}</strong><span class="stat-foot">${stats.documents} 个文档</span></div>
         <div class="stat-card"><span class="stat-label">测验</span><strong>${stats.works}</strong><span class="stat-foot">${stats.questions} 道题目</span></div>
         ${
           errors.length
-            ? `<div class="stat-card stat-card-warn"><span class="stat-label">抓取警告</span><strong>${errors.length}</strong><span class="stat-foot">在“诊断”中查看</span></div>`
+            ? `<div class="stat-card stat-card-warn"><span class="stat-label">加载异常</span><strong>${errors.length}</strong></div>`
             : ""
         }
       </div>
@@ -356,7 +340,7 @@ export function renderCourse(
     const body = main.querySelector<HTMLElement>("#task-rows");
     if (!body) return;
     if (rows.length === 0) {
-      body.innerHTML = `<tr><td colspan="6" class="table-empty">没有匹配的任务点</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="table-empty">无匹配任务</td></tr>`;
       return;
     }
     body.innerHTML = rows
@@ -416,7 +400,7 @@ export function renderCourse(
       panel.innerHTML = renderTasksTab(points.length);
       renderTaskRows();
     } else if (activeTab === "quiz") {
-      panel.innerHTML = renderQuiz(detail, handlers.options, handlers.bankQuestions);
+      panel.innerHTML = renderQuiz(detail, handlers.options);
     } else {
       panel.innerHTML = renderDiagnostics(detail);
     }
@@ -594,10 +578,7 @@ function renderTasksTab(total: number): string {
 
 function renderOutline(detail: CourseDetail): string {
   if (detail.chapters.length === 0) {
-    return emptyState(
-      "这门课程没有章节数据",
-      "平台可能对这类课程返回空目录（常见于军事理论、导论类课程），这不是抓取失败。可以稍后重新抓取，或在浏览器中打开课程页确认。",
-    );
+    return emptyState("暂无章节");
   }
   const openLeaves = countLeaves(detail.chapters) <= 10;
   return `
@@ -635,7 +616,7 @@ function renderChapter(chapter: Chapter, openLeaves: boolean): string {
           cards.length
             ? cards.map((card) => renderCard(card)).join("")
             : leaf
-              ? `<div class="empty-inline">该知识点没有可直接读取的卡片</div>`
+              ? `<div class="empty-inline">暂无内容</div>`
               : ""
         }
         ${chapter.children.map((child) => renderChapter(child, openLeaves)).join("")}
@@ -706,7 +687,6 @@ function renderTaskRow(point: TaskPoint): string {
 function renderQuiz(
   detail: CourseDetail,
   options: CrawlOptions,
-  bankQuestions: number | null,
 ): string {
   const works = walkPoints(detail.chapters).filter(
     ({ point }) => point.kind === "work",
@@ -715,17 +695,9 @@ function renderQuiz(
 
   if (withQuestions.length === 0) {
     if (options.includeQuestions === false) {
-      return emptyState(
-        "抓取时跳过了测验题目",
-        "这次抓取关闭了“抓取章节测验题目”。在右上角抓取设置中开启后点击刷新即可显示。",
-        "work",
-      );
+      return emptyState("未加载题目", "work");
     }
-    return emptyState(
-      "没有可显示的题目",
-      "平台上未批改的作业通常只返回题目页；如果这里为空，可能是当前课程没有章节测验，或题目接口要求重新登录。",
-      "work",
-    );
+    return emptyState("暂无题目", "work");
   }
 
   const actionable = withQuestions.filter(
@@ -736,8 +708,7 @@ function renderQuiz(
   return `
     <div class="quiz-banner">
       <div class="quiz-banner-copy">
-        <strong>一键完成题目</strong>
-        <p>内置题库 ${bankQuestions ?? "…"} 题 · 已批改作业自动跳过 · 题库缺答案的作业不会提交</p>
+        <strong>完成题目</strong>
       </div>
       ${
         actionable.length > 0
@@ -769,7 +740,7 @@ function renderQuiz(
                 <div class="quiz-head-meta">
                   ${
                     canSubmit
-                      ? `<button class="btn btn-sm" data-quiz-work="${esc(workId)}">${icon("work", 12)} 提交本题</button>`
+                      ? `<button class="btn btn-sm" data-quiz-work="${esc(workId)}">${icon("work", 12)} 提交作业</button>`
                       : ""
                   }
                   ${statusBadge}
@@ -778,9 +749,9 @@ function renderQuiz(
               </header>
               ${
                 submitted
-                  ? `<div class="inline-notice">${icon("check", 14)} 已提交，等待平台批改；刷新课程可获取最终结果。</div>`
+                  ? `<div class="inline-notice">${icon("check", 14)} 待批改</div>`
                   : !graded && point.work_status === "in_progress"
-                    ? `<div class="inline-notice">${icon("alert", 14)} 该作业尚未批改，平台不返回正确答案；可以用内置题库一键提交。</div>`
+                    ? `<div class="inline-notice">${icon("alert", 14)} 答案暂不可用</div>`
                     : ""
               }
               <div class="questions">
@@ -896,13 +867,13 @@ function renderDiagnostics(detail: CourseDetail): string {
 
 
       <section class="diag-card">
-        <h3>${icon("alert", 16)} 抓取警告 <span class="count-pill">${errors.length}</span></h3>
+        <h3>${icon("alert", 16)} 加载异常 <span class="count-pill">${errors.length}</span></h3>
         ${
           errors.length
             ? `<ul class="error-list">${errors
                 .map((error) => `<li><pre>${esc(error)}</pre></li>`)
                 .join("")}</ul>`
-            : `<p class="hint">没有警告，所有知识点都成功抓取。</p>`
+            : `<p class="hint">没有警告。</p>`
         }
       </section>
 

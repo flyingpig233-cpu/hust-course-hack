@@ -1,4 +1,3 @@
-import { backendMode } from "../api";
 import { esc, toast } from "../dom";
 import { icon } from "../icons";
 import { platformMeta } from "../platforms";
@@ -40,30 +39,6 @@ function tone(id: string): number {
   return sum % 5;
 }
 
-/** Idle / empty list hint per platform. */
-function listHint(platform: Platform, connected: boolean): string {
-  if (!connected) return `${platformMeta(platform).idleHint}`;
-  switch (platform) {
-    case "zhihuishu":
-      return "没有解析到共享课，可在课程页粘贴学习页链接添加";
-    case "ulearning":
-      return "没有解析到课程，可在课程页粘贴播放器链接添加";
-    default:
-      return "当前账号没有课程";
-  }
-}
-
-function placeholderHint(platform: Platform): string {
-  switch (platform) {
-    case "zhihuishu":
-      return "连接知到后，共享课会出现在这里";
-    case "ulearning":
-      return "连接优学院后，课程会出现在这里";
-    default:
-      return "连接账号后，课程会出现在这里";
-  }
-}
-
 export function createSidebar(
   root: HTMLElement,
   handlers: SidebarHandlers,
@@ -80,19 +55,10 @@ export function createSidebar(
   const renderShell = () => {
     const meta = platformMeta(state.platform);
     root.innerHTML = `
-      <div class="brand">
-        <div class="brand-mark">${icon("book", 20)}</div>
-        <div class="brand-copy">
-          <div class="brand-name">HUST Course Hack</div>
-          <div class="brand-sub">${esc(meta.brandSub)}</div>
-        </div>
-      </div>
-      ${backendMode === "tauri" ? "" : `<div class="demo-badge">${icon("spark", 12)} 演示模式</div>`}
-      <div id="sidebar-session"></div>
       <div class="sidebar-nav">
         <div class="sidebar-nav-head">
           <div class="sidebar-label">${esc(meta.courseListLabel)} <span id="course-count" class="count-pill"></span></div>
-          <button class="icon-button icon-button-dark" data-refresh title="刷新课程列表" aria-label="刷新课程列表">${icon("refresh", 15)}</button>
+          <button class="icon-button icon-button-dark" data-refresh title="刷新课程" aria-label="刷新课程">${icon("refresh", 15)}</button>
         </div>
         <div class="search-box">
           ${icon("search", 15)}
@@ -101,7 +67,7 @@ export function createSidebar(
         <div class="course-list" id="course-list"></div>
       </div>
       <div class="sidebar-footer">
-        <div class="sidebar-note">${icon("shield", 13)} 登录会话仅保存在内存</div>
+        <div id="sidebar-session"></div>
       </div>
     `;
   };
@@ -114,31 +80,15 @@ export function createSidebar(
 
   const renderSession = () => {
     const session = state.session;
-    const meta = platformMeta(session?.platform ?? state.platform);
     if (!session) {
-      sessionSlot.innerHTML = `
-        <div class="session-card is-idle">
-          <span class="status-dot status-dot-idle"></span>
-          <div class="session-copy">
-            <div class="session-title">未连接</div>
-            <div class="session-source">${esc(meta.idleHint)}</div>
-          </div>
-        </div>
-      `;
+      sessionSlot.innerHTML = "";
       return;
     }
     sessionSlot.innerHTML = `
-      <div class="session-card">
-        <span class="status-dot"></span>
-        <div class="session-copy">
-          <div class="session-title">已连接 ${esc(meta.sessionTitle)}</div>
-          <div class="session-source">课程已就绪</div>
-        </div>
-        <button class="icon-button icon-button-dark" data-disconnect title="断开连接" aria-label="断开连接">${icon(
+        <button class="sidebar-link" data-disconnect>${icon(
           "logout",
           15,
-        )}</button>
-      </div>
+        )} 退出登录</button>
     `;
   };
 
@@ -147,12 +97,7 @@ export function createSidebar(
     list.classList.toggle("is-disabled", state.disabled);
 
     if (!state.session) {
-      list.innerHTML = `
-        <div class="sidebar-placeholder">
-          <div class="sidebar-placeholder-icon">${icon("folder", 20)}</div>
-          <p>${esc(placeholderHint(state.platform))}</p>
-        </div>
-      `;
+      list.innerHTML = "";
       return;
     }
 
@@ -169,8 +114,8 @@ export function createSidebar(
     if (filtered.length === 0) {
       list.innerHTML = `<div class="sidebar-placeholder"><p>${esc(
         state.courses.length
-          ? "没有匹配的课程"
-          : listHint(state.platform, true),
+          ? "无匹配课程"
+          : "暂无课程",
       )}</p></div>`;
       return;
     }
@@ -187,7 +132,6 @@ export function createSidebar(
             )}</span>
             <span class="course-copy">
               <span class="course-name">${esc(course.name)}</span>
-              <span class="course-meta">${esc(course.meta)}</span>
             </span>
             <span class="course-chevron">${icon("chevron", 14)}</span>
           </button>
@@ -221,7 +165,7 @@ export function createSidebar(
     const item = target.closest<HTMLElement>("[data-course-id]");
     if (item) {
       if (state.disabled) {
-        toast("正在执行任务，请先取消当前任务");
+        toast("请先停止当前任务");
         return;
       }
       handlers.onSelect(item.dataset.courseId ?? "");

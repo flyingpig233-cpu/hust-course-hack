@@ -108,7 +108,6 @@ export function renderUlHome(
     <section class="home-view">
       <header class="home-head">
         <div>
-          <div class="eyebrow">已连接 优学院（U学）</div>
           <h1>我的课程</h1>
           <p class="home-sub">${courses.length} 门课程</p>
         </div>
@@ -118,17 +117,12 @@ export function renderUlHome(
       </header>
 
       <div class="zhs-add-course">
-        <div class="zhs-add-copy">
-          <strong>添加课程</strong>
-          <p>粘贴课程播放器链接</p>
-        </div>
         <div class="zhs-add-row">
           <input id="ul-course-ref" type="text" spellcheck="false" autocomplete="off"
-            placeholder="https://ua.ulearning.cn/learnCourse/learnCourse.html?courseId=47353&classId=1019700" />
+            placeholder="课程播放器链接" aria-label="课程播放器链接" />
           <button class="btn" data-add-course>${icon("link", 15)} 添加</button>
         </div>
       </div>
-
       ${
         courses.length
           ? `<div class="course-grid">${courses
@@ -137,7 +131,7 @@ export function renderUlHome(
                 const remaining = course.remainingSecs ?? null;
                 const foot =
                   remaining === null
-                    ? "有效期未知"
+                    ? ""
                     : remaining < 0
                       ? "已过期"
                       : `剩余 ${Math.max(1, Math.round(remaining / 86400))} 天`;
@@ -151,10 +145,7 @@ export function renderUlHome(
                       )}</span>
                     </div>
                     <h3>${esc(ulCourseLabel(course))}</h3>
-                    <p class="course-card-meta">${esc(course.author || "优学院课程")} · ${esc(
-                      foot,
-                    )}</p>
-                    <span class="course-card-cta">查看课程目录 ${icon("chevron", 14)}</span>
+                    ${course.author || foot ? `<p class="course-card-meta">${esc([course.author, foot].filter(Boolean).join(" · "))}</p>` : ""}
                   </button>
                 `;
               })
@@ -162,8 +153,6 @@ export function renderUlHome(
           : `<div class="empty-panel">
               <div class="empty-icon">${icon("folder", 26)}</div>
               <h2>暂无课程</h2>
-              <p>刷新课程，或通过链接添加。</p>
-              <button class="btn" data-refresh>${icon("refresh", 15)} 刷新课程列表</button>
             </div>`
       }
 
@@ -196,20 +185,18 @@ export function renderUlLoading(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: "优学院 · 我的课程",
         title: ulCourseLabel(course),
-        subtitle: "正在读取课程目录。",
+        subtitle: "",
         actions: "",
       })}
       <div class="crawl-card">
         <div class="crawl-orb">${icon("refresh", 28)}</div>
-        <h2>正在读取课程目录</h2>
-        <p>优学院课程目录一次返回章 / 节 / 页结构，通常几秒内完成。</p>
+        <h2>正在加载目录</h2>
         <div class="progress progress-lg">
           <div class="progress-fill ul-loading-fill" style="width: 0%"></div>
         </div>
         <div class="crawl-meta">
-          <span class="ul-loading-label">正在请求目录接口…</span>
+          <span class="ul-loading-label">加载中…</span>
           <span class="ul-loading-count"></span>
         </div>
         <button class="btn btn-ghost" data-cancel>${icon("stop", 14)} 取消</button>
@@ -245,16 +232,14 @@ export function renderUlCourseError(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: "优学院 · 我的课程",
         title: ulCourseLabel(course),
-        subtitle: "课程目录读取未完成",
+        subtitle: "",
         actions: "",
       })}
       <div class="error-card">
         <div class="error-icon">${icon("alert", 24)}</div>
-        <h2>读取课程目录失败</h2>
+        <h2>加载失败</h2>
         <pre class="error-detail">${esc(message)}</pre>
-        <p class="hint">如果提示登录失效，请在连接页重新登录优学院。</p>
         <button class="btn btn-primary" data-retry>${icon("refresh", 15)} 重试</button>
       </div>
     </div>
@@ -290,7 +275,7 @@ export function renderUlCourse(
   const remaining = check?.remainingSecs ?? detail.remainingSecs;
   const remainingText =
     remaining === null
-      ? "有效期未知"
+      ? ""
       : remaining < 0
         ? "课程已过期"
         : `剩余约 ${Math.max(1, Math.round(remaining / 86400))} 天`;
@@ -299,47 +284,34 @@ export function renderUlCourse(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: `优学院 · textbook ${course.textbookId}${
-          course.ocId === null ? "" : ` · course ${course.ocId}`
-        }`,
         title: ulCourseLabel(course),
-        subtitle: `${detail.className ?? course.classId ?? "班级未知"} · ${
-          course.author ?? "作者未知"
-        } · ${remainingText} · ${chapters.length} 章 ${sections} 节`,
+        subtitle: [detail.className, remainingText].filter(Boolean).join(" · "),
         actions: `
           <button class="icon-button" data-action="back" title="返回课程列表" aria-label="返回课程列表">${icon("folder", 16)}</button>
           <button class="icon-button" data-action="refresh" title="重新读取目录" aria-label="重新读取目录">${icon("refresh", 16)}</button>
           <button class="btn btn-ghost" data-action="check" ${handlers.busy ? "disabled" : ""}>${icon(
             "shield",
             15,
-          )} 检查完成状态</button>
+          )} 检查进度</button>
           <button class="btn btn-primary" data-action="watch" ${expired ? "disabled" : ""}>${icon(
             "play",
             15,
-          )} 秒刷本课</button>
+          )} 完成课件</button>
         `,
       })}
-
       ${
         handlers.checking
           ? `<div class="crawl-banner"><div class="crawl-banner-row"><span class="spinner spinner-sm"></span><span class="crawl-progress-label ul-check-label">正在读取每节完成状态…</span><span class="watch-count ul-check-count"></span></div><div class="progress"><div class="progress-fill ul-check-fill" style="width:0%"></div></div></div>`
           : handlers.busy
-            ? `<div class="crawl-banner"><div class="crawl-banner-row"><span class="spinner spinner-sm"></span><span class="crawl-progress-label">正在读取课程目录…</span></div></div>`
+            ? `<div class="crawl-banner"><div class="crawl-banner-row"><span class="spinner spinner-sm"></span><span class="crawl-progress-label">正在加载目录…</span></div></div>`
             : ""
       }
-
-      ${noticeHtml(
-        "alert",
-        `${expired ? "课程已过期，无法执行。" : "操作可能影响账号或课程成绩。默认试运行，正式执行前需确认风险。"}`,
-      )}
-
+      ${expired ? noticeHtml("alert", "课程已过期") : ""}
       ${statStripHtml([
         {
           label: "课件完成度",
           value: check ? `${completed} / ${sections}` : `— / ${sections}`,
-          foot: check
-            ? `${percent}% 的节已被平台标记完成`
-            : "点击“检查完成状态”读取每节完成情况",
+          foot: check ? undefined : "未查询",
           wide: true,
           progress: percent,
         },
@@ -347,10 +319,9 @@ export function renderUlCourse(
         { label: "视频页", value: String(counts.video) },
         { label: "练习页", value: String(counts.practice) },
       ])}
-
       ${
         sections === 0
-          ? `<div class="empty-panel compact"><div class="empty-icon">${icon("folder", 24)}</div><h2>课程目录为空</h2><p>平台没有返回可用的章 / 节 / 页，可能该课程需要重新激活或没有权限。</p></div>`
+          ? `<div class="empty-panel compact"><div class="empty-icon">${icon("folder", 24)}</div><h2>课程目录为空</h2></div>`
           : `<div class="tree">${chapters
               .map((chapter, index) => renderChapter(chapter, index, check !== null))
               .join("")}</div>`
@@ -429,7 +400,7 @@ function renderSection(section: UlSection, checked: boolean): string {
         ${
           section.pages.length
             ? section.pages.map(renderPage).join("")
-            : `<div class="empty-inline">该节没有页面</div>`
+            : `<div class="empty-inline">暂无内容</div>`
         }
       </div>
     </div>
@@ -443,9 +414,6 @@ function renderPage(page: UlSection["pages"][number]): string {
       <span class="task-kind">${icon(PAGE_KIND_ICON[kind], 17)}</span>
       <div class="task-copy">
         <div class="task-name">${esc(page.name || `页面 ${page.id}`)}</div>
-        <div class="task-meta">${esc(PAGE_KIND_TEXT[kind])} · pageId ${esc(
-          String(page.id),
-        )} · relationId ${esc(String(page.relationId))}</div>
       </div>
       <div class="task-actions">
         <span class="badge badge-muted">${esc(PAGE_KIND_TEXT[kind])}</span>
@@ -464,67 +432,24 @@ export interface UlWatchModalOptions {
   onFinished(summary: UlWatchSummary): void;
 }
 
-/** Section completion dialog: dry-run by default, risk confirmation for real runs. */
+/** Section completion dialog: confirmation before submitting. */
 export function openUlWatchModal(options: UlWatchModalOptions): void {
   const content = document.createElement("div");
   content.className = "watch-modal";
   content.innerHTML = `
     <div class="modal-head">
       <div>
-        <div class="eyebrow">优学院 · 课件秒刷</div>
-        <h2>秒刷本课</h2>
+        <h2>完成课件</h2>
         <p class="modal-sub">${esc(options.courseName)}</p>
       </div>
       <button class="icon-button" data-close aria-label="关闭">${icon("close", 18)}</button>
     </div>
     <div class="modal-body">
-      <p class="modal-lead">
-        先读取章 / 节 / 页并跳过已完成的节，再对可处理的节提交
-        <code>/yws/api/personal/sync</code> 完成记录（视频节与含答案的练习节）。试运行只在本地生成计划和 payload 摘要，不会发送。
-      </p>
-      <div class="inline-notice notice-warn">
-        ${icon("alert", 14)} 秒刷课件属于高风险操作。真实执行前请确认你理解账号风控与课程进度判定风险。
-      </div>
-      <div class="settings-grid">
-        <label class="field">
-          <span>最多处理节数</span>
-          <input id="ul-watch-max" type="number" min="1" step="1" placeholder="不限" />
-          <em>先跑一个小批量</em>
-        </label>
-        <label class="field">
-          <span>最小间隔（毫秒）</span>
-          <input id="ul-watch-delay-min" type="number" min="0" step="500" value="3000" />
-        </label>
-        <label class="field">
-          <span>最大间隔（毫秒）</span>
-          <input id="ul-watch-delay-max" type="number" min="0" step="500" value="5000" />
-        </label>
-        <label class="check switch-row">
-          <input id="ul-watch-include" type="checkbox" />
-          <span>重新提交已完成的节</span>
-        </label>
-        <label class="check switch-row">
-          <input id="ul-watch-verify" type="checkbox" checked />
-          <span>每节提交后复核 completion_status</span>
-        </label>
-        <label class="check switch-row">
-          <input id="ul-watch-stop" type="checkbox" checked />
-          <span>任一节失败即停止</span>
-        </label>
-        <label class="check switch-row">
-          <input id="ul-watch-dry" type="checkbox" checked />
-          <span>试运行，只生成计划</span>
-        </label>
-        <label class="check switch-row risk-confirm">
-          <input id="ul-watch-confirm" type="checkbox" />
-          <span>我确认已了解风险，按优学院协议真实提交课件完成记录</span>
-        </label>
-      </div>
-      <div class="risk-summary" id="ul-watch-summary"></div>
+      <p>确认完成课件？此操作将向平台提交记录，可能影响账号或成绩。</p>
 
-      <div class="watch-progress" id="ul-watch-progress">
+      <div class="watch-progress" id="ul-watch-progress" hidden>
         <div class="watch-status-row">
-          <span id="ul-watch-status">准备就绪</span>
+          <span id="ul-watch-status">就绪</span>
           <span id="ul-watch-count" class="watch-count"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="ul-watch-fill" style="width:0%"></div></div>
@@ -535,7 +460,7 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
       <button class="btn btn-ghost" id="ul-watch-copy" hidden>${icon("copy", 14)} 复制结果</button>
       <button class="btn btn-ghost" id="ul-watch-stop" hidden>${icon("stop", 14)} 停止</button>
       <button class="btn btn-ghost" data-close>关闭</button>
-      <button class="btn btn-primary" id="ul-watch-start">${icon("play", 15)} 开始</button>
+      <button class="btn btn-primary" id="ul-watch-start">${icon("play", 15)} 确认执行</button>
     </div>
   `;
 
@@ -543,18 +468,9 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
   const countText = qs<HTMLElement>("#ul-watch-count", content);
   const fill = qs<HTMLElement>("#ul-watch-fill", content);
   const log = qs<HTMLElement>("#ul-watch-log", content);
-  const summaryText = qs<HTMLElement>("#ul-watch-summary", content);
   const startButton = qs<HTMLButtonElement>("#ul-watch-start", content);
   const stopButton = qs<HTMLButtonElement>("#ul-watch-stop", content);
   const copyButton = qs<HTMLButtonElement>("#ul-watch-copy", content);
-  const maxInput = qs<HTMLInputElement>("#ul-watch-max", content);
-  const delayMinInput = qs<HTMLInputElement>("#ul-watch-delay-min", content);
-  const delayMaxInput = qs<HTMLInputElement>("#ul-watch-delay-max", content);
-  const includeInput = qs<HTMLInputElement>("#ul-watch-include", content);
-  const verifyInput = qs<HTMLInputElement>("#ul-watch-verify", content);
-  const stopInput = qs<HTMLInputElement>("#ul-watch-stop", content);
-  const dryInput = qs<HTMLInputElement>("#ul-watch-dry", content);
-  const confirmInput = qs<HTMLInputElement>("#ul-watch-confirm", content);
 
   let running = false;
   let closed = false;
@@ -564,43 +480,6 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
   let planSkipped = 0;
   let resultLines: string[] = [];
   const rows = new Map<number, HTMLElement>();
-
-  const planned = (): number => {
-    const base = includeInput.checked
-      ? options.sectionTotal
-      : Math.max(0, options.sectionTotal - options.completedSections);
-    const max = maxInput.value ? Math.max(1, Number(maxInput.value) || 1) : null;
-    return max === null ? base : Math.min(base, max);
-  };
-
-  const syncSummary = () => {
-    const count = planned();
-    const delayMin = Math.max(0, Number(delayMinInput.value) || 0);
-    const delayMax = Math.max(delayMin, Number(delayMaxInput.value) || 0);
-    const scope = `共 ${options.sectionTotal} 节，已完成 ${options.completedSections} 节`;
-    if (dryInput.checked) {
-      summaryText.innerHTML = `${icon("spark", 13)} 试运行：将扫描并计划最多 <strong>${count}</strong> 节（${scope}），只生成计划与 payload 摘要，不发送任何请求。`;
-      confirmInput.disabled = true;
-      confirmInput.checked = false;
-    } else {
-      summaryText.innerHTML = `${icon("alert", 13)} 真实执行：将处理最多 <strong>${count}</strong> 节（${scope}），按 ${delayMin}–${delayMax} 毫秒随机间隔提交；服务端返回 2 会立即中止。`;
-      confirmInput.disabled = false;
-    }
-    if (!running) {
-      startButton.disabled = !dryInput.checked && !confirmInput.checked;
-      startButton.title = startButton.disabled
-        ? "请勾选风险确认，或改用试运行"
-        : "";
-    }
-  };
-
-  dryInput.addEventListener("change", syncSummary);
-  confirmInput.addEventListener("change", syncSummary);
-  includeInput.addEventListener("change", syncSummary);
-  maxInput.addEventListener("input", syncSummary);
-  delayMinInput.addEventListener("input", syncSummary);
-  delayMaxInput.addEventListener("input", syncSummary);
-  syncSummary();
 
   const close = openModal(content, {
     wide: true,
@@ -622,20 +501,9 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
   };
 
   const setRunningUi = (busy: boolean) => {
+    if (busy) qs<HTMLElement>(".watch-progress", content).hidden = false;
     startButton.hidden = busy;
     stopButton.hidden = !busy;
-    for (const input of [
-      maxInput,
-      delayMinInput,
-      delayMaxInput,
-      includeInput,
-      verifyInput,
-      stopInput,
-      dryInput,
-    ]) {
-      input.disabled = busy;
-    }
-    confirmInput.disabled = busy || dryInput.checked;
   };
 
   const addRow = (index: number, label: string): HTMLElement => {
@@ -692,7 +560,7 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
         progress.total === 0
           ? "没有可处理的节"
           : progress.dryRun
-            ? `试运行：${progress.total} 节中可处理 ${progress.actionable} 节（跳过 ${progress.skipped} 节）`
+            ? `试运行 · 可处理 ${progress.actionable} 节 · 跳过 ${progress.skipped} 节`
             : `准备处理 ${progress.actionable} / ${progress.total} 节`;
       return;
     }
@@ -722,7 +590,7 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
     if (resultLines.length === 0) return;
     const copied = await copyText(resultLines.join("\n"));
     options.onToast(
-      copied ? "结果已复制" : "复制失败，请手动选择日志",
+      copied ? "结果已复制" : "复制失败",
       copied ? "success" : "error",
     );
   };
@@ -740,16 +608,16 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
     } else if (summary.dryRun) {
       statusText.textContent =
         planActionable === 0
-          ? `试运行完成：没有可处理的节（跳过 ${planSkipped} 节），未发送任何请求`
-          : `试运行完成：${planActionable} 节可处理、${planSkipped} 节跳过（计划与 payload 摘要已生成，未发送）`;
-      options.onToast("试运行完成，没有发送完成记录", "success");
+          ? `试运行完成 · 跳过 ${planSkipped} 节`
+          : `试运行完成 · 可处理 ${planActionable} 节 · 跳过 ${planSkipped} 节`;
+      options.onToast("试运行完成", "success");
     } else if (summary.failed === 0 && summary.ok > 0) {
       statusText.textContent = `完成：${summary.ok} 节成功，${summary.skipped} 节跳过`;
       options.onToast(`已完成 ${summary.ok} 节`, "success");
     } else {
       statusText.textContent = `完成：${summary.ok} 节成功 · ${summary.failed} 节失败 · ${summary.skipped} 节跳过`;
       options.onToast(
-        `${summary.ok} 节成功，${summary.failed} 节失败，详见日志`,
+        `${summary.ok} 节成功，${summary.failed} 节失败`,
         summary.failed > 0 ? "error" : "info",
       );
     }
@@ -789,20 +657,13 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
 
   startButton.addEventListener("click", async () => {
     if (running) return;
-    if (!dryInput.checked && !confirmInput.checked) {
-      options.onToast("真实执行前必须勾选风险确认", "error");
-      return;
-    }
-    const delayMin = Math.max(0, Number(delayMinInput.value) || 0);
-    const delayMax = Math.max(delayMin, Number(delayMaxInput.value) || 0);
     running = true;
     rows.clear();
     log.innerHTML = "";
     resultLines = [];
     copyButton.hidden = true;
     setRunningUi(true);
-    syncSummary();
-    statusText.textContent = "正在读取课程目录…";
+    statusText.textContent = "正在加载目录…";
     setProgress(0, 0);
 
     unlisten = await onJobProgress(handleProgress);
@@ -814,26 +675,25 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
     try {
       const summary = await api.ulWatch({
         course: options.courseId,
-        dryRun: dryInput.checked,
-        includeCompleted: includeInput.checked,
-        maxSections: maxInput.value ? Math.max(1, Number(maxInput.value)) : null,
-        delayMinMs: delayMin,
-        delayMaxMs: delayMax,
-        stopOnError: stopInput.checked,
-        verify: verifyInput.checked,
+        dryRun: false,
+        includeCompleted: false,
+        maxSections: null,
+        delayMinMs: 3000,
+        delayMaxMs: 5000,
+        stopOnError: true,
+        verify: true,
       });
       if (!closed) finish(summary);
     } catch (error) {
       if (closed) return;
       running = false;
       setRunningUi(false);
-      syncSummary();
-      const message = errorText(error);
+        const message = errorText(error);
       if (message.includes("已取消")) {
         statusText.textContent = "已取消";
         options.onToast("已取消课件秒刷", "info");
       } else {
-        statusText.textContent = "秒刷失败";
+        statusText.textContent = "执行失败";
         log.innerHTML = `<div class="watch-error">${esc(message)}</div>`;
         options.onToast(message, "error");
       }
@@ -847,7 +707,7 @@ export function openUlWatchModal(options: UlWatchModalOptions): void {
   stopButton.addEventListener("click", () => {
     if (!running) return;
     stopButton.disabled = true;
-    stopButton.textContent = "正在停止…";
+    stopButton.textContent = "停止中…";
     void api.ulCancelJob();
   });
 }
