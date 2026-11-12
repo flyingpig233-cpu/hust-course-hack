@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "server"]
+members = ["src-tauri"]
 resolver = "3"
 
 # ring's bundled C code fails to compile with the VS 2022 17.14 MSVC toolset when
@@ -20,18 +20,12 @@ edition = "2024"
 name = "hust_course_hack"
 path = "src/lib.rs"
 
-[[bin]]
-name = "hust-course-hack"
-path = "src/main.rs"
-
 [dependencies]
 aes = "0.8"
 anyhow = "1"
 base64 = "0.22"
 cbc = "0.1"
-clap = { version = "4", features = ["derive"] }
 des = "0.8"
-env_logger = "0.11"
 futures = "0.3"
 log = "0.4"
 md5 = "0.7"

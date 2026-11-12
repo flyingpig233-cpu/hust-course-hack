@@ -109,13 +109,13 @@ export function renderCourseLoading(
         <div class="course-head-copy">
           <div class="eyebrow">${esc(summary.course_id)}</div>
           <h1>${esc(summary.name)}</h1>
-          <p class="course-sub">正在获取课程首页与章节结构，随后逐个抓取知识点。</p>
+          <p class="course-sub">正在加载课程内容</p>
         </div>
       </header>
       <div class="crawl-card">
         <div class="crawl-orb">${icon("refresh", 28)}</div>
-        <h2>正在抓取课程数据</h2>
-        <p>每个知识点的卡片、测验题目与视频签名会并发请求，通常需要几十秒。</p>
+        <h2>正在加载课程</h2>
+        <p>请稍候</p>
         <div class="progress progress-lg">
           <div class="progress-fill crawl-progress-fill" style="width: 0%"></div>
         </div>
@@ -152,7 +152,7 @@ export function renderCourseError(
         <div class="error-icon">${icon("alert", 24)}</div>
         <h2>抓取课程失败</h2>
         <pre class="error-detail">${esc(message)}</pre>
-        <p class="hint">如果提示登录过期，请重新导出 cookies.txt 后再连接。</p>
+        <p class="hint">如果登录已过期，请重新登录后重试。</p>
         <button class="btn btn-primary" data-retry>${icon("refresh", 15)} 重试</button>
       </div>
     </div>
@@ -254,10 +254,10 @@ export function renderCourse(
     <div class="course-view">
       <header class="course-head">
         <div class="course-head-copy">
-          <div class="eyebrow">课程 · ${esc(detail.course_id)}</div>
+          <div class="eyebrow">我的课程</div>
           <h1>${esc(detail.title)}</h1>
           <p class="course-sub">
-            班级 ${esc(detail.class_id)} · cpi ${esc(detail.cpi)} · ${stats.chapter_nodes} 个目录节点
+            班级 ${esc(detail.class_id)}
           </p>
         </div>
         <div class="head-actions">
@@ -274,7 +274,7 @@ export function renderCourse(
             16,
           )}</button>
           <details class="options-popover">
-            <summary class="btn btn-ghost">${icon("settings", 15)} 抓取设置</summary>
+            <summary class="btn btn-ghost">${icon("settings", 15)} 加载设置</summary>
             <div class="popover-card">
               <label class="switch-row">
                 <input type="checkbox" data-option="questions" ${
@@ -286,7 +286,7 @@ export function renderCourse(
                 <input type="checkbox" data-option="video" ${
                   handlers.options.includeVideoInfo !== false ? "checked" : ""
                 } />
-                <span>抓取视频签名信息</span>
+                <span>加载视频信息</span>
               </label>
               <label class="field-row">
                 <span>并发数</span>
@@ -335,7 +335,7 @@ export function renderCourse(
         <button class="tab" data-tab="outline" role="tab">课程目录</button>
         <button class="tab" data-tab="tasks" role="tab">任务点 <span class="tab-count">${points.length}</span></button>
         <button class="tab" data-tab="quiz" role="tab">测验 <span class="tab-count">${stats.questions}</span></button>
-        <button class="tab" data-tab="diagnostics" role="tab">诊断${
+        <button class="tab" data-tab="diagnostics" role="tab">加载详情${
           errors.length ? '<span class="tab-dot"></span>' : ""
         }</button>
       </div>
@@ -894,21 +894,6 @@ function renderDiagnostics(detail: CourseDetail): string {
         </div>
       </section>
 
-      <section class="diag-card">
-        <h3>${icon("link", 16)} 课程标识</h3>
-        <div class="kv-list">
-          <div><span>课程 id</span><code>${esc(detail.course_id)}</code></div>
-          <div><span>班级 id</span><code>${esc(detail.class_id)}</code></div>
-          <div><span>cpi</span><code>${esc(detail.cpi)}</code></div>
-          <div><span>enc</span><code>${esc(detail.enc ?? "—")}</code></div>
-          <div><span>openc</span><code>${esc(detail.openc ?? "—")}</code></div>
-          <div><span>课程页</span><code class="truncate">${esc(detail.final_url)}</code></div>
-        </div>
-        <div class="diag-actions">
-          <button class="btn btn-sm" data-action="open">${icon("external", 13)} 打开课程页</button>
-          <button class="btn btn-sm" data-action="export">${icon("download", 13)} 导出 JSON</button>
-        </div>
-      </section>
 
       <section class="diag-card">
         <h3>${icon("alert", 16)} 抓取警告 <span class="count-pill">${errors.length}</span></h3>
@@ -921,15 +906,6 @@ function renderDiagnostics(detail: CourseDetail): string {
         }
       </section>
 
-      <section class="diag-card">
-        <h3>${icon("shield", 16)} 数据说明</h3>
-        <ul class="note-list">
-          <li>视频的 <code>download_url</code> / <code>stream_url</code> 带时效签名，过期后需重新抓取。</li>
-          <li><code>dtoken</code>、<code>otherInfo</code>、<code>attDurationEnc</code> 与会话和视频绑定，不保存、不复用。</li>
-          <li>未批改的测验只返回题目，不返回正确答案。</li>
-          <li>单个知识点失败不会中断整门课程，错误会列在上方。</li>
-        </ul>
-      </section>
     </div>
   `;
 }

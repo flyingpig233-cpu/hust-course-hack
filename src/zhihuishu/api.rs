@@ -9,7 +9,7 @@
 //! Endpoint paths and request shapes were recovered from the live site; see the
 //! plan's appendix A. The course-list endpoint is the one item that is still
 //! unconfirmed, so [`ZhsClient::resolve_course`] offers the URL / secret
-//! fallback the CLI and GUI use when [`ZhsClient::list_courses`] is unavailable.
+//! fallback the GUI use when [`ZhsClient::list_courses`] is unavailable.
 
 use std::{
     collections::HashMap,
@@ -67,7 +67,7 @@ const ZHS_COOKIE_HOSTS: [&str; 11] = [
 ///
 /// `endpoint` is the path only; it never contains cookies or `secretStr`
 /// values. The client maps HTTP status failures and `code != 0` replies here so
-/// the CLI and GUI can report a single, safe message.
+/// the GUI can report a single, safe message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZhsError {
     /// Platform `code` (`0`/`200` mean success and never produce this error).

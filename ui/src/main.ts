@@ -1,5 +1,6 @@
 import "./styles.css";
-import { api, backendMode, onJobProgress, onLoginClosed, onSessionChanged, webConfig } from "./api";
+import "./material-theme.css";
+import { api, backendMode, onJobProgress, onLoginClosed, onSessionChanged } from "./api";
 import { errorText, qs, toast } from "./dom";
 import { safeFileName } from "./format";
 import { platformMeta } from "./platforms";
@@ -36,7 +37,6 @@ import {
   updateCrawlProgress,
 } from "./views/course";
 import { openDocumentModal } from "./views/document";
-import { openHelperModal } from "./views/helper";
 import { openQuizModal } from "./views/quiz";
 import { createSidebar, type SidebarItem } from "./views/sidebar";
 import { openWatchModal } from "./views/watch";
@@ -86,7 +86,6 @@ const store = {
   session: null as SessionInfo | null,
   loginStatus: "idle" as LoginStatus,
   loginError: null as string | null,
-  tokenRequired: false,
   busy: false,
   hust: {
     courses: [] as CourseSummary[],
@@ -121,7 +120,6 @@ const sidebar = createSidebar(qs<HTMLElement>("#sidebar"), {
   onSelect: (courseId) => void selectCourse(courseId),
   onRefreshCourses: () => void refreshCourses(),
   onDisconnect: () => void disconnect(),
-  onHelper: () => void openHelperModal(),
 });
 
 function activePlatform(): Platform {
@@ -178,8 +176,7 @@ function showHome(): void {
     renderHome(main, store.session, store.hust.courses, {
       onSelect: (courseId) => void selectCourse(courseId),
       onRefreshCourses: () => void refreshCourses(),
-      onHelper: () => void openHelperModal(),
-    });
+        });
     return;
   }
   if (store.session.platform === "ulearning") {
@@ -216,7 +213,6 @@ function showConnect(): void {
       showConnect();
     },
     onLogin: () => void startLogin(),
-    tokenRequired: store.tokenRequired,
   });
 }
 
@@ -1077,16 +1073,9 @@ async function disconnect(): Promise<void> {
 async function boot(): Promise<void> {
   updateSidebar();
   try {
-    if (backendMode === "web") {
-      const config = await webConfig();
-      store.tokenRequired = config.tokenRequired;
-      store.hust.bankQuestions = config.bankQuestions;
-    } else {
-      store.hust.bankQuestions = (await api.answerBankInfo()).questions;
-    }
-  } catch (error) {
+    store.hust.bankQuestions = (await api.answerBankInfo()).questions;
+  } catch {
     store.hust.bankQuestions = null;
-    if (backendMode === "web") toast(`课程助手服务不可用：${errorText(error)}`, "error");
   }
   await subscribeAuthEvents();
   try {

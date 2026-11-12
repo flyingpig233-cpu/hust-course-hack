@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { demoOn } from "./bus";
 import { isTauri } from "./env";
 import { mockApi } from "./mock";
-import { webApi, webConfig } from "./api-web";
 import type {
   AnswerBankInfo,
   CourseDetail,
@@ -50,7 +49,6 @@ const tauriApi = {
     invoke<QuizSummary>("complete_quizzes", { request }),
   answerBankInfo: () => invoke<AnswerBankInfo>("answer_bank_info"),
   cancelJob: () => invoke<void>("cancel_job"),
-  helperScript: () => invoke<string>("helper_script"),
   saveTextFile: (path: string, contents: string) =>
     invoke<void>("save_text_file", { path, contents }),
 
@@ -84,19 +82,13 @@ const tauriApi = {
 
 export type Backend = typeof tauriApi;
 
-/** Where the backend lives: Tauri IPC, the deployed web server, or demo data. */
-export type BackendMode = "tauri" | "web" | "demo";
+/** Where the backend lives: Tauri IPC or demo data. */
+export type BackendMode = "tauri" | "demo";
 
-export const backendMode: BackendMode = isTauri
-  ? "tauri"
-  : import.meta.env.VITE_BACKEND === "web"
-    ? "web"
-    : "demo";
+export const backendMode: BackendMode = isTauri ? "tauri" : "demo";
 
 export const api: Backend =
-  backendMode === "tauri" ? tauriApi : backendMode === "web" ? webApi : mockApi;
-
-export { webConfig };
+  backendMode === "tauri" ? tauriApi : mockApi;
 
 /** Subscribe to crawl/report progress from the Rust side. */
 export async function onJobProgress(

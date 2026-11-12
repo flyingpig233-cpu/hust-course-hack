@@ -50,7 +50,7 @@ impl Default for ZhsMeetWatchOptions {
     fn default() -> Self {
         Self {
             // Read-only by default: real attendance reporting must be requested
-            // explicitly by the CLI/GUI user.
+            // explicitly by the GUI user.
             dry_run: true,
             coverage_min: 0.90,
             coverage_max: 1.00,
@@ -65,7 +65,7 @@ impl Default for ZhsMeetWatchOptions {
 impl ZhsMeetWatchOptions {
     /// Validate and normalize the coverage/delay/check windows.
     ///
-    /// Invalid values are rejected instead of silently clamped, so the CLI can
+    /// Invalid values are rejected instead of silently clamped, so the GUI can
     /// report a clear usage error.
     fn normalized(&self) -> Result<Self> {
         let mut opts = self.clone();

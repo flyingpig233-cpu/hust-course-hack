@@ -39,7 +39,7 @@ pub struct UlCourse {
 }
 
 impl UlCourse {
-    /// Human-readable label used in CLI/GUI output.
+    /// Human-readable label used in GUI output.
     pub fn label(&self) -> String {
         if self.name.trim().is_empty() {
             format!("课程 {}", self.textbook_id)
@@ -294,7 +294,7 @@ impl UlAction {
         matches!(self, Self::Complete | Self::CompletePractice)
     }
 
-    /// Chinese label for CLI/GUI output.
+    /// Chinese label for GUI output.
     pub fn label(self) -> &'static str {
         match self {
             Self::Complete => "可刷",
@@ -454,7 +454,7 @@ pub enum UlWatchState {
 }
 
 impl UlWatchState {
-    /// Chinese label for CLI/GUI output.
+    /// Chinese label for GUI output.
     pub fn label(self) -> &'static str {
         match self {
             Self::Ok => "成功",
@@ -510,7 +510,7 @@ pub enum UlProgressStage {
 }
 
 impl UlProgressStage {
-    /// Chinese label for CLI/GUI output.
+    /// Chinese label for GUI output.
     pub fn label(self) -> &'static str {
         match self {
             Self::Directory => "课程目录",

@@ -3,7 +3,7 @@
 //! The platform's H5 card page exposes one `jtoken` per attachment inside
 //! `window.AttachmentSetting`, and `/mooc-ans/job/document` marks a document
 //! 任务点 as read. This is the request the platform PDF viewer's `finishJob()`
-//! sends; calling it directly lets the CLI, desktop GUI and the static website
+//! sends; calling it directly lets the desktop GUI
 //! finish documents without opening a webview.
 //!
 //! The contract is the one implemented by the official Chaoxing client 7.0.2
@@ -35,7 +35,7 @@ pub struct DocumentTarget {
 }
 
 impl DocumentTarget {
-    /// Label used by CLI/GUI progress output.
+    /// Label used by GUI progress output.
     pub fn label(&self) -> String {
         if self.knowledge_title.is_empty() {
             self.name.clone()

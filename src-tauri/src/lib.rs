@@ -32,7 +32,6 @@ pub fn run() {
             commands::complete_quizzes,
             commands::answer_bank_info,
             commands::cancel_job,
-            commands::helper_script,
             commands::save_text_file,
             zhihuishu::zhs_list_courses,
             zhihuishu::zhs_add_course,

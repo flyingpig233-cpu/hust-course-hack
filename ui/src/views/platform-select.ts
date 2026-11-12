@@ -9,7 +9,7 @@ export function platformSwitchHtml(active: Platform, busy: boolean): string {
       ${PLATFORM_ORDER.map((platform) => {
         const meta = platformMeta(platform);
         return `
-          <button class="platform-option${active === platform ? " is-active" : ""}" data-platform="${platform}"${
+          <button class="platform-option${active === platform ? " is-active" : ""}" data-platform="${platform}" aria-pressed="${active === platform}"${
             busy ? " disabled" : ""
           }>
             <span class="platform-mark">${meta.mark}</span>

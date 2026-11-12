@@ -1,7 +1,7 @@
 //! Core crawler for the HUST SmartCourse platform.
 //!
 //! This crate intentionally contains no Tauri or UI code, so the whole data
-//! pipeline can be exercised from a CLI and unit-tested without launching the
+//! pipeline can be unit-tested without launching the
 //! desktop app.
 
 pub mod answers;
@@ -37,7 +37,3 @@ pub use submit::{
     build_submission_fields, parse_submit_reply, parse_work_form, plan_course, plan_questions,
     prepare_submission, question_type_code, submission_url,
 };
-
-/// Tampermonkey helper script for completing videos inside the browser player.
-pub const VIDEO_HELPER_SCRIPT: &str =
-    include_str!("../userscripts/hust-course-video-helper.user.js");

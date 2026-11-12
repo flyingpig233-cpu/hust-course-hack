@@ -47,7 +47,7 @@ export interface ZhsHomeHandlers {
 /** Course list for the Zhihuishu platform, plus the study-page URL fallback. */
 export function renderZhsHome(
   main: HTMLElement,
-  session: SessionInfo,
+  _session: SessionInfo,
   courses: ZhsCourse[],
   handlers: ZhsHomeHandlers,
 ): void {
@@ -57,11 +57,8 @@ export function renderZhsHome(
       <header class="home-head">
         <div>
           <div class="eyebrow">已连接 知到（智慧树）</div>
-          <h1>选择一门共享课开始</h1>
-          <p class="home-sub">
-            当前账号共 ${courses.length} 门共享课 ·
-            ${esc(session.cookieSource)} · 会话包含 ${session.cookieCount} 项 Cookie
-          </p>
+          <h1>我的课程</h1>
+          <p class="home-sub">${courses.length} 门课程</p>
         </div>
         <div class="head-actions">
           <button class="btn btn-ghost" data-refresh>${icon("refresh", 15)} 刷新课程</button>
@@ -70,13 +67,13 @@ export function renderZhsHome(
 
       <div class="zhs-add-course">
         <div class="zhs-add-copy">
-          <strong>课程列表接口不可用？</strong>
-          <p>把知到学习页的完整链接（含 <code>recruitAndCourseId</code>）粘贴到这里，会解析后加入列表。</p>
+          <strong>添加课程</strong>
+          <p>粘贴课程学习页链接</p>
         </div>
         <div class="zhs-add-row">
           <input id="zhs-course-ref" type="text" spellcheck="false" autocomplete="off"
             placeholder="https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=..." />
-          <button class="btn" data-add-course>${icon("link", 15)} 解析并添加</button>
+          <button class="btn" data-add-course>${icon("link", 15)} 添加</button>
         </div>
       </div>
 
@@ -93,42 +90,24 @@ export function renderZhsHome(
                   )}" style="--delay:${index * 30}ms">
                     <div class="course-card-top">
                       <span class="course-avatar course-avatar-lg tone-${index % 5}">${esc(initial)}</span>
-                      <span class="course-code">recruit ${esc(String(course.recruitId))}</span>
                     </div>
                     <h3>${esc(zhsCourseLabel(course))}</h3>
                     <p class="course-card-meta">${esc(course.teacher || "知到共享课")}${
                       percent === null ? "" : ` · 进度 ${percent}%`
                     }</p>
-                    <span class="course-card-cta">查看视频树 ${icon("chevron", 14)}</span>
+                    <span class="course-card-cta">查看课程 ${icon("chevron", 14)}</span>
                   </button>
                 `;
               })
               .join("")}</div>`
           : `<div class="empty-panel">
               <div class="empty-icon">${icon("folder", 26)}</div>
-              <h2>没有解析到共享课</h2>
-              <p>知到课程列表接口未返回数据，可稍后刷新，或粘贴学习页链接手动添加。polymas / 翻转课暂不支持。</p>
+              <h2>暂无共享课</h2>
+              <p>刷新课程，或通过链接添加。</p>
               <button class="btn" data-refresh>${icon("refresh", 15)} 刷新课程列表</button>
             </div>`
       }
 
-      <div class="tip-grid">
-        <div class="tip-card">
-          <span class="tip-index">01</span>
-          <h4>仅支持共享课</h4>
-          <p>知到共享课使用 <code>studyvideoh5</code>；polymas、翻转课和智能课不会出现在这里。</p>
-        </div>
-        <div class="tip-card">
-          <span class="tip-index">02</span>
-          <h4>默认试运行</h4>
-          <p>“秒刷本课视频”默认 dry-run，只生成上报字段；真实执行需要勾选风险确认。</p>
-        </div>
-        <div class="tip-card">
-          <span class="tip-index">03</span>
-          <h4>结果以服务端为准</h4>
-          <p>视频完成度以 <code>watchState=1</code> 为准，见面课以 <code>getWatchHistory</code> 分钟数为准。</p>
-        </div>
-      </div>
     </section>
   `;
 
@@ -260,9 +239,9 @@ export function renderZhsCourse(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: `知到共享课 · recruit ${course.recruitId}`,
+        eyebrow: "知到 · 我的课程",
         title: zhsCourseLabel(course),
-        subtitle: `${course.teacher || "教师未知"} · 课程 ${course.courseId} · ${detail.chapters.length} 章 ${lessons} 节`,
+        subtitle: `${course.teacher || "知到共享课"} · ${detail.chapters.length} 章 ${lessons} 节`,
         actions: `
           <button class="icon-button" data-action="back" title="返回课程列表" aria-label="返回课程列表">${icon("folder", 16)}</button>
           <button class="icon-button" data-action="refresh" title="重新抓取" aria-label="重新抓取">${icon("refresh", 16)}</button>
@@ -280,7 +259,7 @@ export function renderZhsCourse(
 
       ${noticeHtml(
         "alert",
-        "秒刷视频会让平台把课程标记为已完成，属于最高风险形态。默认仅试运行，确认风险后才会真正发送。",
+        "操作可能影响账号或课程成绩。默认试运行，正式执行前需确认风险。",
       )}
 
       ${statStripHtml([

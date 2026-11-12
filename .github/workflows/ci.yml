@@ -1,6 +1,6 @@
 name: CI
 
-# 每次推到 main / PR 都跑：Rust 格式化 + clippy + 测试、前端与网站构建、
+# 每次推到 main / PR 都跑：Rust 格式化 + clippy + 测试、桌面前端构建、
 # Windows 上 GUI crate 的 clippy。安装包与 Release 不在这里，见 release.yml。
 on:
   push:
@@ -39,14 +39,14 @@ jobs:
 
       # 不能用 `cargo clippy --workspace`：src-tauri 链接 WebKitGTK，
       # Linux 上还需要一串系统库。GUI crate 的 lint 在下面的 desktop job 里跑。
-      - name: cargo clippy (core + server)
-        run: cargo clippy -p hust-course-hack -p hust-course-web --all-targets -- -D warnings
+      - name: cargo clippy (core)
+        run: cargo clippy -p hust-course-hack --all-targets -- -D warnings
 
-      - name: cargo test (core + server)
-        run: cargo test -p hust-course-hack -p hust-course-web
+      - name: cargo test (core)
+        run: cargo test -p hust-course-hack
 
   frontend:
-    name: Frontend · ui / website
+    name: Frontend · desktop UI
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -56,33 +56,13 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            website/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install desktop UI dependencies
         run: npm ci
 
       # `npm run build` = tsc --noEmit && vite build -> ui/dist（Tauri 的 frontendDist）
       - name: Type-check + build desktop UI
-        run: npm run build
-
-      # 网页版走 `--mode web`；VITE_BACKEND 在 CI 里显式给，不依赖 ui/.env.web
-      - name: Type-check + build web bundle
-        run: npm run build:web
-        env:
-          VITE_BACKEND: web
-
-      - name: Install website dependencies
-        working-directory: website
-        run: npm ci
-
-      - name: Website tests
-        working-directory: website
-        run: npm test
-
-      - name: Website build
-        working-directory: website
         run: npm run build
 
   desktop:

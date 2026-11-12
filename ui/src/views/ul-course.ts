@@ -99,7 +99,7 @@ export interface UlHomeHandlers {
 /** Course list for the Ulearning platform, plus the player-URL fallback. */
 export function renderUlHome(
   main: HTMLElement,
-  session: SessionInfo,
+  _session: SessionInfo,
   courses: UlCourse[],
   handlers: UlHomeHandlers,
 ): void {
@@ -109,11 +109,8 @@ export function renderUlHome(
       <header class="home-head">
         <div>
           <div class="eyebrow">已连接 优学院（U学）</div>
-          <h1>选择一门课程开始</h1>
-          <p class="home-sub">
-            当前账号共 ${courses.length} 门课程 ·
-            ${esc(session.cookieSource)} · 会话包含 ${session.cookieCount} 项 Cookie
-          </p>
+          <h1>我的课程</h1>
+          <p class="home-sub">${courses.length} 门课程</p>
         </div>
         <div class="head-actions">
           <button class="btn btn-ghost" data-refresh>${icon("refresh", 15)} 刷新课程</button>
@@ -122,13 +119,13 @@ export function renderUlHome(
 
       <div class="zhs-add-course">
         <div class="zhs-add-copy">
-          <strong>课程列表接口不可用？</strong>
-          <p>把优学院播放器链接（含 <code>courseId</code> / <code>classId</code>）粘贴到这里，会解析后加入列表。</p>
+          <strong>添加课程</strong>
+          <p>粘贴课程播放器链接</p>
         </div>
         <div class="zhs-add-row">
           <input id="ul-course-ref" type="text" spellcheck="false" autocomplete="off"
             placeholder="https://ua.ulearning.cn/learnCourse/learnCourse.html?courseId=47353&classId=1019700" />
-          <button class="btn" data-add-course>${icon("link", 15)} 解析并添加</button>
+          <button class="btn" data-add-course>${icon("link", 15)} 添加</button>
         </div>
       </div>
 
@@ -152,7 +149,6 @@ export function renderUlHome(
                       <span class="course-avatar course-avatar-lg tone-${index % 5}">${esc(
                         initial,
                       )}</span>
-                      <span class="course-code">textbook ${esc(String(course.textbookId))}</span>
                     </div>
                     <h3>${esc(ulCourseLabel(course))}</h3>
                     <p class="course-card-meta">${esc(course.author || "优学院课程")} · ${esc(
@@ -165,29 +161,12 @@ export function renderUlHome(
               .join("")}</div>`
           : `<div class="empty-panel">
               <div class="empty-icon">${icon("folder", 26)}</div>
-              <h2>没有解析到优学院课程</h2>
-              <p>课程列表接口未返回数据，可稍后刷新，或粘贴播放器链接手动添加。课程过期后将拒绝执行。</p>
+              <h2>暂无课程</h2>
+              <p>刷新课程，或通过链接添加。</p>
               <button class="btn" data-refresh>${icon("refresh", 15)} 刷新课程列表</button>
             </div>`
       }
 
-      <div class="tip-grid">
-        <div class="tip-card">
-          <span class="tip-index">01</span>
-          <h4>先检查再秒刷</h4>
-          <p>打开课程后可先“检查完成状态”，读取每节 <code>completion_status</code>，再做决定。</p>
-        </div>
-        <div class="tip-card">
-          <span class="tip-index">02</span>
-          <h4>默认试运行</h4>
-          <p>秒刷弹窗默认 dry-run，只生成计划与条目；真实执行需要勾选风险确认。</p>
-        </div>
-        <div class="tip-card">
-          <span class="tip-index">03</span>
-          <h4>限速与熔断</h4>
-          <p>真实执行默认 3–5 秒间隔；服务端返回 2 会立即中止整批，界面不会伪造完成。</p>
-        </div>
-      </div>
     </section>
   `;
 
@@ -217,7 +196,7 @@ export function renderUlLoading(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: `优学院 · textbook ${course.textbookId}`,
+        eyebrow: "优学院 · 我的课程",
         title: ulCourseLabel(course),
         subtitle: "正在读取课程目录。",
         actions: "",
@@ -266,7 +245,7 @@ export function renderUlCourseError(
   main.innerHTML = `
     <div class="course-view">
       ${courseHeadHtml({
-        eyebrow: `优学院 · textbook ${course.textbookId}`,
+        eyebrow: "优学院 · 我的课程",
         title: ulCourseLabel(course),
         subtitle: "课程目录读取未完成",
         actions: "",
@@ -351,9 +330,7 @@ export function renderUlCourse(
 
       ${noticeHtml(
         "alert",
-        `秒刷会按节提交课件完成记录：视频页与含答案的练习页都会处理，${
-          expired ? "该课程已过期，已禁用执行；" : ""
-        }默认仅试运行，确认真实执行前不会发送。`,
+        `${expired ? "课程已过期，无法执行。" : "操作可能影响账号或课程成绩。默认试运行，正式执行前需确认风险。"}`,
       )}
 
       ${statStripHtml([
@@ -361,7 +338,7 @@ export function renderUlCourse(
           label: "课件完成度",
           value: check ? `${completed} / ${sections}` : `— / ${sections}`,
           foot: check
-            ? `${percent}% 的节已被平台标记完成（completion_status=1）`
+            ? `${percent}% 的节已被平台标记完成`
             : "点击“检查完成状态”读取每节完成情况",
           wide: true,
           progress: percent,

@@ -2,7 +2,7 @@
 //!
 //! The core model keeps `snake_case` field names; the Tauri layer maps these to
 //! camelCase DTOs. Nothing here performs I/O, so the types can be unit-tested
-//! and embedded in CLI reports without a network session.
+//! and embedded in GUI reports without a network session.
 
 use serde::{Deserialize, Serialize};
 
@@ -236,7 +236,7 @@ pub struct ZhsMeet {
 }
 
 impl ZhsMeet {
-    /// Stable label used in progress events and CLI output.
+    /// Stable label used in progress events and GUI output.
     pub fn label(&self) -> String {
         let name = if self.name.trim().is_empty() {
             format!("见面课 {}", self.live_id)
@@ -322,7 +322,7 @@ impl Default for ZhsWatchOptions {
     fn default() -> Self {
         Self {
             // The core default is read-only; callers must opt in to real
-            // submissions. This keeps CLI/GUI dry-run-by-default even if a
+            // submissions. This keeps GUI dry-run-by-default even if a
             // future call site forgets to pass the flag through.
             dry_run: true,
             include_completed: false,
@@ -349,7 +349,7 @@ pub enum ZhsProgressStage {
 }
 
 impl ZhsProgressStage {
-    /// Chinese label for CLI/GUI display.
+    /// Chinese label for GUI display.
     pub fn label(self) -> &'static str {
         match self {
             Self::Videos => "视频课",
@@ -414,7 +414,7 @@ pub enum ZhsWatchState {
 }
 
 impl ZhsWatchState {
-    /// Chinese label for CLI/GUI display.
+    /// Chinese label for GUI display.
     pub fn label(self) -> &'static str {
         match self {
             Self::Ok => "成功",

@@ -6,7 +6,7 @@ use crate::{
 };
 use hust_course_hack::{
     AnswerBank, CourseDetail, CourseSummary, CrawlProgress, FetchOptions, PlannedWork,
-    REPORT_VERSION, VIDEO_HELPER_SCRIPT, WatchOptions, collect_targets,
+    REPORT_VERSION, WatchOptions, collect_targets,
     documents::{DocumentTarget, collect_document_targets},
     plan_course, watch_target,
 };
@@ -766,11 +766,6 @@ fn quiz_skip_reason(work: &PlannedWork) -> String {
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>) {
     state.cancel();
-}
-
-#[tauri::command]
-pub fn helper_script() -> String {
-    VIDEO_HELPER_SCRIPT.to_string()
 }
 
 #[tauri::command]

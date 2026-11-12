@@ -24,7 +24,6 @@ export interface SidebarHandlers {
   onSelect(courseId: string): void;
   onRefreshCourses(): void;
   onDisconnect(): void;
-  onHelper(): void;
 }
 
 export interface SidebarHandle {
@@ -88,7 +87,7 @@ export function createSidebar(
           <div class="brand-sub">${esc(meta.brandSub)}</div>
         </div>
       </div>
-      ${backendMode === "tauri" ? "" : `<div class="demo-badge">${icon("spark", 12)} ${backendMode === "web" ? "网页版" : "演示模式"}</div>`}
+      ${backendMode === "tauri" ? "" : `<div class="demo-badge">${icon("spark", 12)} 演示模式</div>`}
       <div id="sidebar-session"></div>
       <div class="sidebar-nav">
         <div class="sidebar-nav-head">
@@ -102,11 +101,6 @@ export function createSidebar(
         <div class="course-list" id="course-list"></div>
       </div>
       <div class="sidebar-footer">
-        ${
-          state.platform === "hust" && backendMode !== "web"
-            ? `<button class="sidebar-link" data-helper>${icon("copy", 15)} 浏览器助手脚本</button>`
-            : ""
-        }
         <div class="sidebar-note">${icon("shield", 13)} 登录会话仅保存在内存</div>
       </div>
     `;
@@ -138,9 +132,7 @@ export function createSidebar(
         <span class="status-dot"></span>
         <div class="session-copy">
           <div class="session-title">已连接 ${esc(meta.sessionTitle)}</div>
-          <div class="session-source" title="${esc(session.cookieSource)}">${esc(
-            session.cookieSource,
-          )} · ${session.cookieCount} 项 Cookie</div>
+          <div class="session-source">课程已就绪</div>
         </div>
         <button class="icon-button icon-button-dark" data-disconnect title="断开连接" aria-label="断开连接">${icon(
           "logout",
@@ -226,10 +218,6 @@ export function createSidebar(
       handlers.onDisconnect();
       return;
     }
-    if (target.closest("[data-helper]")) {
-      handlers.onHelper();
-      return;
-    }
     const item = target.closest<HTMLElement>("[data-course-id]");
     if (item) {
       if (state.disabled) {
@@ -245,7 +233,7 @@ export function createSidebar(
       const platformChanged = next.platform !== state.platform;
       state = next;
       if (platformChanged) {
-        // Rebuild the shell so the labels and helper link follow the platform.
+        // Rebuild the shell so the labels follow the platform.
         renderShell();
         bind();
       }

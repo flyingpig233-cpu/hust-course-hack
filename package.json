@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:web": "tsc --noEmit && vite build --mode web --base=/course-hack/ --outDir dist-web --emptyOutDir",
     "preview": "vite preview",
     "tauri": "tauri"
   },

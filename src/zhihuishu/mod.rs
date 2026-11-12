@@ -1,7 +1,7 @@
 //! Zhihuishu (智慧树 / 知到) support: shared-course video and meet-course replay completion.
 //!
 //! The module mirrors the layout of the SmartCourse client: HTTP and parsing live
-//! here, the CLI and the Tauri shell only orchestrate. See
+//! here, the Tauri shell only orchestrate. See
 //! `docs/zhihuishu-miaoshua-plan.md` for the verified request protocol, the
 //! encryption constants and the completion semantics.
 //!

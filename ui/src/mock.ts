@@ -1777,17 +1777,6 @@ export const mockApi = {
     cancelled = true;
   },
 
-  async helperScript(): Promise<string> {
-    return [
-      "// ==UserScript==",
-      "// @name         HUST Course Video Helper (演示)",
-      "// ==/UserScript==",
-      "",
-      "// 当前运行在浏览器演示模式，没有连接 Rust 后端。",
-      "// 在 Tauri 桌面应用中这里会显示完整的 Tampermonkey 脚本。",
-    ].join("\n");
-  },
-
   async saveTextFile(path: string, contents: string): Promise<void> {
     const blob = new Blob([contents], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);

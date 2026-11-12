@@ -2,7 +2,7 @@
 //!
 //! 协议与分析结论见 `docs/ulearning/web-analysis.md` 与
 //! `docs/ulearning/miaoshua-plan.md`（2026-11-07 真实账号实测）。网络与解析全部留在
-//! `hust_course_hack` crate 内，CLI/GUI/website 只做编排。
+//! `hust_course_hack` crate 内，GUI 只做编排。
 //!
 //! 本模块不读取、不打印 `AUTHORIZATION` token；调用方通过 cookies 文件或
 //! [`UlearningClient::from_cookie_header`] 传入会话，客户端只在请求头里注入它。
@@ -12,7 +12,7 @@
 //! * [`cipher`] — DES-ECB/PKCS#7/Base64 for the `sync` body;
 //! * [`client`] — [`UlearningClient`] (cookie jar, auth headers, every endpoint);
 //! * [`parse`] — pure response parsers (directory/wholepage/record/answers);
-//! * [`models`] — `snake_case` DTOs shared by CLI/GUI;
+//! * [`models`] — `snake_case` DTOs shared by GUI;
 //! * [`record`] — `sync` payload construction + submission;
 //! * [`plan`] — batch planning and the delayed/verified executor.
 
